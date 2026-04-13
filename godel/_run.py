@@ -82,106 +82,112 @@ async def run(cmd: str, *, cwd: str | None = None, timeout: float | None = None,
     new_stream_path = parent_stream_path + [launch_id]
     stream_path_token = _current_stream_path.set(new_stream_path)
 
-    inv_seq, local_seq = (0, 0)
-    if ctx:
-        inv_seq, local_seq = ctx.next_op_position()
-
-    # Replay guard
-    if ctx and ctx.replay_walker:
-        from godel._events import Event, EventStatus
-        req = {"cmd": cmd, "cwd": cwd, "timeout": timeout, "idempotent": idempotent}
-        req_hash = Event.compute_request_hash(req)
-        match = ctx.replay_walker.try_match(
-            step_path=tuple(ctx.step_stack),
-            invocation_seq=inv_seq,
-            step_local_seq=local_seq,
-            op="run",
-            request_hash=req_hash,
-        )
-        if match.hit and match.status == EventStatus.FINISHED:
-            resp = match.cached_response
-            return CommandResult(
-                stdout=resp.get("stdout", ""),
-                stderr=resp.get("stderr", ""),
-                returncode=resp.get("returncode", 0),
-            )
-        elif match.hit and match.status == EventStatus.STARTED and not idempotent:
-            from godel._exceptions import UnsafeResumeError
-            raise UnsafeResumeError(
-                f"run() has STARTED-only state and is not marked idempotent",
-                cmd=cmd,
-                step_path=tuple(ctx.step_stack),
-            )
-        # STARTED + idempotent, or no match: fall through to execute
-
-    event = None
-    if ctx and ctx.event_log:
-        event = ctx.event_log.emit_started(
-            op="run",
-            step_path=tuple(ctx.step_stack),
-            request={"cmd": cmd, "cwd": cwd, "timeout": timeout, "idempotent": idempotent},
-            invocation_seq=inv_seq,
-            step_local_seq=local_seq,
-            parent_event_id=ctx.current_parent_event_id,
-            stream_path=new_stream_path,
-        )
-
-    token = _privileged.set(True)
+    # Outer try/finally guarantees stream_path_token is reset even if
+    # ctx.next_op_position() or the replay guard raises (e.g., UnsafeResumeError).
+    # Without this the contextvar would leak into the caller's context on early
+    # exits from anywhere between the set() above and the subprocess try block.
     try:
-        proc = await asyncio.create_subprocess_shell(
-            cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=cwd,
-        )
+        inv_seq, local_seq = (0, 0)
+        if ctx:
+            inv_seq, local_seq = ctx.next_op_position()
+
+        # Replay guard
+        if ctx and ctx.replay_walker:
+            from godel._events import Event, EventStatus
+            req = {"cmd": cmd, "cwd": cwd, "timeout": timeout, "idempotent": idempotent}
+            req_hash = Event.compute_request_hash(req)
+            match = ctx.replay_walker.try_match(
+                step_path=tuple(ctx.step_stack),
+                invocation_seq=inv_seq,
+                step_local_seq=local_seq,
+                op="run",
+                request_hash=req_hash,
+            )
+            if match.hit and match.status == EventStatus.FINISHED:
+                resp = match.cached_response
+                return CommandResult(
+                    stdout=resp.get("stdout", ""),
+                    stderr=resp.get("stderr", ""),
+                    returncode=resp.get("returncode", 0),
+                )
+            elif match.hit and match.status == EventStatus.STARTED and not idempotent:
+                from godel._exceptions import UnsafeResumeError
+                raise UnsafeResumeError(
+                    f"run() has STARTED-only state and is not marked idempotent",
+                    cmd=cmd,
+                    step_path=tuple(ctx.step_stack),
+                )
+            # STARTED + idempotent, or no match: fall through to execute
+
+        event = None
+        if ctx and ctx.event_log:
+            event = ctx.event_log.emit_started(
+                op="run",
+                step_path=tuple(ctx.step_stack),
+                request={"cmd": cmd, "cwd": cwd, "timeout": timeout, "idempotent": idempotent},
+                invocation_seq=inv_seq,
+                step_local_seq=local_seq,
+                parent_event_id=ctx.current_parent_event_id,
+                stream_path=new_stream_path,
+            )
+
+        token = _privileged.set(True)
         try:
-            stdout_b, stderr_b = await asyncio.wait_for(
-                proc.communicate(), timeout=timeout
+            proc = await asyncio.create_subprocess_shell(
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=cwd,
             )
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.communicate()
-            step_path = tuple(ctx.step_stack) if ctx else ()
-            error_msg = f"command timed out after {timeout}s: {cmd}"
-            if event:
-                ctx.event_log.emit_failed(
-                    event.event_id,
-                    error_msg,
-                    error_type="CommandFailure",
-                    step_path=step_path,
+            try:
+                stdout_b, stderr_b = await asyncio.wait_for(
+                    proc.communicate(), timeout=timeout
                 )
-            raise CommandFailure(
-                error_msg,
-                step_path=step_path,
-                remediation_hint=f"Increase the timeout parameter or optimize the command to complete faster.",
-            )
-        stdout = stdout_b.decode()
-        stderr = stderr_b.decode()
-        if proc.returncode != 0:
-            step_path = tuple(ctx.step_stack) if ctx else ()
-            error_msg = f"command failed (exit {proc.returncode}): {cmd}"
-            if event:
-                ctx.event_log.emit_failed(
-                    event.event_id,
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.communicate()
+                step_path = tuple(ctx.step_stack) if ctx else ()
+                error_msg = f"command timed out after {timeout}s: {cmd}"
+                if event:
+                    ctx.event_log.emit_failed(
+                        event.event_id,
+                        error_msg,
+                        error_type="CommandFailure",
+                        step_path=step_path,
+                    )
+                raise CommandFailure(
                     error_msg,
-                    error_type="CommandFailure",
                     step_path=step_path,
+                    remediation_hint=f"Increase the timeout parameter or optimize the command to complete faster.",
                 )
-            raise CommandFailure(
-                f"command failed (exit {proc.returncode}): {cmd}",
-                stdout=stdout,
-                stderr=stderr,
-                returncode=proc.returncode,
-                step_path=step_path,
-                remediation_hint=f"Check stderr output and verify the command exits with 0. stderr: {stderr[:200]!r}",
-            )
-        if event:
-            ctx.event_log.emit_finished(event.event_id, response={
-                "stdout": stdout[:1000],
-                "stderr": stderr[:1000],
-                "returncode": proc.returncode,
-            })
-        return CommandResult(stdout=stdout, stderr=stderr, returncode=proc.returncode)
+            stdout = stdout_b.decode()
+            stderr = stderr_b.decode()
+            if proc.returncode != 0:
+                step_path = tuple(ctx.step_stack) if ctx else ()
+                error_msg = f"command failed (exit {proc.returncode}): {cmd}"
+                if event:
+                    ctx.event_log.emit_failed(
+                        event.event_id,
+                        error_msg,
+                        error_type="CommandFailure",
+                        step_path=step_path,
+                    )
+                raise CommandFailure(
+                    f"command failed (exit {proc.returncode}): {cmd}",
+                    stdout=stdout,
+                    stderr=stderr,
+                    returncode=proc.returncode,
+                    step_path=step_path,
+                    remediation_hint=f"Check stderr output and verify the command exits with 0. stderr: {stderr[:200]!r}",
+                )
+            if event:
+                ctx.event_log.emit_finished(event.event_id, response={
+                    "stdout": stdout[:1000],
+                    "stderr": stderr[:1000],
+                    "returncode": proc.returncode,
+                })
+            return CommandResult(stdout=stdout, stderr=stderr, returncode=proc.returncode)
+        finally:
+            _privileged.reset(token)
     finally:
-        _privileged.reset(token)
         _current_stream_path.reset(stream_path_token)

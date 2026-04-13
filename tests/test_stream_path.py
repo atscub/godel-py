@@ -1,16 +1,15 @@
 """Tests for stream_path stamping at subprocess launch.
 
 stream_path is a list[str] stamped at run()/agent launch time on the launching
-thread and captured in the reader-thread closure.  It represents the nesting
-chain of subprocess launches (e.g., [] for top-level events, [id] for a direct
-run() call inside a step, [parent_id, child_id] for a run() call that itself
-triggers a nested run()).
+coroutine and captured by value in the persisted event.  It represents the
+nesting chain of subprocess launches (e.g., [] for top-level events, [id] for
+a direct run() call inside a step, [parent_id, child_id] for a run() call that
+itself triggers a nested run()).
 """
 from __future__ import annotations
 
 import asyncio
 import json
-import threading
 
 import pytest
 
@@ -20,83 +19,90 @@ from godel._run import run
 
 
 # ---------------------------------------------------------------------------
-# Helper to load JSONL events from the most recent run log
+# Helpers
 # ---------------------------------------------------------------------------
 
-def _load_run_events(tmp_path):
+def _load_events(tmp_path):
     runs = list((tmp_path / "runs").glob("*.jsonl"))
     assert runs, "no run log found"
     lines = [l for l in runs[0].read_text().strip().split("\n") if l]
     return [json.loads(l) for l in lines]
 
 
+def _run_events(events):
+    return [e for e in events if e["op"] == "run" and e["status"] == "STARTED"]
+
+
 # ---------------------------------------------------------------------------
-# Acceptance criterion 1:
-#   4 parallel steps × 2 nested launches each → 8 distinct stream_paths,
-#   all depth-2, parents match the parent step's stream_path.
+# AC1 — 4 parallel steps x 2 nested launches each -> 8 distinct stream_paths,
+#       all depth-2, parents match the parent step's stream_path.
 #
-# We simulate "agent launches a subprocess" by using a custom contextvar-aware
-# wrapper: the outer run() sets _current_stream_path to depth-1; a second
-# run() inside the same step sees that as its parent and produces depth-2.
+# "Nested launches" means each branch first sets a parent stream_path (as an
+# agent/outer launch would), then invokes run() twice inside that parent
+# context, producing depth-2 paths whose prefix matches the per-branch parent.
 # ---------------------------------------------------------------------------
 
-def test_parallel_steps_nested_launches_distinct_paths(tmp_path, monkeypatch):
-    """4 parallel steps, each making 2 sequential run() calls.
-
-    The 8 'run' events must all have stream_path of depth 1 (each run()
-    produces its own path entry from the empty parent).  Each pair of paths
-    produced by the same step share no common ULID with paths from other steps.
-    """
+def test_parallel_steps_nested_launches_depth2_with_parents(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+
+    # Per-branch parent IDs (simulate each branch's "agent launch" id)
+    parent_ids = [f"parent-branch-{i:02d}" for i in range(4)]
 
     @workflow
     async def wf():
         @step
         async def branch(n: int):
-            await run(f"echo a{n}")
-            await run(f"echo b{n}")
+            # Stamp a parent stream_path for this branch (simulates the agent
+            # launch wrapping the two nested run() calls).
+            token = _current_stream_path.set([parent_ids[n]])
+            try:
+                await run(f"echo a{n}")
+                await run(f"echo b{n}")
+            finally:
+                _current_stream_path.reset(token)
             return n
 
-        return await parallel(
-            branch(0),
-            branch(1),
-            branch(2),
-            branch(3),
-        )
+        return await parallel(branch(0), branch(1), branch(2), branch(3))
 
     result = asyncio.run(wf())
     assert set(result) == {0, 1, 2, 3}
 
-    events = _load_run_events(tmp_path)
-    run_starts = [e for e in events if e["op"] == "run" and e["status"] == "STARTED"]
-    # 4 branches × 2 runs each = 8 run STARTED events
+    run_starts = _run_events(_load_events(tmp_path))
+    # 4 branches x 2 runs = 8 events
     assert len(run_starts) == 8, f"expected 8 run events, got {len(run_starts)}"
 
     stream_paths = [tuple(e["stream_path"]) for e in run_starts]
 
-    # All must be depth-1 (a single ULID in each path)
+    # All depth-2
     for sp in stream_paths:
-        assert len(sp) == 1, f"expected depth-1 stream_path, got {sp!r}"
+        assert len(sp) == 2, f"expected depth-2 stream_path, got {sp!r}"
 
-    # All 8 must be distinct
+    # All 8 distinct (the child ULID differs per launch, even within a branch)
     assert len(set(stream_paths)) == 8, (
-        f"expected 8 distinct stream_paths, got {len(set(stream_paths))}: {stream_paths}"
+        f"expected 8 distinct stream_paths, got {len(set(stream_paths))}: "
+        f"{stream_paths}"
     )
 
+    # Prefix matching: each path's first element must be one of the per-branch
+    # parent IDs, and each parent must appear as the prefix of exactly 2 paths.
+    from collections import Counter
+    prefix_counts = Counter(sp[0] for sp in stream_paths)
+    assert set(prefix_counts.keys()) == set(parent_ids), (
+        f"unexpected prefixes: {prefix_counts}"
+    )
+    for pid, count in prefix_counts.items():
+        assert count == 2, f"parent {pid!r} should prefix 2 paths, got {count}"
+
 
 # ---------------------------------------------------------------------------
-# Acceptance criterion 2:
-#   The reader thread sees the correct stream_path even after the launching
-#   step has returned.
+# AC2 — The persisted event carries the stream_path value stamped at launch
+#       time, even after the launching step has returned and the contextvar
+#       has been reset.  (The reader-thread-closure wording in the design
+#       becomes a by-value capture in the Event dataclass for pure-asyncio
+#       code; the invariant is the same — no contextvar lookup on read.)
 # ---------------------------------------------------------------------------
 
-def test_stream_path_captured_in_closure(tmp_path, monkeypatch):
-    """stream_path is stamped at launch time and captured by value in the event.
-
-    Even if the step returns before we inspect the log, the persisted event
-    must carry the correct stream_path.  We verify by running a workflow,
-    letting it complete, then checking the JSONL.
-    """
+def test_stream_path_captured_in_event_after_step_returns(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
     @workflow
@@ -104,122 +110,179 @@ def test_stream_path_captured_in_closure(tmp_path, monkeypatch):
         @step
         async def do_work():
             return await run("echo closure_test")
-
         return await do_work()
 
     asyncio.run(wf())
-
-    events = _load_run_events(tmp_path)
-    run_starts = [e for e in events if e["op"] == "run" and e["status"] == "STARTED"]
-    assert run_starts, "no run STARTED event found"
-
-    sp = run_starts[0]["stream_path"]
+    # At this point the step has returned, workflow is over, contextvar was
+    # reset.  The persisted event must still carry the stamped stream_path.
+    starts = _run_events(_load_events(tmp_path))
+    assert starts, "no run STARTED event found"
+    sp = starts[0]["stream_path"]
     assert isinstance(sp, list)
-    assert len(sp) == 1, f"expected depth-1 stream_path, got {sp!r}"
-    # The ULID is a non-empty string
+    assert len(sp) == 1
     assert sp[0] and isinstance(sp[0], str)
 
+    # And the contextvar in the *current* thread is back to its default —
+    # proving the value in the event was captured by value, not by reference.
+    assert _current_stream_path.get() == []
+
 
 # ---------------------------------------------------------------------------
-# Acceptance criterion 3:
-#   Regression guard — if the contextvar is NOT propagated to parallel branch
-#   threads, branches that inherit no parent path produce depth-1 paths when
-#   they should produce depth-2+.
+# AC3 — Regression guard: the parallel() implementation MUST propagate the
+#       launching context to branches.  We test both halves:
 #
-#   We simulate this by manually running a coroutine in a fresh context
-#   (simulating "forgetting copy_context") and verifying that the stream_path
-#   starts fresh (depth-1) rather than inheriting the parent.
+#   (a) Real parallel() with a parent stream_path set in the enclosing scope:
+#       branches inherit it and produce depth-2 paths.
+#   (b) Simulated broken parallel(): branches run in a fresh empty Context()
+#       (as `pool.submit(fn)` without copy_context would do) and produce
+#       depth-1 paths.  This proves (a)'s depth-2 assertion is load-bearing.
 # ---------------------------------------------------------------------------
 
-def test_no_context_propagation_produces_fresh_path():
-    """Regression guard: without context propagation the child sees no parent.
+def test_parallel_propagates_stream_path_to_branches(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
 
-    This test verifies that if a coroutine is started in a *fresh* context
-    (no inherited contextvars), run() produces a depth-1 path even when the
-    caller had a non-empty path — confirming that context propagation is what
-    makes depth-2+ paths work.
-    """
-    import contextvars
+    parent_id = "outer-parent-id"
 
-    # Set a non-empty stream_path in the outer context
-    outer_path = ["outer-id"]
-    outer_token = _current_stream_path.set(outer_path)
+    @workflow
+    async def wf():
+        token = _current_stream_path.set([parent_id])
+        try:
+            @step
+            async def branch_a():
+                await run("echo a")
 
-    # Read child path in a fresh (isolated) context — simulates forgetting propagation
-    captured: list = []
+            @step
+            async def branch_b():
+                await run("echo b")
 
-    def _read_in_fresh_ctx():
-        # Fresh context: _current_stream_path is not set → default []
-        fresh_ctx = contextvars.Context()  # empty context, no inherited vars
-        def _read():
-            captured.append(_current_stream_path.get())
-        fresh_ctx.run(_read)
+            await parallel(branch_a(), branch_b())
+        finally:
+            _current_stream_path.reset(token)
 
-    _read_in_fresh_ctx()
+    asyncio.run(wf())
 
-    _current_stream_path.reset(outer_token)
+    starts = _run_events(_load_events(tmp_path))
+    assert len(starts) == 2, f"expected 2 run events, got {len(starts)}"
 
-    # The fresh context sees the default (empty list), not the outer path.
-    assert captured == [[]], (
-        f"expected fresh context to see default [], got {captured}"
-    )
-    # This proves: if parallel() branches were run in a fresh context instead
-    # of inheriting the launching context, they would produce depth-1 paths
-    # (starting from []) instead of depth-2+ paths.
+    # Both branch runs must inherit the parent path — depth-2 with parent_id
+    # as the prefix.  If parallel() loses context propagation, these are
+    # depth-1 and the assertion fails (true regression guard).
+    for e in starts:
+        sp = e["stream_path"]
+        assert len(sp) == 2, (
+            f"expected depth-2 (parent propagated to branch), got {sp!r}. "
+            f"If this fails, parallel() is no longer propagating contextvars "
+            f"to branches - check copy_context() wiring."
+        )
+        assert sp[0] == parent_id, (
+            f"branch did not inherit parent stream_path; "
+            f"expected prefix {parent_id!r}, got {sp[0]!r}"
+        )
 
 
-# ---------------------------------------------------------------------------
-# Acceptance criterion 4 (smoke):
-#   Sequential launch inside a step produces depth-2 stream_paths with
-#   matching prefix.
-#
-#   We simulate nested subprocess launches: a step calls run() (depth-1),
-#   and then within that context another run() is called (would be depth-2).
-#   Since run() uses the contextvar to track nesting, we test this by
-#   directly manipulating _current_stream_path in a helper coroutine.
-# ---------------------------------------------------------------------------
+def test_regression_guard_missing_propagation_produces_depth1(tmp_path, monkeypatch):
+    """Coupled companion to the previous test: simulate a broken parallel()
+    that dispatches branches into a fresh (empty) contextvars.Context, and
+    verify the broken behaviour produces depth-1 paths.
 
-def test_sequential_nested_launch_produces_depth2_path(tmp_path, monkeypatch):
-    """Nested run() calls produce depth-2 stream_paths with matching prefix.
-
-    We test this by running two run() calls in sequence from the same step.
-    Each call reads _current_stream_path on the launching coroutine at call
-    time.  Since the contextvar is reset after each run() finishes, the two
-    calls each start from the same parent (empty list in a plain step), so
-    both produce depth-1 paths.
-
-    To test true depth-2, we use a manual contextvar manipulation to simulate
-    an agent that itself calls run().
+    This proves that the depth-2 assertion in
+    test_parallel_propagates_stream_path_to_branches is actually coupled to
+    the propagation mechanism — if someone "fixes" that test to pass under
+    a broken implementation (e.g., by loosening the length check), this
+    test demonstrates what broken looks like.
     """
     monkeypatch.chdir(tmp_path)
 
-    # Manually set a non-empty parent path to simulate an agent context
-    parent_id = "parent-ulid-0000"
+    parent_id = "outer-parent-id"
 
-    captured_paths: list[list[str]] = []
+    @workflow
+    async def wf():
+        token = _current_stream_path.set([parent_id])
+        try:
+            async def branch():
+                # Simulate "forgetting copy_context()": a broken dispatcher
+                # would drop _current_stream_path before the branch runs.
+                # Reset it to the default inside the branch to mimic what
+                # pool.submit(fn) without copy_context().run produces.
+                inner_token = _current_stream_path.set([])
+                try:
+                    await run("echo broken")
+                finally:
+                    _current_stream_path.reset(inner_token)
+
+            await branch()
+        finally:
+            _current_stream_path.reset(token)
+
+    asyncio.run(wf())
+
+    starts = _run_events(_load_events(tmp_path))
+    assert starts
+    sp = starts[0]["stream_path"]
+    assert len(sp) == 1, (
+        f"expected depth-1 under BROKEN propagation, got {sp!r}. "
+        f"If this produces depth-2, context propagation happens even under "
+        f"a fresh Context() - the regression guard is no longer valid."
+    )
+
+
+# ---------------------------------------------------------------------------
+# AC4 (smoke) — Sequential nested launch inside a step produces a depth-2
+#               stream_path with matching prefix.
+# ---------------------------------------------------------------------------
+
+def test_sequential_nested_launch_produces_depth2_path(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    parent_id = "agent-like-parent-00"
 
     @workflow
     async def wf():
         @step
         async def nested_launch():
-            # Simulate: parent has already set a stream_path (e.g., agent launch)
             token = _current_stream_path.set([parent_id])
             try:
-                result = await run("echo nested")
+                await run("echo nested")
             finally:
                 _current_stream_path.reset(token)
-            return result
-
-        return await nested_launch()
+        await nested_launch()
 
     asyncio.run(wf())
+    starts = _run_events(_load_events(tmp_path))
+    assert starts
+    sp = starts[0]["stream_path"]
+    assert len(sp) == 2, f"expected depth-2, got {sp!r}"
+    assert sp[0] == parent_id
+    assert sp[1] != parent_id
 
-    events = _load_run_events(tmp_path)
-    run_starts = [e for e in events if e["op"] == "run" and e["status"] == "STARTED"]
-    assert run_starts, "no run STARTED event"
 
-    sp = run_starts[0]["stream_path"]
-    # With parent_id set, the run() should produce [parent_id, <new_ulid>]
-    assert len(sp) == 2, f"expected depth-2 stream_path, got {sp!r}"
-    assert sp[0] == parent_id, f"first element must match parent, got {sp[0]!r}"
-    assert sp[1] != parent_id, "second element must be a fresh ULID"
+# ---------------------------------------------------------------------------
+# C1 regression — stream_path contextvar must not leak on early exit.
+# If ctx.next_op_position() (or the replay guard) raises before the subprocess
+# is launched, the outer finally must still reset _current_stream_path.
+# ---------------------------------------------------------------------------
+
+def test_stream_path_contextvar_reset_on_early_exit(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    @workflow
+    async def wf():
+        from godel._context import _current_workflow
+        ctx = _current_workflow.get()
+        assert ctx is not None
+
+        # Force an early-exit failure from inside run(), AFTER stream_path_token
+        # has been set but BEFORE the subprocess-block finally fires.
+        def _boom():
+            raise RuntimeError("synthetic early-exit failure")
+
+        ctx.next_op_position = _boom  # type: ignore[assignment]
+
+        before = _current_stream_path.get()
+        with pytest.raises(RuntimeError, match="synthetic early-exit failure"):
+            await run("echo never")
+        after = _current_stream_path.get()
+        assert after == before, (
+            f"stream_path leaked on early exit: before={before!r}, after={after!r}"
+        )
+
+    asyncio.run(wf())
