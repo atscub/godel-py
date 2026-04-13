@@ -52,8 +52,8 @@ def parse_bytes_chunked(data: bytes, chunk_size: int) -> list[Parsed | Raw]:
 
 
 def _results_equal(a: list, b: list) -> bool:
-    """Compare two result lists for equality, ignoring text field differences
-    only for oversized items (truncation point may land differently by chunk)."""
+    """Strict equality on result lists — text is compared on EVERY item,
+    including oversized Raws, so truncation-point regressions are caught."""
     if len(a) != len(b):
         return False
     for x, y in zip(a, b):
@@ -67,8 +67,7 @@ def _results_equal(a: list, b: list) -> bool:
                 return False
             if x._truncated != y._truncated:
                 return False
-            # For non-oversized Raw, text should be identical
-            if not x._truncated and x.text != y.text:
+            if x.text != y.text:
                 return False
     return True
 
@@ -289,14 +288,51 @@ def test_oversized_line_payload_le_64kb():
 
 
 def test_10mb_single_line():
-    """10 MB single line — the fuzz battery criterion."""
+    """10 MB single line — the fuzz battery criterion.
+
+    Every emitted Raw for this single oversized line must have
+    reason='oversized' and payload <= 64 KB.  No 'malformed' tail fragments.
+    """
     big_line = b"z" * (10 * _1MB)  # no trailing newline
     results = parse_bytes(big_line)
     assert len(results) >= 1
     for r in results:
         assert isinstance(r, Raw)
-        if r._truncated:
-            assert len(r.text.encode()) <= _64KB + 10
+        assert r.reason == "oversized", f"unexpected reason: {r.reason!r}"
+        assert r._truncated is True
+        assert len(r.text.encode("utf-8")) <= _64KB
+
+
+def test_2mb_single_line_boundary():
+    """Regression for the '2 MB single line' drain bug: a line between 1 MB
+    and 2 MB must NOT produce a malformed Raw with a huge text, only
+    oversized Raws with payload <= 64 KB."""
+    big_line = b"q" * (2 * _1MB) + b"\n"
+    results = parse_bytes(big_line)
+    assert len(results) >= 1
+    for r in results:
+        assert isinstance(r, Raw)
+        assert r.reason == "oversized", (
+            f"expected all Raws to be oversized, got {r.reason!r} "
+            f"with text length {len(r.text)}"
+        )
+        assert r._truncated is True
+        assert len(r.text.encode("utf-8")) <= _64KB
+    # No spilled 'malformed' events.
+    malformed = [r for r in results if isinstance(r, Raw) and r.reason == "malformed"]
+    assert malformed == []
+
+
+def test_exactly_1mb_line_is_not_oversized():
+    """Pin the boundary: a line of exactly 1 MB is NOT oversized (strict >).
+    Since 1 MB of 'q' is not valid JSON, it should parse as a single
+    Raw(reason='malformed'); it must NOT become oversized."""
+    line = b"q" * _1MB + b"\n"
+    results = parse_bytes(line)
+    assert len(results) == 1
+    assert isinstance(results[0], Raw)
+    assert results[0].reason == "malformed"
+    assert results[0]._truncated is False
 
 
 def test_normal_lines_after_oversized():
@@ -307,6 +343,52 @@ def test_normal_lines_after_oversized():
     results = parse_bytes(data)
     parsed_items = [r for r in results if isinstance(r, Parsed)]
     assert any(p.data == {"after": True} for p in parsed_items)
+    # And: no malformed leaked from the oversized line.
+    for r in results:
+        if isinstance(r, Raw):
+            assert r.reason == "oversized"
+
+
+def test_normal_lines_after_oversized_no_newline_until_later_chunk():
+    """When the oversized line's terminator arrives in a later chunk,
+    the drain state must skip all intermediate bytes and resume cleanly."""
+    big = b"B" * (3 * _1MB) + b"\n"
+    normal = b'{"after": 1}\n{"again": 2}\n'
+    data = big + normal
+    # Feed in modest chunks so the drain state spans many iterations.
+    results = parse_bytes_chunked(data, chunk_size=4096)
+    # There should be exactly one oversized Raw, then two Parsed objects.
+    raws = [r for r in results if isinstance(r, Raw)]
+    parseds = [r for r in results if isinstance(r, Parsed)]
+    assert all(r.reason == "oversized" for r in raws)
+    assert {"after": 1} in [p.data for p in parseds]
+    assert {"again": 2} in [p.data for p in parseds]
+
+
+@pytest.mark.parametrize("chunk_size", [1, 7, 4096, _64KB, _1MB])
+def test_oversized_chunk_boundary_consistency(chunk_size):
+    """W1: oversized input must produce an identical event sequence
+    regardless of chunk size (1-byte feed vs 1 MB feed parity)."""
+    data = (
+        b"A" * (2 * _1MB + 123)
+        + b"\n"
+        + b'{"ok": true}\n'
+        + b"C" * (_1MB + 50)
+        + b"\n"
+        + b'{"tail": 1}\n'
+    )
+    reference = parse_bytes(data)
+    chunked = parse_bytes_chunked(data, chunk_size)
+    assert _results_equal(reference, chunked), (
+        f"chunk_size={chunk_size}: mismatch\n"
+        f"ref={[(type(r).__name__, getattr(r, 'reason', None)) for r in reference]}\n"
+        f"got={[(type(r).__name__, getattr(r, 'reason', None)) for r in chunked]}"
+    )
+    # And: every Raw in the reference must be oversized.
+    for r in reference:
+        if isinstance(r, Raw):
+            assert r.reason == "oversized"
+            assert len(r.text.encode("utf-8")) <= _64KB
 
 
 # ---------------------------------------------------------------------------

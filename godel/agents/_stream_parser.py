@@ -89,17 +89,39 @@ def iter_parsed(reader: IO[bytes]) -> Iterator[ParseResult]:
     """
     # Raw bytes buffer — we accumulate until we see b'\n'.
     buf: bytes = b""
+    # When True, we have already emitted an oversized Raw for the current
+    # line-in-progress; drop every byte until the next newline, then resume
+    # normal parsing.  This guarantees an oversized line produces exactly one
+    # Raw(reason="oversized") event and zero "malformed" tail fragments.
+    dropping_oversized: bool = False
 
     try:
         while True:
             chunk = reader.read(_CHUNK)
             if not chunk:
                 # EOF — flush any remaining buffered data as a final line.
-                if buf:
-                    yield from _process_line(buf)
+                if dropping_oversized:
+                    # Oversized line had no trailing newline — we already
+                    # emitted its Raw; just drop what's left.
+                    pass
+                elif buf:
+                    if len(buf) > _1MB:
+                        yield _oversized_raw(buf[:_64KB])
+                    else:
+                        yield from _process_line(buf)
                 break
 
-            buf += chunk
+            if dropping_oversized:
+                nl_pos = chunk.find(b"\n")
+                if nl_pos == -1:
+                    # Still no terminator — discard the whole chunk.
+                    continue
+                # Found the end of the oversized line; resume normal parsing
+                # with the bytes after the newline.
+                dropping_oversized = False
+                buf = chunk[nl_pos + 1 :]
+            else:
+                buf += chunk
 
             # Split on every newline we can find.
             while True:
@@ -107,11 +129,12 @@ def iter_parsed(reader: IO[bytes]) -> Iterator[ParseResult]:
                 if nl_pos == -1:
                     # No complete line yet; check oversized accumulation.
                     if len(buf) > _1MB:
-                        # Emit an oversized Raw and *discard* the rest until
-                        # we find the next newline on a future chunk.
+                        # Emit exactly one oversized Raw for this line and
+                        # switch to drain mode — every subsequent byte up to
+                        # and including the next '\n' is discarded.
                         yield _oversized_raw(buf[:_64KB])
-                        # Drain the oversized portion — keep scanning for \n.
-                        buf = buf[_1MB:]
+                        buf = b""
+                        dropping_oversized = True
                     break
 
                 line_bytes = buf[:nl_pos]
@@ -132,8 +155,28 @@ def iter_parsed(reader: IO[bytes]) -> Iterator[ParseResult]:
 
 
 def _oversized_raw(truncated_bytes: bytes) -> Raw:
-    """Return a ``Raw(reason="oversized", _truncated=True)`` for a huge line."""
-    text = truncated_bytes.decode("utf-8", errors="replace")
+    """Return a ``Raw(reason="oversized", _truncated=True)`` for a huge line.
+
+    The payload is hard-capped so that the resulting ``text`` encodes to
+    <= 64 KB of UTF-8 bytes.  Because ``errors="replace"`` can expand a single
+    invalid byte into a 3-byte U+FFFD sequence, we decode then re-trim by
+    encoded length.
+    """
+    # Start with at most 64 KB of input bytes so we never spend unbounded CPU.
+    slice_bytes = truncated_bytes[:_64KB]
+    text = slice_bytes.decode("utf-8", errors="replace")
+    # Trim characters from the tail until the encoded length fits in 64 KB.
+    encoded = text.encode("utf-8", errors="replace")
+    if len(encoded) > _64KB:
+        # Binary search for the largest prefix whose UTF-8 encoding fits.
+        lo, hi = 0, len(text)
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if len(text[:mid].encode("utf-8", errors="replace")) <= _64KB:
+                lo = mid
+            else:
+                hi = mid - 1
+        text = text[:lo]
     return Raw(text=text, reason="oversized", _truncated=True)
 
 
