@@ -7,12 +7,49 @@ import json as _json
 import os
 import traceback
 import uuid
-from typing import Awaitable, TypeVar
+from typing import Awaitable, Callable, TypeVar
 
 from godel._context import WorkflowContext, _current_workflow, _on_run_start
 from godel._exceptions import PauseSignal, RewindSignal
 
 T = TypeVar("T")
+
+
+class _StepCoroutine:
+    """Awaitable wrapper around a step coroutine that carries step metadata.
+
+    When a ``@step``-decorated function is called, it returns one of these
+    objects instead of a bare coroutine.  This lets ``parallel()`` inspect
+    ``_step_options`` on each awaitable *before* scheduling execution,
+    enabling registration-time (pre-execution) validation.
+
+    ``_StepCoroutine`` is a transparent proxy: it implements ``__await__`` by
+    delegating to the wrapped coroutine, so it is usable anywhere a coroutine
+    or awaitable is expected (including ``await`` expressions and
+    ``asyncio.gather``).
+    """
+
+    __slots__ = ("_coro", "_step_options")
+
+    def __init__(self, coro, step_options: dict):
+        self._coro = coro
+        self._step_options = step_options
+
+    def __await__(self):
+        return self._coro.__await__()
+
+    def close(self):
+        return self._coro.close()
+
+    def send(self, value):
+        return self._coro.send(value)
+
+    def throw(self, *args):
+        return self._coro.throw(*args)
+
+    # Allow asyncio.iscoroutine() checks to pass through
+    def __class_getitem__(cls, item):
+        return cls
 
 # Directory containing the godel library source — used to filter out
 # internal frames when computing source_location so it points to user code.
@@ -42,173 +79,232 @@ class WorkflowFail(Exception):
     pass
 
 
-def workflow(fn):
-    if not asyncio.iscoroutinefunction(fn):
-        raise TypeError(f"@workflow requires an async function, got {fn.__name__}")
+def workflow(
+    fn=None,
+    *,
+    stream_agents: bool = False,
+    capture_stdout: bool = False,
+    redact: list[Callable] | None = None,
+):
+    """Decorator that marks an async function as a Godel workflow.
 
-    @functools.wraps(fn)
-    async def wrapper(*args, **kwargs):
-        from godel._event_log import EventLog
-        from godel._context import _pending_replay
-        from godel._rewind import apply_rewind
-        from godel._replay import ReplayWalker
+    Can be applied as ``@workflow`` (bare) or ``@workflow(...)`` with options:
 
-        replay_walker = _pending_replay.get()
+    Args:
+        stream_agents: When ``True``, agent responses will be streamed to the
+            transcript writer as they arrive (instead of buffered).  Defaults
+            to ``False`` (buffered).
+        capture_stdout: When ``True``, stdout emitted during the workflow is
+            captured and attached to the event log.  Defaults to ``False``.
+        redact: A list of callables (redactors).  Each callable receives a
+            string and returns the redacted version.  Applied to event payloads
+            before they are written to the audit log.  Defaults to ``None``
+            (no redaction).
 
-        if replay_walker:
-            # Resume: reuse existing run_id, append to same log
-            run_id = replay_walker._log._run_id
-            event_log = replay_walker._log  # reuse the loaded log (already open for append)
-            event_log._replay_suppress = True  # suppress writes during replay phase
-            # Clear any pause sentinel so the first live @step after replay
-            # does not immediately re-pause (idempotent — no-op if absent).
-            try:
-                from godel._pause import clear_pause_request
-                clear_pause_request(run_id)
-            except OSError:
-                pass
-        else:
-            run_id = str(uuid.uuid4())
-            event_log = EventLog(run_id)
-
-        source_file = getattr(fn, '_source_file', '') or getattr(wrapper, '_source_file', '')
-
-        max_rewinds = 100
-        rewind_count = 0
-        result = None
-        start_event = None
-
-        try:
-            while True:
-                ctx = WorkflowContext(
-                    run_id=run_id,
-                    event_log=event_log,
-                    replay_walker=replay_walker,
-                    source_file=source_file,
-                    _local_replay_suppress=event_log._replay_suppress,
+    Raises:
+        TypeError: If ``redact`` contains a non-callable entry.
+    """
+    # Validate redact entries at decoration time (not runtime).
+    if redact is not None:
+        for i, entry in enumerate(redact):
+            if not callable(entry):
+                raise TypeError(
+                    f"@workflow redact[{i}] must be callable, got {type(entry).__name__!r}"
                 )
-                token = _current_workflow.set(ctx)
 
-                # Notify CLI of run start (run_id + log path) — only on first iteration
-                if rewind_count == 0:
-                    on_start = _on_run_start.get(None)
-                    if on_start:
-                        on_start(run_id, str(event_log._file_path))
+    def _make_workflow(fn):
+        if not asyncio.iscoroutinefunction(fn):
+            raise TypeError(f"@workflow requires an async function, got {fn.__name__}")
 
-                # Emit WORKFLOW_STARTED only on first run (not on rewind re-invocations
-                # and not when resuming a run that already has a WORKFLOW_STARTED).
-                if rewind_count == 0 and replay_walker is None:
-                    # Attempt to store args/kwargs as JSON-serialisable structures so
-                    # resume can recover them programmatically.  CLI callers always pass
-                    # strings, so this succeeds by default.  Programmatic callers that
-                    # pass non-JSON-serialisable values (e.g. custom objects) fall back
-                    # to a repr string with an 'args_repr_only': True sentinel so the
-                    # resume command can detect and reject the run gracefully.
-                    try:
-                        _json.dumps({"args": list(args), "kwargs": dict(kwargs)})
-                        _wf_args_payload = {"args": list(args), "kwargs": dict(kwargs)}
-                    except (TypeError, ValueError):
-                        _wf_args_payload = {
-                            "args": repr(args),
-                            "kwargs": repr(kwargs),
-                            "args_repr_only": True,
-                        }
-                    start_event = event_log.emit_started(
-                        op="WORKFLOW_STARTED",
-                        step_path=(),
-                        request={
-                            "function": fn.__name__,
-                            **_wf_args_payload,
-                            "source_file": source_file,
-                        },
-                    )
-                    ctx.push_event_scope(start_event.event_id)
-                else:
-                    # After rewind, or on resume from an existing log: reuse the
-                    # original WORKFLOW_STARTED event (same event_id, no new event).
-                    wf_events = [e for e in event_log.all_events() if e.op == "WORKFLOW_STARTED"]
-                    if wf_events:
-                        start_event = wf_events[0]
-                        ctx.push_event_scope(start_event.event_id)
+        @functools.wraps(fn)
+        async def wrapper(*args, **kwargs):
+            from godel._event_log import EventLog
+            from godel._context import _pending_replay
+            from godel._rewind import apply_rewind
+            from godel._replay import ReplayWalker
 
+            replay_walker = _pending_replay.get()
+
+            if replay_walker:
+                # Resume: reuse existing run_id, append to same log
+                run_id = replay_walker._log._run_id
+                event_log = replay_walker._log  # reuse the loaded log (already open for append)
+                event_log._replay_suppress = True  # suppress writes during replay phase
+                # Clear any pause sentinel so the first live @step after replay
+                # does not immediately re-pause (idempotent — no-op if absent).
                 try:
-                    result = await fn(*args, **kwargs)
-                    if start_event is not None:
-                        event_log.emit_finished(start_event.event_id, response={"result": repr(result)})
-                    break  # Success — exit the rewind loop
+                    from godel._pause import clear_pause_request
+                    clear_pause_request(run_id)
+                except OSError:
+                    pass
+            else:
+                run_id = str(uuid.uuid4())
+                event_log = EventLog(run_id)
 
-                except RewindSignal as sig:
-                    rewind_count += 1
-                    if rewind_count >= max_rewinds:
-                        raise RuntimeError(f"Exceeded maximum rewind count ({max_rewinds})")
+            source_file = getattr(fn, '_source_file', '') or getattr(wrapper, '_source_file', '')
 
-                    # Apply the graph cut
-                    apply_rewind(event_log, sig.target_ids, sig.reason)
+            max_rewinds = 100
+            rewind_count = 0
+            result = None
+            start_event = None
 
-                    # Build a new ReplayWalker from the modified log
-                    replay_walker = ReplayWalker(event_log)
-                    event_log._replay_suppress = True
-
-                    # Reset context var before creating a fresh one next iteration
-                    _current_workflow.reset(token)
-                    token = None
-                    continue  # Re-invoke the workflow
-
-                except PauseSignal as sig:
-                    # Emit a PAUSED metadata event on the WORKFLOW_STARTED scope
-                    if start_event is not None:
-                        from godel._events import EventStatus
-                        event_log._replay_suppress = False
-                        event_log.emit_started(
-                            op="PAUSED",
-                            step_path=(),
-                            request={"reason": sig.reason, "requested_ts": sig.request_ts},
-                            invocation_seq=-1,
-                            step_local_seq=-1,
-                            parent_event_id=start_event.event_id,
-                        )
-                        # Finish the WORKFLOW_STARTED event with PAUSED status
-                        event_log.emit_finished(
-                            start_event.event_id,
-                            response={"result": "paused", "reason": sig.reason},
-                            status=EventStatus.PAUSED,
-                        )
-                        event_log._file.flush()
-                    raise
-
-                except Exception as exc:
-                    if start_event is not None:
-                        tb_frames = traceback.extract_tb(exc.__traceback__)
-                        source_loc = _user_source_location(tb_frames)
-                        event_log.emit_failed(
-                            start_event.event_id,
-                            str(exc),
-                            error_type=type(exc).__name__,
-                            source_location=source_loc,
-                        )
-                    raise
-                finally:
-                    ctx.pop_event_scope()
-                    if token is not None:
-                        _current_workflow.reset(token)
-
-            return result
-
-        finally:
-            wrapper._last_run_id = run_id
-            event_log._replay_suppress = False
-            event_log.close()
             try:
-                from godel._pause import clear_pause_request
-                clear_pause_request(run_id)
-            except OSError:
-                pass
+                while True:
+                    ctx = WorkflowContext(
+                        run_id=run_id,
+                        event_log=event_log,
+                        replay_walker=replay_walker,
+                        source_file=source_file,
+                        _local_replay_suppress=event_log._replay_suppress,
+                    )
+                    token = _current_workflow.set(ctx)
 
-    wrapper._is_workflow = True
-    return wrapper
+                    # Notify CLI of run start (run_id + log path) — only on first iteration
+                    if rewind_count == 0:
+                        on_start = _on_run_start.get(None)
+                        if on_start:
+                            on_start(run_id, str(event_log._file_path))
+
+                    # Emit WORKFLOW_STARTED only on first run (not on rewind re-invocations
+                    # and not when resuming a run that already has a WORKFLOW_STARTED).
+                    if rewind_count == 0 and replay_walker is None:
+                        # Attempt to store args/kwargs as JSON-serialisable structures so
+                        # resume can recover them programmatically.  CLI callers always pass
+                        # strings, so this succeeds by default.  Programmatic callers that
+                        # pass non-JSON-serialisable values (e.g. custom objects) fall back
+                        # to a repr string with an 'args_repr_only': True sentinel so the
+                        # resume command can detect and reject the run gracefully.
+                        try:
+                            _json.dumps({"args": list(args), "kwargs": dict(kwargs)})
+                            _wf_args_payload = {"args": list(args), "kwargs": dict(kwargs)}
+                        except (TypeError, ValueError):
+                            _wf_args_payload = {
+                                "args": repr(args),
+                                "kwargs": repr(kwargs),
+                                "args_repr_only": True,
+                            }
+                        start_event = event_log.emit_started(
+                            op="WORKFLOW_STARTED",
+                            step_path=(),
+                            request={
+                                "function": fn.__name__,
+                                **_wf_args_payload,
+                                "source_file": source_file,
+                            },
+                        )
+                        ctx.push_event_scope(start_event.event_id)
+                    else:
+                        # After rewind, or on resume from an existing log: reuse the
+                        # original WORKFLOW_STARTED event (same event_id, no new event).
+                        wf_events = [e for e in event_log.all_events() if e.op == "WORKFLOW_STARTED"]
+                        if wf_events:
+                            start_event = wf_events[0]
+                            ctx.push_event_scope(start_event.event_id)
+
+                    try:
+                        result = await fn(*args, **kwargs)
+                        if start_event is not None:
+                            event_log.emit_finished(start_event.event_id, response={"result": repr(result)})
+                        break  # Success — exit the rewind loop
+
+                    except RewindSignal as sig:
+                        rewind_count += 1
+                        if rewind_count >= max_rewinds:
+                            raise RuntimeError(f"Exceeded maximum rewind count ({max_rewinds})")
+
+                        # Apply the graph cut
+                        apply_rewind(event_log, sig.target_ids, sig.reason)
+
+                        # Build a new ReplayWalker from the modified log
+                        replay_walker = ReplayWalker(event_log)
+                        event_log._replay_suppress = True
+
+                        # Reset context var before creating a fresh one next iteration
+                        _current_workflow.reset(token)
+                        token = None
+                        continue  # Re-invoke the workflow
+
+                    except PauseSignal as sig:
+                        # Emit a PAUSED metadata event on the WORKFLOW_STARTED scope
+                        if start_event is not None:
+                            from godel._events import EventStatus
+                            event_log._replay_suppress = False
+                            event_log.emit_started(
+                                op="PAUSED",
+                                step_path=(),
+                                request={"reason": sig.reason, "requested_ts": sig.request_ts},
+                                invocation_seq=-1,
+                                step_local_seq=-1,
+                                parent_event_id=start_event.event_id,
+                            )
+                            # Finish the WORKFLOW_STARTED event with PAUSED status
+                            event_log.emit_finished(
+                                start_event.event_id,
+                                response={"result": "paused", "reason": sig.reason},
+                                status=EventStatus.PAUSED,
+                            )
+                            event_log._file.flush()
+                        raise
+
+                    except Exception as exc:
+                        if start_event is not None:
+                            tb_frames = traceback.extract_tb(exc.__traceback__)
+                            source_loc = _user_source_location(tb_frames)
+                            event_log.emit_failed(
+                                start_event.event_id,
+                                str(exc),
+                                error_type=type(exc).__name__,
+                                source_location=source_loc,
+                            )
+                        raise
+                    finally:
+                        ctx.pop_event_scope()
+                        if token is not None:
+                            _current_workflow.reset(token)
+
+                return result
+
+            finally:
+                wrapper._last_run_id = run_id
+                event_log._replay_suppress = False
+                event_log.close()
+                try:
+                    from godel._pause import clear_pause_request
+                    clear_pause_request(run_id)
+                except OSError:
+                    pass
+
+        wrapper._is_workflow = True
+        wrapper._workflow_options = {
+            "stream_agents": stream_agents,
+            "capture_stdout": capture_stdout,
+            "redact": list(redact) if redact is not None else [],
+        }
+        return wrapper
+
+    # Support both @workflow (bare) and @workflow(...) (with options).
+    # When called as @workflow with no parentheses, fn is the decorated function.
+    # When called as @workflow(...), fn is None and we return _make_workflow.
+    if fn is not None:
+        return _make_workflow(fn)
+    return _make_workflow
 
 
-def step(fn=None, *, name=None, idempotent=False):
+def step(fn=None, *, name=None, idempotent=False, capture_stdout: bool = False):
+    """Decorator that marks an async function as a workflow step.
+
+    Can be applied as ``@step`` (bare) or ``@step(...)`` with options:
+
+    Args:
+        name: Override the step name used in the event log.  Defaults to the
+            function name.
+        idempotent: When ``True``, the step is safe to re-execute after an
+            interrupted run.  Defaults to ``False``.
+        capture_stdout: When ``True``, stdout emitted during this step is
+            captured and attached to the step's event log entry.  Cannot be
+            ``True`` for steps used inside a ``parallel()`` block.
+            Defaults to ``False``.
+    """
     def decorator(fn):
         if not asyncio.iscoroutinefunction(fn):
             raise TypeError(f"@step requires an async function, got {fn.__name__}")
@@ -419,9 +515,19 @@ def step(fn=None, *, name=None, idempotent=False):
                     ctx.pop_event_scope()
                 ctx.step_stack.pop()
 
-        wrapper._is_step = True
-        wrapper._idempotent = idempotent
-        return wrapper
+        _opts = {"capture_stdout": capture_stdout}
+
+        # Wrap the async wrapper so that calling the step-decorated function
+        # returns a _StepCoroutine instead of a bare coroutine.  This allows
+        # parallel() to inspect _step_options before scheduling execution.
+        @functools.wraps(fn)
+        def step_caller(*args, **kwargs):
+            return _StepCoroutine(wrapper(*args, **kwargs), _opts)
+
+        step_caller._is_step = True
+        step_caller._idempotent = idempotent
+        step_caller._step_options = _opts
+        return step_caller
 
     return decorator(fn) if fn is not None else decorator
 
@@ -454,7 +560,38 @@ async def parallel(*aws: Awaitable[T]) -> tuple:
 
     If called outside a ``@workflow`` context (no ``EventLog`` attached) the
     function falls back to a bare ``asyncio.gather`` with no event emission.
+
+    Raises:
+        ConfigError: If any of the supplied awaitables is a coroutine whose
+            underlying ``@step`` function was decorated with
+            ``capture_stdout=True``.  Parallel-safe per-step stdout capture is
+            not supported; each branch would require its own pipe.
     """
+    from godel._exceptions import ConfigError
+
+    # Validate that no step in the parallel block has capture_stdout=True.
+    # _StepCoroutine objects carry _step_options, set by the @step decorator.
+    offender = None
+    for aw in aws:
+        step_opts = getattr(aw, '_step_options', None)
+        if step_opts and step_opts.get("capture_stdout"):
+            offender = aw
+            break
+
+    if offender is not None:
+        # Close all awaitables so that no coroutines are left unawaited,
+        # then raise ConfigError.
+        for aw in aws:
+            try:
+                aw.close()
+            except Exception:
+                pass
+        raise ConfigError(
+            "capture_stdout=True is not allowed inside parallel() — "
+            "each branch would require its own pipe. "
+            "Use capture_stdout on the enclosing @workflow instead."
+        )
+
     ctx = _current_workflow.get()
 
     if not ctx or not ctx.event_log:
