@@ -1,0 +1,2 @@
+{"event":"message","data":{"role":"assistant","content":"Hi there!"}}
+{"event":"done","data":{"session_id":"sess_xyz"}}
