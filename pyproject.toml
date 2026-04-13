@@ -18,6 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest", "ruff", "build", "python-semantic-release"]
+watch = ["rich>=13.0"]
 
 [project.scripts]
 godel = "godel.cli:main"
