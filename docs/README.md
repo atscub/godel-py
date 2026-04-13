@@ -11,12 +11,14 @@ intervention.
 
 ## Contents
 
-1. [Getting Started](getting-started.md) — install, write a workflow, run it
-2. [Concepts](concepts.md) — workflows, steps, agents, the audit log, strict mode, replay
-3. [API Reference](api-reference.md) — every public symbol exported from `godel`
-4. [CLI Reference](cli.md) — the `godel` command-line tool
-5. [Examples](examples.md) — annotated walkthroughs
-6. [Agent Skills](skills/README.md) — `godel-runner` and `godel-engineer` for Claude Code
+1. [Why Godel](why-godel.md) — the problem, the insight, and how Godel differs from the neighbours
+2. [Getting Started](getting-started.md) — install, write a workflow, run it
+3. [Concepts](concepts.md) — workflows, steps, agents, the audit log, strict mode, replay
+4. [API Reference](api-reference.md) — every public symbol exported from `godel`
+5. [CLI Reference](cli.md) — the `godel` command-line tool
+6. [Examples](examples.md) — annotated walkthroughs
+7. [Agent Skills](skills/README.md) — `godel-runner` and `godel-engineer` for Claude Code
+8. [Strategy notes](strategy/README.md) — internal positioning, business model, roadmap vision
 
 ## Why Godel?
 
