@@ -8,3 +8,5 @@ runs/
 .dolt/
 *.db
 .beads-credential-key
+
+.obsidian/
