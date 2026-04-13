@@ -510,7 +510,12 @@ async def parallel(*aws: Awaitable[T]) -> tuple:
         finally:
             _current_workflow.reset(token)
 
-    # Run all branches concurrently with isolated stacks
+    # Run all branches concurrently with isolated stacks.
+    # asyncio.gather() propagates the current context snapshot to each child
+    # Task (CPython 3.7+), so _current_stream_path and other contextvars are
+    # automatically inherited from the fork point without explicit copy_context.
+    # If future changes move branch execution to a thread pool, use
+    # `ctx = contextvars.copy_context(); pool.submit(ctx.run, fn, ...)` instead.
     results = await asyncio.gather(
         *[_run_branch(aw) for aw in aws], return_exceptions=True
     )

@@ -34,6 +34,12 @@ class Event:
     status: EventStatus = EventStatus.STARTED
     ts_start: str = ""
     ts_end: str | None = None
+    # stream_path is stamped at subprocess/agent launch time on the launching
+    # thread and captured in the reader-thread closure.  It is a list of short
+    # ULIDs representing the nesting chain of launches: [] for top-level events,
+    # [launch_id] for direct subprocess launches, [parent_id, child_id] for
+    # nested subprocess launches (e.g., agent shells out to git), etc.
+    stream_path: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         """Serialize for JSONL (convert enum to string, tuple to list)."""
@@ -52,6 +58,7 @@ class Event:
             "status": self.status.value,
             "ts_start": self.ts_start,
             "ts_end": self.ts_end,
+            "stream_path": list(self.stream_path),
         }
 
     @classmethod
@@ -72,6 +79,7 @@ class Event:
             status=EventStatus(d["status"]),
             ts_start=d.get("ts_start", ""),
             ts_end=d.get("ts_end"),
+            stream_path=d.get("stream_path", []),
         )
 
     # Keys excluded from request_hash computation.
