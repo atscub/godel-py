@@ -29,10 +29,14 @@ audit log. Three focused guides cover the contracts and configuration:
   table, `stream_path` semantics, rotation sentinel, `.N` chain, semver policy, and an
   annotated example.
 - [Redaction](redaction.md) — registering redactors via `@workflow(redact=[...])`,
-  composition order, `redactor_error` event semantics, and what redaction does not cover.
-- [Stdout Capture](stdout-capture.md) — per-step `capture_stdout=True`, the pipe-per-step
-  model, `parallel()` incompatibility, the `GODEL_NO_CAPTURE=1` escape hatch, and
-  interactive-debugger caveats.
+  intended composition order, `redactor.error` event semantics, and the "Godel does not
+  guess at secrets" disclaimer. **Status: decoration-time validation only; runtime
+  pipeline tracked by `godel-py-5pl.6`.**
+- [Stdout Capture](stdout-capture.md) — `@step(capture_stdout=True)` /
+  `@workflow(capture_stdout=True)`, the pipe-per-step model, `parallel()`
+  incompatibility (enforced at `parallel()` call time today), the `GODEL_NO_CAPTURE=1`
+  escape hatch, and interactive-debugger caveats. **Status: kwarg accepted;
+  pipe/reader-thread runtime tracked by `godel-py-5pl.7`.**
 
 ## Why Godel?
 
