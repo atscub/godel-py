@@ -60,7 +60,8 @@ def main():
 @click.argument("extra", nargs=-1, type=click.UNPROCESSED)
 @click.option("--no-strict", is_flag=True, help="Disable strict mode (allow non-deterministic ops)")
 @click.option("--no-lint", is_flag=True, help="Skip lint pre-flight check")
-def run_cmd(file, extra, no_strict, no_lint):
+@click.option("--watch", is_flag=True, help="Stream live output (requires godel[watch])")
+def run_cmd(file, extra, no_strict, no_lint, watch):
     """Execute a @workflow-decorated function from FILE.
 
     Pass arguments to the workflow after a '--' separator:
@@ -71,6 +72,16 @@ def run_cmd(file, extra, no_strict, no_lint):
     Tokens containing '=' with a valid identifier LHS become keyword args;
     other tokens become positional args.  All values are passed as strings.
     """
+    if watch:
+        try:
+            from godel import _watch  # noqa: F401 — triggers import-time guard
+        except Exception as exc:
+            from godel._exceptions import GodelWatchNotInstalledError
+            if isinstance(exc, GodelWatchNotInstalledError):
+                click.echo(str(exc), err=True)
+                sys.exit(1)
+            raise
+
     if not no_strict:
         # Layer 1: AST pre-scan BEFORE loading the module
         from godel._strict_ast import scan_file
