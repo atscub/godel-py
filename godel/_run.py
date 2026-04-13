@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 
-from godel._context import _privileged
+from godel._context import _privileged, _current_stream_path
 from godel._decorators import WorkflowFail
 from godel._exceptions import _render_context_marker
 
@@ -67,9 +67,20 @@ class CommandFailure(WorkflowFail):
 
 async def run(cmd: str, *, cwd: str | None = None, timeout: float | None = None, idempotent: bool = False) -> CommandResult:
     from godel._context import _current_workflow
+    from ulid import ULID
 
     # Emit STARTED event (before privileged subprocess)
     ctx = _current_workflow.get()
+
+    # Stamp stream_path at launch time on the calling thread.
+    # _current_stream_path is read here (on the launching coroutine/thread) to
+    # capture the parent path; a fresh ULID is appended to form this launch's
+    # path.  The new path is set as the contextvar for the duration of the
+    # subprocess so nested run() calls inside agents produce depth-2+ paths.
+    parent_stream_path = _current_stream_path.get()
+    launch_id = str(ULID())
+    new_stream_path = parent_stream_path + [launch_id]
+    stream_path_token = _current_stream_path.set(new_stream_path)
 
     inv_seq, local_seq = (0, 0)
     if ctx:
@@ -112,6 +123,7 @@ async def run(cmd: str, *, cwd: str | None = None, timeout: float | None = None,
             invocation_seq=inv_seq,
             step_local_seq=local_seq,
             parent_event_id=ctx.current_parent_event_id,
+            stream_path=new_stream_path,
         )
 
     token = _privileged.set(True)
@@ -172,3 +184,4 @@ async def run(cmd: str, *, cwd: str | None = None, timeout: float | None = None,
         return CommandResult(stdout=stdout, stderr=stderr, returncode=proc.returncode)
     finally:
         _privileged.reset(token)
+        _current_stream_path.reset(stream_path_token)

@@ -72,9 +72,20 @@ class _BaseAgent:
     async def __call__(self, prompt: str, *, schema: Type[T]) -> T: ...
 
     async def __call__(self, prompt: str, *, schema=None):
-        from godel._context import _current_workflow
+        from godel._context import _current_workflow, _current_stream_path
+        from ulid import ULID
 
         ctx = _current_workflow.get()
+
+        # Stamp stream_path at agent-call launch time on the calling thread.
+        # Same pattern as run(): read parent path here, append a fresh ULID,
+        # and set the contextvar so any nested run() calls inside the agent
+        # produce depth-2+ stream_paths.
+        parent_stream_path = _current_stream_path.get()
+        launch_id = str(ULID())
+        new_stream_path = parent_stream_path + [launch_id]
+        stream_path_token = _current_stream_path.set(new_stream_path)
+
         event = None
         if ctx and ctx.event_log:
             request_data = {
@@ -88,36 +99,40 @@ class _BaseAgent:
                 op="agent.call",
                 step_path=tuple(ctx.step_stack),
                 request=request_data,
+                stream_path=new_stream_path,
             )
 
         try:
-            async with self._lock:
-                result = await self._execute(prompt, schema=schema)
-        except Exception as exc:
+            try:
+                async with self._lock:
+                    result = await self._execute(prompt, schema=schema)
+            except Exception as exc:
+                if event:
+                    import traceback as _tb
+                    tb_frames = _tb.extract_tb(exc.__traceback__)
+                    source_loc = ""
+                    if tb_frames:
+                        last = tb_frames[-1]
+                        source_loc = f"{last.filename}:{last.lineno}"
+                    ctx.event_log.emit_failed(
+                        event.event_id,
+                        str(exc),
+                        error_type=type(exc).__name__,
+                        source_location=source_loc,
+                    )
+                raise
+
             if event:
-                import traceback as _tb
-                tb_frames = _tb.extract_tb(exc.__traceback__)
-                source_loc = ""
-                if tb_frames:
-                    last = tb_frames[-1]
-                    source_loc = f"{last.filename}:{last.lineno}"
-                ctx.event_log.emit_failed(
-                    event.event_id,
-                    str(exc),
-                    error_type=type(exc).__name__,
-                    source_location=source_loc,
-                )
-            raise
+                response_data = {
+                    "type": "structured" if schema else "text",
+                    "value": repr(result)[:500],
+                    "session_id": self._session_id,
+                }
+                ctx.event_log.emit_finished(event.event_id, response=response_data)
 
-        if event:
-            response_data = {
-                "type": "structured" if schema else "text",
-                "value": repr(result)[:500],
-                "session_id": self._session_id,
-            }
-            ctx.event_log.emit_finished(event.event_id, response=response_data)
-
-        return result
+            return result
+        finally:
+            _current_stream_path.reset(stream_path_token)
 
     async def _execute(self, prompt: str, *, schema=None):
         model_id = self._model_aliases.get(self._model, self._model)

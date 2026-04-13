@@ -37,12 +37,18 @@ class EventLog:
         invocation_seq: int = 0,
         step_local_seq: int = 0,
         parent_event_id: str | None = None,
+        stream_path: list[str] | None = None,
     ) -> Event:
         """Create and persist a STARTED event.
 
         If *parent_event_id* is given, the new event is appended to
         the parent's ``children_ids`` and the parent is re-persisted
         (last-snapshot-wins).
+
+        *stream_path* is the list of launch-site ULIDs computed at subprocess /
+        agent launch time on the calling thread and captured in the reader-thread
+        closure.  Callers that do not participate in subprocess nesting may omit
+        it (defaults to ``[]``).
         """
         event_id = str(ULID())
         request_hash = Event.compute_request_hash(request)
@@ -58,6 +64,7 @@ class EventLog:
             request=request,
             status=EventStatus.STARTED,
             ts_start=datetime.now(timezone.utc).isoformat(),
+            stream_path=list(stream_path) if stream_path is not None else [],
         )
         self._seq_counter += 1
         self._events.append(event)
