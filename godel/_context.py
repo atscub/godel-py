@@ -100,13 +100,13 @@ _pending_replay: ContextVar = ContextVar("godel_pending_replay", default=None)
 _on_run_start: ContextVar = ContextVar("godel_on_run_start", default=None)
 
 # _current_stream_path tracks the nesting path of subprocess/agent launches.
-# Each launch site reads this contextvar on the *launching thread* to compute
-# the parent path, then appends a fresh ULID to form the child path.  The
-# child path is captured in the reader-thread closure at launch time — the
-# reader thread never queries the contextvar directly.  This is the ONLY
-# contextvar used for stream-path propagation; all other propagation is done
-# via closure capture or explicit copy_context() (for thread-pool submits in
-# parallel()).
+# Each launch site reads this contextvar on the *launching coroutine* (or
+# thread, for any future thread-pool dispatch) to compute the parent path,
+# then appends a fresh ULID to form the child path.  The child path is
+# stamped onto the Event by value at launch time — downstream consumers
+# reading the persisted log never query the contextvar.  This is the ONLY
+# contextvar used for stream-path propagation; cross-thread propagation (if
+# ever needed) must use contextvars.copy_context() + ctx.run(fn).
 _current_stream_path: ContextVar[list[str]] = ContextVar(
     "godel_stream_path", default=[]
 )
