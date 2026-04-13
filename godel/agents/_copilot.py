@@ -60,7 +60,12 @@ class _CopilotAgent(_BaseAgent):
         *,
         tools: list[str] | None,
         session_id: str | None,
+        streaming: bool = False,
     ) -> str:
+        # Copilot already emits JSONL (one object per line) regardless of the
+        # streaming flag; no extra CLI flag is required.  The streaming
+        # parameter is accepted for API compatibility with _BaseAgent but is
+        # otherwise unused here.
         cmd_parts = [
             "copilot",
             "--no-color",
@@ -76,6 +81,10 @@ class _CopilotAgent(_BaseAgent):
                 cmd_parts += ["--allow-tool", shlex.quote(tool)]
         cmd_parts += ["-p", shlex.quote(prompt)]
         return " ".join(cmd_parts)
+
+    def _make_adapter(self):
+        from godel.agents._adapters import CopilotAdapter
+        return CopilotAdapter()
 
     def _parse_output(self, stdout: str) -> tuple[str, str | None]:
         """Parse copilot's JSONL event stream.
