@@ -2,6 +2,28 @@
 
 <!-- version list -->
 
+## v1.2.2 (2026-04-13)
+
+### Bug Fixes
+
+- **agents**: Emit FAILED event on CancelledError in agent.call
+  ([`389194a`](https://github.com/atscub/godel-py/commit/389194a0ba582d2861fb1d3263238838695e8c2a))
+
+- **agents**: Narrow cancel catch scope and guard log-write failures
+  ([`54770a1`](https://github.com/atscub/godel-py/commit/54770a15da17cff378e05ab1cf3bacaea9045ed8))
+
+### Documentation
+
+- Align redactor signature with source, qualify GODEL_NO_CAPTURE, add planned ops (godel-py-5pl.14)
+  ([`fec0618`](https://github.com/atscub/godel-py/commit/fec061844fd9ceb0d2fbde3beb2eea1e9c1ecb19))
+
+- Rescope observability pages to master-today behavior (godel-py-5pl.14)
+  ([`34c7a97`](https://github.com/atscub/godel-py/commit/34c7a978b798a63c468b2648d4b40d5493985677))
+
+- Transcript format, redaction, and stdout-capture guides (godel-py-5pl.14)
+  ([`a9df48c`](https://github.com/atscub/godel-py/commit/a9df48c96b73ee87aacd8cab6b772457c08f6257))
+
+
 ## v1.2.1 (2026-04-13)
 
 ### Bug Fixes
