@@ -21,11 +21,8 @@ from godel._exceptions import (
     HumanTimeout,
     NonDeterministicEscape,
     RewindUnsafe,
-<<<<<<< HEAD
     GodelWatchNotInstalledError,
-=======
     ConfigError,
->>>>>>> worktree-agent-aac338f1
 )
 from godel._pause import check_pause_request, write_pause_request, clear_pause_request, pause
 from godel._rewind import rewind
@@ -61,11 +58,8 @@ __all__ = [
     "HumanTimeout",
     "NonDeterministicEscape",
     "RewindUnsafe",
-<<<<<<< HEAD
     "GodelWatchNotInstalledError",
-=======
     "ConfigError",
->>>>>>> worktree-agent-aac338f1
     "PauseSignal",
     "check_pause_request",
     "write_pause_request",

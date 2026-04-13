@@ -309,14 +309,15 @@ class NonDeterministicEscape(GodelError):
         self.operation = operation
 
 
-<<<<<<< HEAD
 class GodelWatchNotInstalledError(ImportError):
     """Raised when ``godel --watch`` is used without the ``watch`` extra.
 
     Install the missing dependency with::
 
         pip install 'godel[watch]'
-=======
+    """
+
+
 class ConfigError(Exception):
     """Raised when a decorator is configured with an invalid combination of options.
 
@@ -337,7 +338,6 @@ class ConfigError(Exception):
       cannot fire at decoration time because the step function and the
       enclosing ``parallel()`` call are independently defined; the relationship
       only becomes visible when the coroutines are handed to ``parallel()``.
->>>>>>> worktree-agent-aac338f1
     """
 
 
