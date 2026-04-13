@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "server",
+  "dolt_database": "godel_py",
+  "project_id": "55140179-01e9-4da8-8c41-465d343aba8a"
+}
