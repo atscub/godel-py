@@ -194,8 +194,14 @@ def test_sentinel_last_seq_matches_last_real_event(tmp_path):
     )
 
 
-def test_sentinel_seq_not_shared_with_next_event(tmp_path):
-    """The event written immediately after rotation must NOT share seq with sentinel."""
+def test_sentinel_has_no_seq_field(tmp_path):
+    """Sentinel events must carry NO 'seq' field (reader contract: godel-py-vaz fix).
+
+    Before the fix, sentinel.seq == self._seq which had already been
+    pre-incremented for the triggering event, causing it to collide with the
+    first real event written into the next file.  The fix drops 'seq' from
+    sentinels entirely; readers must use 'last_seq' for the file boundary.
+    """
     run_dir = tmp_path / "runC1b"
     tw = TranscriptWriter(run_dir, run_id="rC1b", max_bytes=300)
     for i in range(20):
@@ -203,14 +209,58 @@ def test_sentinel_seq_not_shared_with_next_event(tmp_path):
     tw.close()
 
     all_lines = _all_lines_in_order(run_dir)
-    # Collect all event seqs (including sentinels which carry an informational seq)
-    # and verify no two real events share a seq
-    real_seqs = [
-        ln["event"]["seq"]
+    sentinels = [
+        ln["event"]
         for ln in all_lines
-        if "event" in ln and ln["event"]["op"] != "rotate"
+        if "event" in ln and ln["event"].get("op") == "rotate"
     ]
-    assert len(real_seqs) == len(set(real_seqs)), "Duplicate seq values among real events"
+    assert sentinels, "Expected at least one sentinel (rotation) event"
+    for s in sentinels:
+        assert "seq" not in s, (
+            f"Sentinel must NOT carry a 'seq' field, but got: {s!r}"
+        )
+
+
+def test_sentinel_seq_not_shared_with_next_file_first_event(tmp_path):
+    """The first real event in each new file must not collide with the preceding sentinel.
+
+    This is the precise collision described in godel-py-vaz: before the fix,
+    sentinel.seq == write_event's pre-incremented self._seq, which was then
+    also assigned to the event in the new file.  We verify the invariant by
+    asserting that every real event's seq is unique across the entire run.
+    """
+    run_dir = tmp_path / "runC1c"
+    tw = TranscriptWriter(run_dir, run_id="rC1c", max_bytes=300)
+    for i in range(20):
+        tw.write_event("ev", i=i)
+    tw.close()
+
+    files_in_order = _collect_all_files_in_order(run_dir)
+    # For each pair of adjacent files: verify the sentinel's last_seq + 1 equals
+    # the first real event's seq in the next file.  This confirms no gap or overlap.
+    for idx in range(len(files_in_order) - 1):
+        outgoing_lines = _read_jsonl(files_in_order[idx])
+        incoming_lines = _read_jsonl(files_in_order[idx + 1])
+
+        sentinel = outgoing_lines[-1]["event"]
+        assert sentinel["op"] == "rotate", (
+            f"Expected last line of {files_in_order[idx]} to be a sentinel"
+        )
+        assert "seq" not in sentinel, (
+            f"Sentinel in {files_in_order[idx]} must not have 'seq'; got {sentinel!r}"
+        )
+
+        # First real event in the next file (skip header)
+        first_real = next(
+            ln["event"]
+            for ln in incoming_lines
+            if "event" in ln and ln["event"].get("op") != "rotate"
+        )
+        expected_first_seq = sentinel["last_seq"] + 1
+        assert first_real["seq"] == expected_first_seq, (
+            f"First event in {files_in_order[idx + 1]} has seq={first_real['seq']}, "
+            f"expected {expected_first_seq} (sentinel.last_seq={sentinel['last_seq']})"
+        )
 
 
 # ---------------------------------------------------------------------------

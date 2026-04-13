@@ -18,11 +18,16 @@ Every subsequent line is an event:
 seq is strictly monotonic starting at 1 and never resets across rotations.
 
 Rotation is triggered when (current file size + encoded line) >= max_bytes:
-  1. A sentinel event  {"event": {..., "op": "rotate", "last_seq": N,
-                        "prev": "transcript.jsonl.<k+1>"}} is appended as
-     the LAST line of the outgoing file (current → .k).
+  1. A sentinel event  {"event": {"op": "rotate", "last_seq": N,
+                        "prev": "transcript.jsonl.<k+1>", ...}} is appended
+     as the LAST line of the outgoing file (current → .k).
      "last_seq" is the seq of the last real event written to this file.
      "prev" points to the next-older file in the chain.
+     IMPORTANT: sentinel events carry NO "seq" field.  Including self._seq
+     (which has already been pre-incremented for the triggering event) would
+     collide with the first real event written to the next file.  Readers
+     must treat the absence of "seq" on a rotate-op event as intentional;
+     use "last_seq" instead to locate the file boundary.
   2. flush() + os.fsync() ensures the sentinel is durable.
   3. Existing .N files are shifted to .N+1; current is renamed to .1.
   4. A fresh transcript.jsonl is opened with a new header (same run_id, same
@@ -251,6 +256,8 @@ class TranscriptWriter:
           1. Determine how many suffixed files already exist (highest = n-1).
              The current file will become .1; existing .k → .(k+1).
           2. Write sentinel as the LAST line of the outgoing file.
+             sentinel has NO "seq" field (avoids collision with the first real
+             event seq in the new file — see module docstring for rationale).
              sentinel.last_seq = seq of the last real event in this file.
              sentinel.prev     = the name the next-older file will have AFTER
                                  the rename cascade (i.e. "transcript.jsonl.2"
@@ -281,9 +288,16 @@ class TranscriptWriter:
         prev_name = f"{_FILENAME}.{2}" if n > 1 else None
 
         # Write sentinel as LAST line.
+        # NOTE: sentinels intentionally carry NO "seq" field.  self._seq has
+        # already been pre-incremented by write_event() for the triggering event
+        # and will be assigned to the first real event in the new file — so
+        # including it here would create a seq collision visible to any reader
+        # that iterates all lines including sentinels.  "last_seq" is the sole
+        # authoritative seq reference on a sentinel (= seq of the last real
+        # event durably written to this file).  Readers MUST NOT expect a "seq"
+        # key on rotate-op events; its absence is part of the reader contract.
         sentinel_body: dict[str, object] = {
             "ts": _now_iso(),
-            "seq": self._seq,       # informational: next seq (not yet written)
             "last_seq": self._last_written_seq,  # accurate: last durable event
             "op": "rotate",
             "step_path": [],
