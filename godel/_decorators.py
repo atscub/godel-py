@@ -184,6 +184,20 @@ def workflow(
 
             source_file = getattr(fn, '_source_file', '') or getattr(wrapper, '_source_file', '')
 
+            # Create a TranscriptWriter for advisory streaming events when
+            # stream_agents=True.  We place the transcript in a run-specific
+            # subdirectory (runs/<run_id>/) so it is co-located with and
+            # trivially correlated to the audit log by run_id.
+            # The writer is closed in the finally block below.
+            transcript = None
+            if stream_agents:
+                import os as _os
+                from godel._transcript import TranscriptWriter
+                _transcript_dir = _os.path.join(
+                    str(event_log._file_path.parent), run_id
+                )
+                transcript = TranscriptWriter(_transcript_dir, run_id=run_id)
+
             max_rewinds = 100
             rewind_count = 0
             result = None
@@ -197,6 +211,8 @@ def workflow(
                         replay_walker=replay_walker,
                         source_file=source_file,
                         _local_replay_suppress=event_log._replay_suppress,
+                        stream_agents=stream_agents,
+                        transcript=transcript,
                     )
                     token = _current_workflow.set(ctx)
 
@@ -309,6 +325,8 @@ def workflow(
                 wrapper._last_run_id = run_id
                 event_log._replay_suppress = False
                 event_log.close()
+                if transcript is not None:
+                    transcript.close()
                 try:
                     from godel._pause import clear_pause_request
                     clear_pause_request(run_id)

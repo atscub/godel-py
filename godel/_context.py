@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from godel._event_log import EventLog
     from godel._replay import ReplayWalker
+    from godel._transcript import TranscriptWriter
 
 
 @dataclass
@@ -19,6 +20,10 @@ class WorkflowContext:
     replay_walker: "ReplayWalker | None" = None
     source_file: str = ""
     _event_id_stack: list[str] = field(default_factory=list)
+    # Observability: whether agent stdout is streamed to the transcript.
+    stream_agents: bool = False
+    # Advisory transcript writer (None when stream_agents is False or outside @workflow).
+    transcript: "TranscriptWriter | None" = None
     # Ordered list of event_ids for every @step that reached FINISHED.
     # Populated by the @step decorator; used by last_step_event_id().
     # NOTE (WARN-2): when steps run inside parallel(), branches append to this

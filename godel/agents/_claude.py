@@ -40,8 +40,13 @@ class _ClaudeCodeAgent(_BaseAgent):
         *,
         tools: list[str] | None,
         session_id: str | None,
+        streaming: bool = False,
     ) -> str:
-        cmd_parts = ["claude", "--output-format", "json"]
+        # Use stream-json when streaming is active so each event arrives as a
+        # separate JSONL line that the adapter can classify.  Fall back to the
+        # regular json format otherwise (preserves pre-change output shape).
+        output_format = "stream-json" if streaming else "json"
+        cmd_parts = ["claude", "--output-format", output_format]
         if self._skip_permissions:
             cmd_parts.append("--dangerously-skip-permissions")
         if tools == []:
@@ -55,11 +60,32 @@ class _ClaudeCodeAgent(_BaseAgent):
         return " ".join(cmd_parts)
 
     def _parse_output(self, stdout: str) -> tuple[str, str | None]:
+        # Handle both regular json (single object) and stream-json (JSONL).
+        # For stream-json, we extract "result" text from the final "result" event
+        # and the session_id from that same event.
+        lines = [l.strip() for l in stdout.strip().splitlines() if l.strip()]
+        if not lines:
+            return stdout.strip(), None
+        # Try multi-line (stream-json): look for a terminating "result" event.
+        if len(lines) > 1:
+            for line in reversed(lines):
+                try:
+                    data = json.loads(line)
+                    if isinstance(data, dict) and data.get("type") == "result":
+                        return data.get("result", ""), data.get("session_id")
+                except json.JSONDecodeError:
+                    continue
+            # No result event found — fall through to single-object attempt.
+        # Try single-object json (non-streaming mode).
         try:
             data = json.loads(stdout)
             return data.get("result", stdout), data.get("session_id")
         except json.JSONDecodeError:
             return stdout.strip(), None
+
+    def _make_adapter(self):
+        from godel.agents._adapters import ClaudeAdapter
+        return ClaudeAdapter()
 
 
 def claude_code(

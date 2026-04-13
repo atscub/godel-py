@@ -20,16 +20,75 @@ Subclasses override the small pieces that actually vary per CLI:
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import re
 import sys
-from typing import Type, TypeVar, overload
+from typing import TYPE_CHECKING, Type, TypeVar, overload
 
 from pydantic import BaseModel, ValidationError
 
 from godel._decorators import WorkflowFail
 
+if TYPE_CHECKING:
+    from godel._transcript import TranscriptWriter
+    from godel.agents._adapters import ClaudeAdapter, CopilotAdapter
+
 T = TypeVar("T", bound=BaseModel)
+
+
+def stream_into_transcript(
+    stdout_bytes: bytes,
+    transcript: "TranscriptWriter",
+    step_path: tuple,
+    stream_path: list,
+    adapter: "ClaudeAdapter | CopilotAdapter",
+) -> None:
+    """Feed *stdout_bytes* through the tolerant parser and emit events to *transcript*.
+
+    Each successfully parsed JSON object is passed to *adapter*.map().  If the
+    adapter returns a ``(op, extra)`` tuple, a transcript event is written.
+    If it returns ``None``, the parsed item is silently skipped (metadata-only).
+
+    ``Raw`` items (malformed / oversized lines) are emitted as ``"agent.raw"``
+    events unconditionally so that vendor drift is observable without crashing.
+
+    Parameters
+    ----------
+    stdout_bytes:
+        The raw subprocess stdout captured during an agent call, as bytes.
+    transcript:
+        The open :class:`~godel._transcript.TranscriptWriter` to write events to.
+    step_path:
+        The step path at the time of the agent call (for event correlation).
+    stream_path:
+        The stream path stamped on the ``agent.call`` event (for correlation).
+    adapter:
+        A vendor-specific adapter instance with a ``map(data) -> (op, extra) | None``
+        method.
+    """
+    from godel.agents._stream_parser import Parsed, Raw, iter_parsed
+
+    reader = io.BytesIO(stdout_bytes)
+    for item in iter_parsed(reader):
+        if isinstance(item, Parsed):
+            result = adapter.map(item.data)
+            if result is not None:
+                op, extra = result
+                transcript.write_event(
+                    op,
+                    step_path=step_path,
+                    stream_path=stream_path,
+                    **extra,
+                )
+        elif isinstance(item, Raw):
+            transcript.write_event(
+                "agent.raw",
+                step_path=step_path,
+                stream_path=stream_path,
+                text=item.text,
+                reason=item.reason,
+            )
 
 
 class SchemaValidationFailure(WorkflowFail):
@@ -217,11 +276,35 @@ class _BaseAgent:
 
         When ``persist_session`` is True, the session id from the response
         (if any) is stored on the instance so the next call can resume it.
+        When the active workflow has ``stream_agents=True``, the raw stdout
+        bytes are fed through the tolerant parser and the vendor adapter so
+        that ``agent.thought`` / ``agent.tool_call`` / ``agent.tool_result``
+        events are written to the workflow transcript before returning.
         """
+        from godel._context import _current_workflow, _current_stream_path
+
+        ctx = _current_workflow.get()
+        streaming = ctx is not None and ctx.stream_agents and ctx.transcript is not None
+
         session_id = self._session_id if persist_session else None
-        cmd = self._build_command(prompt, model_id, tools=tools, session_id=session_id)
+        cmd = self._build_command(
+            prompt, model_id, tools=tools, session_id=session_id,
+            streaming=streaming,
+        )
         run = sys.modules[type(self).__module__].run
         result = await run(cmd, cwd=self._cwd)
+
+        if streaming:
+            step_path = tuple(ctx.step_stack) if ctx else ()
+            stream_path = _current_stream_path.get()
+            stream_into_transcript(
+                result.stdout.encode("utf-8", errors="replace"),
+                ctx.transcript,
+                step_path=step_path,
+                stream_path=list(stream_path),
+                adapter=self._make_adapter(),
+            )
+
         text, new_session_id = self._parse_output(result.stdout)
         if persist_session and new_session_id:
             self._session_id = new_session_id
@@ -234,6 +317,7 @@ class _BaseAgent:
         *,
         tools: list[str] | None,
         session_id: str | None,
+        streaming: bool = False,
     ) -> str:
         """Build the shell command for one CLI invocation.
 
@@ -243,6 +327,18 @@ class _BaseAgent:
 
         ``session_id`` is the id of an existing session to resume, or
         ``None`` to start a fresh session.
+
+        ``streaming`` is ``True`` when the caller wants granular event
+        streaming; subclasses may append CLI flags (e.g. Claude's
+        ``--output-format stream-json``) when this is set.
+        """
+        raise NotImplementedError
+
+    def _make_adapter(self):
+        """Return the vendor-specific adapter instance for this agent.
+
+        Subclasses must override this to return an instance of their
+        corresponding adapter (e.g. ``ClaudeAdapter`` or ``CopilotAdapter``).
         """
         raise NotImplementedError
 
