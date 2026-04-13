@@ -254,3 +254,105 @@ def test_step_with_options_still_runs_in_workflow():
         return await add(10, 20)
 
     assert asyncio.run(wf()) == 30
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for adversarial-review pass 1
+# ---------------------------------------------------------------------------
+
+
+def test_step_preserves_iscoroutinefunction():
+    """Regression (C1 / W1): @step-decorated functions must still register as
+    coroutine functions so that asyncio / @workflow stacking work correctly.
+    """
+
+    @step
+    async def plain_step():
+        return 1
+
+    @step(capture_stdout=False)
+    async def parameterised_step():
+        return 2
+
+    assert asyncio.iscoroutinefunction(plain_step) is True
+    assert asyncio.iscoroutinefunction(parameterised_step) is True
+
+
+def test_workflow_on_step_stacking():
+    """Regression (C1 / W3): @workflow @step stacking must not raise TypeError.
+
+    Before the C1 fix, @workflow's async-function check rejected the
+    @step-decorated callable because ``step_caller`` was a plain sync function
+    that lost the coroutine-function sentinel.
+    """
+
+    @workflow
+    @step
+    async def stacked():
+        return 42
+
+    # The stacked callable is both a step and a workflow; calling it should
+    # execute the body and return the result without TypeError at decoration.
+    assert asyncio.run(stacked()) == 42
+
+
+def test_redact_zero_arg_callable_rejected():
+    """Regression (C3 / W2): redactors with zero required args must be rejected."""
+    with pytest.raises(TypeError, match=r"redact\[0\].*positional"):
+
+        @workflow(redact=[lambda: "x"])
+        async def wf():
+            return 1
+
+
+def test_redact_two_arg_callable_rejected():
+    """Regression (C3 / W2): redactors with two required args must be rejected."""
+    with pytest.raises(TypeError, match=r"redact\[0\].*positional"):
+
+        @workflow(redact=[lambda a, b: a + b])
+        async def wf():
+            return 1
+
+
+def test_redact_default_arg_counts_as_optional():
+    """A redactor with (s, extra='x') has one required positional arg; accept it."""
+
+    @workflow(redact=[lambda s, extra="y": s])
+    async def wf():
+        return 1
+
+    assert len(wf._workflow_options["redact"]) == 1
+
+
+def test_redact_variadic_callable_accepted():
+    """A redactor defined as ``lambda *a: ...`` is acceptable (generic shim)."""
+
+    @workflow(redact=[lambda *a: a[0] if a else ""])
+    async def wf():
+        return 1
+
+    assert len(wf._workflow_options["redact"]) == 1
+
+
+def test_redact_builtin_callable_accepted():
+    """A C-implemented callable without an inspectable signature is not rejected.
+
+    Some built-ins raise ValueError from inspect.signature; the validator must
+    skip the arity check in that case rather than reject outright.
+    """
+
+    @workflow(redact=[str])
+    async def wf():
+        return 1
+
+    assert wf._workflow_options["redact"] == [str]
+
+
+def test_redact_wrong_arity_at_index_1():
+    """A valid redactor followed by a wrong-arity one must still be rejected,
+    and the error message must point at the offending index."""
+    with pytest.raises(TypeError, match=r"redact\[1\].*positional"):
+
+        @workflow(redact=[lambda s: s, lambda: "x"])
+        async def wf():
+            return 1

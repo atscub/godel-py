@@ -47,7 +47,10 @@ class _StepCoroutine:
     def throw(self, *args):
         return self._coro.throw(*args)
 
-    # Allow asyncio.iscoroutine() checks to pass through
+    # Support PEP 585-style generic subscripting (e.g. _StepCoroutine[int])
+    # purely for type-hint ergonomics; has no effect on iscoroutine() checks
+    # (those are satisfied by the wrapped coroutine's own behaviour when used
+    # via __await__).
     def __class_getitem__(cls, item):
         return cls
 
@@ -105,12 +108,50 @@ def workflow(
         TypeError: If ``redact`` contains a non-callable entry.
     """
     # Validate redact entries at decoration time (not runtime).
+    # Each redactor must be callable AND accept exactly one positional
+    # argument (the string to be redacted).  We also accept variadic
+    # callables (e.g. ``lambda *a: ...``) so plugin authors can share one
+    # generic shim across multiple redactor slots.  Arity is checked via
+    # ``inspect.signature`` so wrong-signature callables fail at decoration
+    # time rather than silently passing validation and blowing up later
+    # when the first event payload is redacted.
     if redact is not None:
         for i, entry in enumerate(redact):
             if not callable(entry):
                 raise TypeError(
                     f"@workflow redact[{i}] must be callable, got {type(entry).__name__!r}"
                 )
+            try:
+                sig = inspect.signature(entry)
+            except (TypeError, ValueError):
+                # Built-ins and some C-implemented callables don't expose a
+                # signature; skip arity check rather than reject outright.
+                continue
+            params = list(sig.parameters.values())
+            # Count the positional-capable parameters (POSITIONAL_ONLY,
+            # POSITIONAL_OR_KEYWORD) that have no default, plus VAR_POSITIONAL.
+            required_positional = [
+                p for p in params
+                if p.kind in (
+                    inspect.Parameter.POSITIONAL_ONLY,
+                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                )
+                and p.default is inspect.Parameter.empty
+            ]
+            has_var_positional = any(
+                p.kind is inspect.Parameter.VAR_POSITIONAL for p in params
+            )
+            # Acceptable arities: exactly one required positional, OR
+            # zero required positionals with *args, OR *args alone.
+            # Anything else (0-arg, 2-arg, required-kwarg-only) is rejected.
+            if has_var_positional and len(required_positional) <= 1:
+                continue
+            if len(required_positional) == 1:
+                continue
+            raise TypeError(
+                f"@workflow redact[{i}] must accept exactly one positional "
+                f"argument (the string to redact), got signature {sig}"
+            )
 
     def _make_workflow(fn):
         if not asyncio.iscoroutinefunction(fn):
@@ -523,6 +564,14 @@ def step(fn=None, *, name=None, idempotent=False, capture_stdout: bool = False):
         @functools.wraps(fn)
         def step_caller(*args, **kwargs):
             return _StepCoroutine(wrapper(*args, **kwargs), _opts)
+
+        # Preserve coroutine-function identity so that
+        # ``asyncio.iscoroutinefunction(step_fn)`` continues to return ``True``
+        # after decoration.  Without this, ``@workflow @step`` stacking breaks
+        # because @workflow's async-function check raises TypeError.
+        # asyncio.coroutines._is_coroutine is the public-ish sentinel asyncio
+        # uses to recognise coroutine functions (see CPython asyncio/coroutines.py).
+        step_caller._is_coroutine = asyncio.coroutines._is_coroutine
 
         step_caller._is_step = True
         step_caller._idempotent = idempotent
