@@ -106,7 +106,7 @@ class _BaseAgent:
             try:
                 async with self._lock:
                     result = await self._execute(prompt, schema=schema)
-            except Exception as exc:
+            except BaseException as exc:
                 if event:
                     import traceback as _tb
                     tb_frames = _tb.extract_tb(exc.__traceback__)
