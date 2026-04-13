@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v1.2.1 (2026-04-13)
+
+### Bug Fixes
+
+- **transcript**: Drop seq field from rotation sentinels to prevent seq collision
+  ([`45c4d03`](https://github.com/atscub/godel-py/commit/45c4d03538b34e28664fea67e3d263323fc13b9c))
+
+- **transcript**: Suppress header-only rotation; document reader contract
+  ([`e221d09`](https://github.com/atscub/godel-py/commit/e221d0995bfe917070150c382bd279f968bace48))
+
+
 ## v1.2.0 (2026-04-13)
 
 ### Bug Fixes
