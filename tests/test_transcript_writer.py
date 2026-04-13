@@ -264,6 +264,75 @@ def test_sentinel_seq_not_shared_with_next_file_first_event(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# vaz review W2: do NOT rotate a file that has no real events yet.
+# Prevents sentinel with last_seq=0 (misleading file boundary).
+# ---------------------------------------------------------------------------
+
+
+def test_no_rotation_on_header_only_file(tmp_path):
+    """Pathologically small max_bytes must not produce a header-only rotated file.
+
+    If max_bytes is smaller than even the header+first event, the writer must
+    still produce a file containing at least one real event before rotating.
+    No sentinel with last_seq=0 should ever appear on disk.
+    """
+    run_dir = tmp_path / "runW2vaz"
+    # max_bytes=10 is smaller than any real encoded event line.
+    tw = TranscriptWriter(run_dir, run_id="rW2vaz", max_bytes=10)
+    for i in range(5):
+        tw.write_event("ev", i=i)
+    tw.close()
+
+    all_lines = _all_lines_in_order(run_dir)
+    sentinels = [
+        ln["event"]
+        for ln in all_lines
+        if "event" in ln and ln["event"].get("op") == "rotate"
+    ]
+    for s in sentinels:
+        assert s["last_seq"] >= 1, (
+            f"Sentinel with last_seq={s['last_seq']} found — header-only rotation leaked: {s!r}"
+        )
+
+    # Every rotated file (i.e. all but possibly the final active file if empty)
+    # must contain at least one real event.
+    for path in _collect_all_files_in_order(run_dir):
+        lines = _read_jsonl(path)
+        real_events = [
+            ln for ln in lines
+            if "event" in ln and ln["event"].get("op") != "rotate"
+        ]
+        has_sentinel = any(
+            "event" in ln and ln["event"].get("op") == "rotate" for ln in lines
+        )
+        if has_sentinel:
+            assert real_events, (
+                f"{path} rotated out with no real events (header-only file leaked)"
+            )
+
+
+# ---------------------------------------------------------------------------
+# vaz review W3: headers must not carry a 'seq' field either (contract parity).
+# ---------------------------------------------------------------------------
+
+
+def test_header_has_no_seq_field(tmp_path):
+    """Headers must never carry a 'seq' field; reader contract parity with sentinels."""
+    run_dir = tmp_path / "runHdrSeq"
+    tw = TranscriptWriter(run_dir, run_id="rHdrSeq", max_bytes=300)
+    for i in range(20):
+        tw.write_event("ev", i=i)
+    tw.close()
+
+    for path in _collect_all_files_in_order(run_dir):
+        lines = _read_jsonl(path)
+        assert "header" in lines[0]
+        assert "seq" not in lines[0]["header"], (
+            f"Header in {path} must not carry 'seq': {lines[0]['header']!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # W3 FIX: sentinel.prev points to the correct next-older file
 # ---------------------------------------------------------------------------
 

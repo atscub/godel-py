@@ -37,6 +37,18 @@ NOTE: Crash recovery (reopening a pre-existing transcript.jsonl from a prior
 crashed run) is NOT supported in v1.  Callers must use a fresh run_dir per
 run; reusing a run_dir after a crash will produce duplicate seq numbers.
 
+Reader contract (authoritative — mirror in user-facing docs when transcript
+reader docs ship; see godel-py-5pl.14 / follow-up ticket):
+  * Line 1 of every file: {"header": {...}} — never has an "event" key and
+    never carries a "seq" field.
+  * Every other line: {"event": {...}} — real events have a "seq" field
+    (strictly monotonic across the entire run, never reset across rotations).
+  * Rotation sentinels are events with "op": "rotate".  They have NO "seq"
+    field.  Use "last_seq" for the file-boundary anchor.  Readers that treat
+    every event row as having a "seq" MUST first filter out rotate-op rows.
+  * "last_seq" on a sentinel is always >= 1 — the writer will not rotate a
+    file that has no real events (avoids misleading last_seq=0 sentinels).
+
 Schema versioning: v follows semver on the major component.  A reader may raise
 TranscriptVersionError if the major version it finds exceeds the highest major
 it understands.  Unknown minor versions are silently accepted.
@@ -121,6 +133,11 @@ class TranscriptWriter:
         self._last_written_seq = 0
         self._file: IO[str] | None = None
         self._file_size = 0
+        # Whether the currently-open file has at least one real (non-sentinel)
+        # event written to it.  Guards against rotating a header-only file,
+        # which would emit a sentinel with last_seq=0 (misleading).  Reset in
+        # _open_fresh(), set in write_event() after _write_line() succeeds.
+        self._current_file_has_real_event = False
 
         self._open_fresh()
 
@@ -181,6 +198,7 @@ class TranscriptWriter:
                 raise
             self._write_line(line)
             self._last_written_seq = seq
+            self._current_file_has_real_event = True
             return seq
 
     def close(self) -> None:
@@ -212,6 +230,7 @@ class TranscriptWriter:
         path = self._run_dir / _FILENAME
         self._file = open(path, "a", buffering=1, encoding="utf-8")  # noqa: WPS515
         self._file_size = path.stat().st_size
+        self._current_file_has_real_event = False
         if self._file_size == 0:
             self._write_header()
 
@@ -243,9 +262,24 @@ class TranscriptWriter:
                 pass  # e.g. already closed or unsupported on this OS/FS
 
     def _maybe_rotate(self, upcoming_line: str) -> None:
-        """Rotate if writing *upcoming_line* would push the file over max_bytes."""
+        """Rotate if writing *upcoming_line* would push the file over max_bytes.
+
+        Guard: do NOT rotate a file that has no real events yet.  Rotating an
+        empty file (header only) would produce a sentinel with last_seq=0,
+        which is misleading — it suggests a file boundary with no preceding
+        data.  This case is reachable with pathologically small max_bytes or
+        pathologically large single events.  In that case we accept that this
+        one event will push the file over the soft bound; the next write will
+        rotate normally.
+        """
         encoded_size = len(upcoming_line.encode("utf-8")) + 1
         if self._file_size + encoded_size < self._max_bytes:
+            return
+        # Find last real event written to the CURRENT file by checking whether
+        # any real event has been written since the most recent _open_fresh().
+        # We track this via _current_file_has_real_event (set in write_event
+        # after a successful append).
+        if not self._current_file_has_real_event:
             return
         self._rotate()
 
