@@ -309,6 +309,15 @@ class NonDeterministicEscape(GodelError):
         self.operation = operation
 
 
+class GodelWatchNotInstalledError(ImportError):
+    """Raised when ``godel --watch`` is used without the ``watch`` extra.
+
+    Install the missing dependency with::
+
+        pip install 'godel[watch]'
+    """
+
+
 class RewindUnsafe(GodelError):
     """Raised when a rewind operation cannot be performed safely.
 
