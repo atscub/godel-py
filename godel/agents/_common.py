@@ -106,20 +106,35 @@ class _BaseAgent:
             try:
                 async with self._lock:
                     result = await self._execute(prompt, schema=schema)
-            except BaseException as exc:
+            except (Exception, asyncio.CancelledError) as exc:
+                # NOTE: scope is intentionally (Exception, CancelledError) and
+                # NOT BaseException — we deliberately let KeyboardInterrupt
+                # and SystemExit propagate untouched so process-signal teardown
+                # is not polluted by spurious FAILED entries.  CancelledError
+                # is called out explicitly because in Python 3.8+ it is a
+                # BaseException (not an Exception), so a plain `except Exception`
+                # silently left the agent.call event stuck in STARTED.
                 if event:
-                    import traceback as _tb
-                    tb_frames = _tb.extract_tb(exc.__traceback__)
-                    source_loc = ""
-                    if tb_frames:
-                        last = tb_frames[-1]
-                        source_loc = f"{last.filename}:{last.lineno}"
-                    ctx.event_log.emit_failed(
-                        event.event_id,
-                        str(exc),
-                        error_type=type(exc).__name__,
-                        source_location=source_loc,
-                    )
+                    try:
+                        import traceback as _tb
+                        tb_frames = _tb.extract_tb(exc.__traceback__)
+                        source_loc = ""
+                        if tb_frames:
+                            last = tb_frames[-1]
+                            source_loc = f"{last.filename}:{last.lineno}"
+                        ctx.event_log.emit_failed(
+                            event.event_id,
+                            str(exc),
+                            error_type=type(exc).__name__,
+                            source_location=source_loc,
+                        )
+                    except Exception:
+                        # Logging must never swallow the original failure.
+                        # If emit_failed itself raises (closed file, disk full,
+                        # serialisation error, etc.) we drop the logging error
+                        # and fall through to re-raise the original exception
+                        # below, so callers always see the real cause.
+                        pass
                 raise
 
             if event:
