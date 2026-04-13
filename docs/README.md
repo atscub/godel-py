@@ -20,6 +20,20 @@ intervention.
 7. [Agent Skills](skills/README.md) — `godel-runner` and `godel-engineer` for Claude Code
 8. [Strategy notes](strategy/README.md) — internal positioning, business model, roadmap vision
 
+## Observability
+
+Godel writes a live observability stream (the **transcript**) alongside the authoritative
+audit log. Three focused guides cover the contracts and configuration:
+
+- [Transcript Format](transcript-format.md) — JSONL v1 wire contract: header, event field
+  table, `stream_path` semantics, rotation sentinel, `.N` chain, semver policy, and an
+  annotated example.
+- [Redaction](redaction.md) — registering redactors via `@workflow(redact=[...])`,
+  composition order, `redactor_error` event semantics, and what redaction does not cover.
+- [Stdout Capture](stdout-capture.md) — per-step `capture_stdout=True`, the pipe-per-step
+  model, `parallel()` incompatibility, the `GODEL_NO_CAPTURE=1` escape hatch, and
+  interactive-debugger caveats.
+
 ## Why Godel?
 
 Most agent frameworks bury orchestration logic inside an LLM. That makes behavior hard to
