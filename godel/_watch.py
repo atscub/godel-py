@@ -17,8 +17,3 @@ except ImportError as _e:
     raise GodelWatchNotInstalledError(
         "godel --watch requires 'rich'. Install with: pip install 'godel[watch]'"
     ) from _e
-
-
-def _check_watch_available() -> None:
-    """No-op when called after a successful import — used by the CLI to
-    trigger the import-time guard in a controlled location."""
