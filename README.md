@@ -37,7 +37,7 @@ def ci():
 godel run ci.py
 ```
 
-See `.agents/CLI.md` for the full CLI reference and `docs/` for user guides, API reference, and examples.
+See [docs/why-godel.md](docs/why-godel.md) for the thesis, `.agents/CLI.md` for the full CLI reference, and `docs/` for user guides, API reference, and examples.
 
 ## Development
 
