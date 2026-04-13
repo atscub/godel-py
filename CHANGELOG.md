@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.2.0 (2026-04-13)
+
+### Bug Fixes
+
+- **agents**: Drain oversized lines correctly in stream parser (godel-py-5pl.3)
+  ([`b559aef`](https://github.com/atscub/godel-py/commit/b559aeffa7e46eaed92a6c32299a91282a6663e5))
+
+### Features
+
+- **agents**: Add tolerant streaming JSONL parser (godel-py-5pl.3)
+  ([`a278eb1`](https://github.com/atscub/godel-py/commit/a278eb154417321d7bf6aaff344cd3c7d9b59698))
+
+
 ## v1.1.0 (2026-04-13)
 
 ### Bug Fixes
