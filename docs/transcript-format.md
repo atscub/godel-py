@@ -1,12 +1,20 @@
 # Transcript Format (v1)
 
 The **transcript** is Godel's advisory observability stream — a JSONL file written alongside
-the audit log that external tools (dashboards, log shippers, debuggers) can tail in real
-time without needing to parse the internal audit-log schema.
+the authoritative audit log that external tools (dashboards, log shippers, debuggers) can
+tail in real time.
 
 > **Advisory vs. authoritative.** The transcript is best-effort. The audit log
-> (`runs/<run_id>.jsonl`) is the authoritative record used by `godel resume`, `godel rewind`,
-> and all replay machinery. Do not build correctness-critical logic on the transcript alone.
+> (`runs/<run_id>.jsonl`) is the authoritative record used by `godel resume`,
+> `godel rewind`, and all replay machinery. Do not build correctness-critical logic on the
+> transcript alone.
+
+> **Status: v1 wire format is frozen; runtime wiring is landing incrementally.**
+> `godel/_transcript.TranscriptWriter` implements the format described here. Wiring it
+> into workflow execution (so `@workflow`/`@step`/`agent.call` events flow through the
+> transcript) is tracked under the live-observability epic (`godel-py-5pl`, subtasks
+> `5pl.2`–`5pl.7`). Until those land, the writer is exercised directly by the test suite
+> and downstream reader tickets.
 
 ---
 
@@ -22,8 +30,8 @@ transcript.jsonl.2      # next-older file
 ```
 
 The chain is ordered: `transcript.jsonl` is newest; `.1` is the previous segment; `.2` is
-older still. Follow the rotation sentinel (see [Rotation](#rotation)) to walk the chain in
-chronological order.
+older still. Follow the rotation sentinel's `prev` field (see [Rotation](#rotation)) to
+walk the chain in chronological order.
 
 ---
 
@@ -32,11 +40,11 @@ chronological order.
 Every file (including rotated segments) begins with a **header** on line 1:
 
 ```json
-{"header": {"v": 1, "run_id": "01HX...", "started_at": "2026-04-13T10:00:00.000000+00:00"}}
+{"header": {"v": 1, "run_id": "01HX7ABCDEF0123456789GHJKM", "started_at": "2026-04-13T10:00:00.000000+00:00"}}
 ```
 
-The top-level key `"header"` is intentionally distinct from the `"event"` key used on every
-subsequent line. A reader can detect the header with a single key-presence check:
+The top-level key `"header"` is intentionally distinct from the `"event"` key used on
+every subsequent line. A reader can detect the header with a single key-presence check:
 
 ```python
 obj = json.loads(line)
@@ -48,11 +56,11 @@ elif "event" in obj:
 
 ### Header fields
 
-| Field        | Type   | Description                                      |
-|--------------|--------|--------------------------------------------------|
-| `v`          | int    | Format major version. Currently `1`.             |
-| `run_id`     | string | UUID identifying the run. Same across rotations. |
-| `started_at` | string | ISO 8601 UTC timestamp when the file was opened. |
+| Field        | Type   | Description                                                 |
+|--------------|--------|-------------------------------------------------------------|
+| `v`          | int    | Format major version. Currently `1`.                        |
+| `run_id`     | string | Identifier for the run. Same across all rotated segments.   |
+| `started_at` | string | ISO 8601 UTC timestamp when this file was opened.           |
 
 ---
 
@@ -61,107 +69,134 @@ elif "event" in obj:
 Every non-header line is an **event**:
 
 ```json
-{"event": {"ts": "2026-04-13T10:00:01.234567+00:00", "seq": 1, "op": "step_start",
-           "step_path": ["fetch", "parse"], "stream_path": ["agent", "claude"], "duration_ms": 42}}
+{"event": {"ts": "2026-04-13T10:00:01.234567+00:00", "seq": 1, "op": "step.enter",
+           "step_path": ["fetch", "parse"],
+           "stream_path": ["01HX7LAUNCH0000000000000001"]}}
 ```
 
 ### Core event fields
 
-| Field         | Type           | Description                                                                                     |
-|---------------|----------------|-------------------------------------------------------------------------------------------------|
-| `ts`          | string         | ISO 8601 UTC timestamp of the event.                                                            |
-| `seq`         | int            | Strictly monotonic sequence number, starting at `1`. Never resets across rotations.            |
-| `op`          | string         | Operation name. See [Operations](#operations).                                                  |
-| `step_path`   | list\[string\] | Hierarchical step address, e.g. `["fetch", "parse"]`. Empty list `[]` for workflow-level ops. |
-| `stream_path` | list\[string\] | Hierarchical stream address. Empty list `[]` for the root stream.                              |
+| Field         | Type            | Description                                                                                            |
+|---------------|-----------------|--------------------------------------------------------------------------------------------------------|
+| `ts`          | string          | ISO 8601 UTC timestamp of the event.                                                                   |
+| `seq`         | int             | Strictly monotonic sequence number on **real** events, starting at `1`. Never resets across rotations. Rotation sentinels do **not** carry `seq` (see below). |
+| `op`          | string          | Operation name. See [Operations](#operations).                                                         |
+| `step_path`   | list\[string\]  | Hierarchical step address, e.g. `["fetch", "parse"]`. Empty list `[]` for workflow-level events.       |
+| `stream_path` | list\[string\]  | Hierarchical stream address — a list of **launch-site ULIDs** stamped at each subprocess/agent launch (see below). Empty list `[]` for the root stream. |
 
 Op-specific fields appear alongside the core fields in the same `"event"` object.
 
 ### `stream_path`
 
-`stream_path` is a **list** of strings that identifies which observability stream an event
-belongs to. A workflow that launches a sub-agent which in turn calls a tool would emit events
-with `stream_path` values like:
+`stream_path` is a **list of ULIDs**, one per nested launch boundary. A ULID is stamped
+by `godel/_run.py` (and by the agent wrappers) at every subprocess / agent launch and
+pushed onto a `ContextVar`, so events emitted under that launch inherit the extended path.
+
+Example: a workflow that launches a Claude agent which shells out to `git`:
 
 ```
-[]                          # root workflow
-["agent", "claude"]         # the Claude agent layer
-["agent", "claude", "tool"] # a tool call inside Claude
+[]                                                                       # root workflow
+["01HX7LAUNCH0000000000000001"]                                          # inside the Claude launch
+["01HX7LAUNCH0000000000000001", "01HX7LAUNCH0000000000000002"]           # git subprocess inside Claude
 ```
 
-The list grows as nested launches are initiated. Readers that care only about a specific
-depth can filter by prefix-matching.
+Readers that care only about a specific depth can filter by list length or by prefix.
 
-> **Why a list, not a scalar?** An earlier design used a scalar `stream_id`. The ticket
-> superseding that design (godel-py-5pl.1) mandated list-typed `stream_path` for
+> **Historical note.** An earlier design used a scalar `stream_id`. Ticket
+> `godel-py-5pl.1` superseded that design and mandated list-typed `stream_path` for
 > hierarchical addressing. Downstream reader tooling is authored against the list shape.
 
 ### Operations
 
-Common `op` values:
+The transcript writer itself is op-agnostic: `TranscriptWriter.write_event(op=..., ...)`
+accepts any string and serialises it verbatim. The op **vocabulary** is defined by the
+emit sites in the rest of the library. The ops currently emitted by the audit log (and
+expected to mirror into the transcript as wiring is completed under `5pl.2`–`5pl.7`) are:
 
-| `op`             | Description                                 |
-|------------------|---------------------------------------------|
-| `step_start`     | A `@step`-decorated function began.         |
-| `step_end`       | A `@step` completed successfully.           |
-| `step_error`     | A `@step` raised an exception.              |
-| `workflow_start` | The `@workflow` began.                      |
-| `workflow_end`   | The `@workflow` completed.                  |
-| `agent_call`     | An agent callable was invoked.              |
-| `agent_response` | An agent callable returned.                 |
-| `redactor_error` | A redactor callable raised. Payload omitted — see [Redaction](redaction.md). |
-| `rotate`         | Rotation sentinel. See [Rotation](#rotation). |
+| `op`                | Emitted by                 | Meaning                                                   |
+|---------------------|----------------------------|-----------------------------------------------------------|
+| `WORKFLOW_STARTED`  | `@workflow` entry          | Workflow invocation began.                                |
+| `step.enter`        | `@step` entry              | Step function began.                                      |
+| `FORK`              | `parallel()`               | Concurrent branches forked.                               |
+| `JOIN`              | `parallel()`               | Concurrent branches joined.                               |
+| `PAUSED`            | `@workflow` pause path     | Workflow paused via `PauseSignal`.                        |
+| `REWIND`            | `godel.rewind()`           | Graph-cut rewind applied.                                 |
+| `agent.call`        | `godel.agents`             | Agent invocation.                                         |
+| `run`               | `godel.run()`              | Audited subprocess invocation.                            |
+| `print`             | `godel.io.print`           | Captured `print()` call.                                  |
+| `input`             | `godel.io.input`           | Captured `input()` call.                                  |
+| `det.now`           | `godel.det.now()`          | Deterministic clock read.                                 |
+| `det.random`        | `godel.det.random()`       | Deterministic RNG draw.                                   |
+| `det.uuid4`         | `godel.det.uuid4()`        | Deterministic UUID draw.                                  |
+| `UNRECOVERABLE`     | `godel.intervention`       | Intervention tooling marked a failure unrecoverable.      |
+| `rotate`            | `TranscriptWriter` itself  | Rotation sentinel (transcript-only; see below).           |
 
 Additional op-specific fields (e.g. `duration_ms`, `error_type`, `exit_code`) may appear
-and MUST be ignored by readers that do not recognise them (minor-version compatibility).
+alongside the core fields and MUST be ignored by readers that do not recognise them
+(minor-version compatibility).
 
 ---
 
 ## Rotation
 
-Rotation fires when the size of the active file plus the encoded upcoming line would reach
-or exceed the configured limit (default: **50 MB**; override with `GODEL_TRANSCRIPT_MAX_BYTES`).
+Rotation fires when the size of the active file plus the encoded upcoming line would
+reach or exceed the configured limit (default: **50 MB**; override with
+`GODEL_TRANSCRIPT_MAX_BYTES`).
+
+### Rotation sentinel
+
+A **rotation sentinel** event is appended as the **last line** of the outgoing file.
+Sentinels intentionally carry **no `seq` field** — see the collision note below.
+
+```json
+{"event": {"ts": "2026-04-13T10:05:00+00:00", "op": "rotate",
+           "step_path": [], "stream_path": [],
+           "last_seq": 46, "prev": "transcript.jsonl.2"}}
+```
+
+| Sentinel field | Description                                                                                                    |
+|----------------|----------------------------------------------------------------------------------------------------------------|
+| `op`           | Always `"rotate"`.                                                                                             |
+| `last_seq`     | The seq of the last **real** (non-sentinel) event written to this segment. **Authoritative** for locating file boundaries by seq. |
+| `prev`         | Filename of the next-older segment after the rename cascade, or `null` if this is the first rotation.          |
+| `step_path`    | Always `[]`.                                                                                                   |
+| `stream_path`  | Always `[]`.                                                                                                   |
+
+> **Why no `seq` on sentinels?** A sentinel written with `seq = self._seq` would share its
+> value with the first real event in the next rotated file (because `_seq` is not
+> incremented until the next real `write_event` call). Readers that consume every line —
+> including sentinels — would see duplicate `seq` values at file boundaries. The fix is
+> to omit `seq` entirely on sentinels; `last_seq` is the sole authoritative seq reference
+> on a rotate-op event. Readers MUST NOT expect a `seq` key on `op="rotate"` events — its
+> absence is part of the reader contract (see `godel-py-vaz`).
 
 ### Rotation protocol
 
-1. A **rotation sentinel** event is appended as the **last line** of the outgoing file:
-
-   ```json
-   {"event": {"ts": "...", "seq": 47, "last_seq": 46, "op": "rotate",
-              "step_path": [], "stream_path": [],
-              "prev": "transcript.jsonl.2"}}
-   ```
-
-   | Sentinel field | Description                                                                 |
-   |----------------|-----------------------------------------------------------------------------|
-   | `seq`          | The next seq that will be assigned (informational).                         |
-   | `last_seq`     | The seq of the last **real** (non-sentinel) event written to this segment.  |
-   | `op`           | Always `"rotate"`.                                                          |
-   | `prev`         | Filename of the next-older segment after the rename cascade, or `null` if this is the first rotation. |
-
-2. The file is flushed and `fsync`-ed before any rename, ensuring the sentinel is durable.
-
-3. Existing suffixed files are shifted: `.N` → `.(N+1)`, ..., `.1` → `.2`.
-
-4. The outgoing file is renamed to `.1`.
-
-5. A fresh `transcript.jsonl` is opened with a new header. The `seq` counter is **not**
+1. Write the sentinel as the final line of the outgoing file.
+2. `flush()` + `os.fsync()` to make the sentinel durable.
+3. Rename cascade: `.N` → `.(N+1)`, ..., `.1` → `.2`.
+4. Rename the outgoing file (current) → `.1`.
+5. Open a fresh `transcript.jsonl` and write a new header. The `seq` counter is **not**
    reset — it continues from where it left off.
+
+If any step after writing the sentinel fails (e.g. `os.rename` raises), the writer is
+left in an unusable state; the next `write_event` call will propagate the original
+exception.
 
 ### Walking the chain
 
-To read a complete run chronologically, walk **backwards** through suffixes by following
-`sentinel.prev`, then reverse the collected segments:
+To read a complete run chronologically:
 
 ```
 transcript.jsonl   ← newest (tail this live)
-  sentinel.prev → "transcript.jsonl.2"   ← segment that preceded .1
-transcript.jsonl.1 ← most-recently rotated
+transcript.jsonl.1 ← most-recently rotated segment
 transcript.jsonl.2 ← older still
+...
 ```
 
-A reader can also stitch segments by `seq`: events are globally ordered by `seq` regardless
-of which file they live in.
+A reader can follow `sentinel.prev` to walk backwards from `.1` through the chain, or
+stitch segments by `last_seq` (every segment's `last_seq` is exactly one less than the
+next-newer segment's first real event `seq`).
 
 ### Crash recovery
 
@@ -175,57 +210,50 @@ numbers. Always use a fresh run directory per run.
 
 `v` in the header follows the **major component of semver**:
 
-- A reader **must** raise `TranscriptVersionError` (or equivalent) if `v` exceeds the
-  highest major version it understands.
-- A reader **must silently accept** unknown minor-version additions (new fields in event
-  objects). Do not reject events whose `op` or extra fields you do not recognise.
+- A reader **must** raise a version error (`godel._transcript.TranscriptVersionError`, or
+  an equivalent for non-Python readers) if `v` exceeds the highest major version it
+  understands.
+- A reader **must silently accept** unknown minor-version additions — new optional fields
+  in event objects, new `op` values, new sentinel fields. Do not reject events whose
+  shape you do not recognise.
 - A major bump happens when the change would break a reader written against the previous
-  major: for example, renaming a required field, changing the type of `seq` from int to
-  string, or removing `step_path`.
-- Additive changes (new optional fields, new `op` values) are minor bumps and do not
-  require a version check.
-
-The Python helper for readers:
-
-```python
-from godel._transcript import TranscriptWriter, TranscriptVersionError
-
-header = json.loads(first_line)["header"]
-TranscriptWriter.check_version(header)  # raises TranscriptVersionError if major too high
-```
+  major: renaming a required field, changing the type of `seq` from int to string,
+  removing `step_path`, etc.
+- Additive changes are minor bumps and do not require a version check.
 
 ---
 
 ## Annotated example
 
-A run with three steps followed by a rotation:
+A run with three events followed by a rotation:
 
 **`transcript.jsonl.1`** (rotated segment):
 
 ```
-{"header": {"v": 1, "run_id": "01HX-ABC", "started_at": "2026-04-13T10:00:00+00:00"}}
-{"event": {"ts": "2026-04-13T10:00:01+00:00", "seq": 1, "op": "workflow_start", "step_path": [], "stream_path": []}}
-{"event": {"ts": "2026-04-13T10:00:02+00:00", "seq": 2, "op": "step_start", "step_path": ["fetch"], "stream_path": []}}
-{"event": {"ts": "2026-04-13T10:00:03+00:00", "seq": 3, "op": "step_end",   "step_path": ["fetch"], "stream_path": [], "duration_ms": 980}}
-{"event": {"ts": "2026-04-13T10:00:03+00:00", "seq": 3, "last_seq": 3, "op": "rotate", "step_path": [], "stream_path": [], "prev": null}}
+{"header": {"v": 1, "run_id": "01HX7ABCDEF0123456789GHJKM", "started_at": "2026-04-13T10:00:00+00:00"}}
+{"event": {"ts": "2026-04-13T10:00:01+00:00", "seq": 1, "op": "WORKFLOW_STARTED", "step_path": [], "stream_path": []}}
+{"event": {"ts": "2026-04-13T10:00:02+00:00", "seq": 2, "op": "step.enter", "step_path": ["fetch"], "stream_path": []}}
+{"event": {"ts": "2026-04-13T10:00:03+00:00", "seq": 3, "op": "agent.call", "step_path": ["fetch"], "stream_path": ["01HX7LAUNCH0000000000000001"]}}
+{"event": {"ts": "2026-04-13T10:00:03+00:00", "op": "rotate", "step_path": [], "stream_path": [], "last_seq": 3, "prev": null}}
 ```
 
 **`transcript.jsonl`** (active):
 
 ```
-{"header": {"v": 1, "run_id": "01HX-ABC", "started_at": "2026-04-13T10:00:03+00:00"}}
-{"event": {"ts": "2026-04-13T10:00:04+00:00", "seq": 4, "op": "step_start", "step_path": ["summarise"], "stream_path": []}}
-{"event": {"ts": "2026-04-13T10:00:05+00:00", "seq": 5, "op": "step_end",   "step_path": ["summarise"], "stream_path": [], "duration_ms": 1200}}
-{"event": {"ts": "2026-04-13T10:00:06+00:00", "seq": 6, "op": "workflow_end", "step_path": [], "stream_path": []}}
+{"header": {"v": 1, "run_id": "01HX7ABCDEF0123456789GHJKM", "started_at": "2026-04-13T10:00:03+00:00"}}
+{"event": {"ts": "2026-04-13T10:00:04+00:00", "seq": 4, "op": "step.enter", "step_path": ["summarise"], "stream_path": []}}
 ```
 
-Note that `seq` is globally monotonic across both files (1 → 3 in `.1`, 4 → 6 in the
-active file).
+Note that `seq` is globally monotonic across real events in both files (1 → 3 in `.1`,
+then 4 onwards in the active file). The sentinel carries `last_seq: 3` and `prev: null`
+(this was the first rotation, so there was no prior `.1` to point to).
 
 ---
 
 ## See also
 
-- [Redaction](redaction.md) — filtering secrets from event payloads before they are written.
-- [Stdout capture](stdout-capture.md) — capturing per-step stdout into the event stream.
+- [Redaction](redaction.md) — filtering events before they are written (status: runtime
+  plumbing in flight, `godel-py-5pl.6`).
+- [Stdout capture](stdout-capture.md) — per-step stdout capture (status: runtime plumbing
+  in flight, `godel-py-5pl.7`).
 - [Concepts](concepts.md) — audit log, workflows, steps.
