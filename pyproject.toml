@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "godel"
+version = "0.1.0"
+description = "Deterministic orchestrator for AI agent workflows"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+authors = [{ name = "atscub" }]
+dependencies = [
+    "pydantic>=2",
+    "click",
+    "python-ulid",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "build", "python-semantic-release"]
+
+[project.scripts]
+godel = "godel.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/atscub/godel-py"
+Spec = "https://github.com/atscub/godel-lang"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.semantic_release]
+version_variables = ["godel/__init__.py:__version__"]
+branch = "master"
+build_command = "python -m build"
+upload_to_vcs_release = true
+upload_to_pypi = false
+commit_message = "chore(release): {version} [skip ci]"
+
+[tool.semantic_release.commit_parser_options]
+allowed_tags = ["feat", "fix", "perf", "refactor", "docs", "chore", "build", "ci", "test", "style"]
+minor_tags = ["feat"]
+patch_tags = ["fix", "perf"]
