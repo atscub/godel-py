@@ -309,6 +309,21 @@ class NonDeterministicEscape(GodelError):
         self.operation = operation
 
 
+class ConfigError(Exception):
+    """Raised when a decorator is configured with an invalid combination of options.
+
+    This is a **registration-time** error — it is raised when the decorated
+    function is defined (at import / module-load time), not when the workflow
+    is executed.
+
+    Examples of invalid configurations:
+
+    * ``@step(capture_stdout=True)`` used inside a ``parallel()`` block —
+      parallel-safe stdout capture is not supported; each branch would need
+      its own pipe.
+    """
+
+
 class RewindUnsafe(GodelError):
     """Raised when a rewind operation cannot be performed safely.
 
