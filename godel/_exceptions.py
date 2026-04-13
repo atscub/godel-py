@@ -309,12 +309,35 @@ class NonDeterministicEscape(GodelError):
         self.operation = operation
 
 
+<<<<<<< HEAD
 class GodelWatchNotInstalledError(ImportError):
     """Raised when ``godel --watch`` is used without the ``watch`` extra.
 
     Install the missing dependency with::
 
         pip install 'godel[watch]'
+=======
+class ConfigError(Exception):
+    """Raised when a decorator is configured with an invalid combination of options.
+
+    This is a **pre-execution** error — raised either at decoration time
+    (module import / function definition) or when the workflow primitive that
+    owns the invalid configuration is entered, but always *before* any step
+    body runs.  No partial state is produced.
+
+    When each check fires:
+
+    * ``@workflow(redact=[...])`` with a non-callable entry or a callable
+      whose arity is not a single positional argument → ``TypeError`` at
+      **decoration time** (module import).  ``TypeError`` is used instead of
+      ``ConfigError`` to match Python convention for argument-type errors.
+    * ``@step(capture_stdout=True)`` used inside a ``parallel()`` block →
+      ``ConfigError`` raised at **parallel-call time**, immediately upon
+      entering ``parallel()`` and before any branch is scheduled.  This check
+      cannot fire at decoration time because the step function and the
+      enclosing ``parallel()`` call are independently defined; the relationship
+      only becomes visible when the coroutines are handed to ``parallel()``.
+>>>>>>> worktree-agent-aac338f1
     """
 
 
