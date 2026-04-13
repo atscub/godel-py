@@ -121,7 +121,11 @@ async def good_workflow():
 
 ## `GODEL_NO_CAPTURE` escape hatch (intended)
 
-Setting the environment variable `GODEL_NO_CAPTURE=1` will disable all stdout capture
+> **Not available today.** `GODEL_NO_CAPTURE` is not referenced anywhere in `godel/` in
+> master — it is part of the `5pl.7` implementation and will only take effect once that
+> lands. Setting it today has no effect, because there is no capture pipeline to disable.
+
+Once `5pl.7` lands, setting `GODEL_NO_CAPTURE=1` will disable all stdout capture
 globally, regardless of `capture_stdout=True` settings in code:
 
 ```bash

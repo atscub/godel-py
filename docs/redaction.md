@@ -25,12 +25,10 @@ Pass a list of callables to `@workflow`:
 ```python
 from godel import workflow, step
 
-def strip_api_keys(event: dict) -> dict | None:
-    """Replace obvious API-key patterns in event payload strings."""
-    import re, json
-    payload = json.dumps(event)
-    payload = re.sub(r"sk-[A-Za-z0-9]{20,}", "sk-***REDACTED***", payload)
-    return json.loads(payload)
+def strip_api_keys(payload: str) -> str:
+    """Replace obvious API-key patterns in a serialized event payload."""
+    import re
+    return re.sub(r"sk-[A-Za-z0-9]{20,}", "sk-***REDACTED***", payload)
 
 @workflow(redact=[strip_api_keys])
 async def my_workflow():
@@ -56,24 +54,42 @@ async def my_workflow():
 These checks fire at decoration time, not at call time, so wrong-shape redactors fail
 fast before any workflow runs.
 
+### Signature validated today
+
+Per `godel/_decorators.py` (the `@workflow` decorator's docstring and arity validator):
+**a redactor takes a single `str` and returns a `str`.** It is invoked on event
+**payloads** — the serialized string representation of an event's content — not on the
+full event dict. The decorator enforces this shape at decoration time via the arity
+rules above.
+
+```python
+Redactor = Callable[[str], str]  # contract validated today
+```
+
 ### Intended runtime contract (TODO, tracked in `5pl.6`)
 
-- **Signature:** `Redactor = Callable[[dict], dict | None]`. A redactor receives the
-  pending event dict and returns either a (possibly modified) dict or `None`.
-- **Return `None`** → event is **dropped silently**. No transcript line is written; no
-  error event is emitted. A redactor may use this to censor an event entirely.
-- **Redactor raises** → the pending event is replaced with a `redactor.error` event
-  containing ONLY the redactor's name and the exception class. The exception **message**
-  and the **original event payload** are deliberately omitted so a buggy redactor cannot
-  leak the very secret it was supposed to mask.
-  ```json
-  {"event": {"ts": "...", "seq": 12, "op": "redactor.error",
-             "step_path": [], "stream_path": [],
-             "redactor": "strip_api_keys", "error_class": "KeyError"}}
-  ```
-- **`BaseException` is caught**, not just `Exception`. A redactor raising
-  `KeyboardInterrupt` or `SystemExit` is contained and substituted with a
-  `redactor.error` event; subsequent redactors and events continue processing.
+Note: ticket `godel-py-5pl.6` proposes evolving the contract to operate on event dicts
+(`Callable[[dict], dict | None]`) with richer return semantics. **That evolution has not
+landed and has not yet been reconciled with the string contract the decorator currently
+validates.** Until `5pl.6` merges and the decorator validation is updated to match,
+write redactors against the string signature above. The semantics below describe the
+target behavior once the pipeline lands — they are aspirational, not current.
+
+- **If the contract stays string → string:** a raising redactor substitutes a
+  `redactor.error` event containing only the redactor's name and exception class (no
+  message, no payload); subsequent redactors continue processing.
+- **If `5pl.6` lands the dict evolution:** `None` return drops the event silently;
+  raising substitutes a `redactor.error` event with the same name-plus-class payload;
+  `BaseException` is caught (not just `Exception`) so `KeyboardInterrupt` / `SystemExit`
+  inside a redactor cannot exfiltrate data by bypassing the catch.
+
+Anticipated substituted event shape (either contract):
+
+```json
+{"event": {"ts": "...", "seq": 12, "op": "redactor.error",
+           "step_path": [], "stream_path": [],
+           "redactor": "strip_api_keys", "error_class": "KeyError"}}
+```
 
 ---
 
@@ -83,9 +99,9 @@ Redactors will be applied **left-to-right** in registration order. The output of
 redactor `i` is the input to redactor `i+1`:
 
 ```
-raw_event
-  → strip_api_keys(raw_event)         # redactor 0
-  → drop_pii(result_of_0)             # redactor 1
+raw_payload (str)
+  → strip_api_keys(raw_payload)       # redactor 0 → str
+  → drop_pii(result_of_0)             # redactor 1 → str
   → written to transcript
 ```
 
@@ -95,24 +111,23 @@ criteria pin this ordering to an explicit test.
 
 ---
 
-## Writing a redactor (guidance for 5pl.6)
+## Writing a redactor
 
-When writing redactors for use once `5pl.6` lands:
+Against the string contract validated today:
 
-- Accept a single event `dict` argument.
-- Return a `dict` (possibly the same one, mutated in place) or `None` to drop the event.
-- Be **pure and fast**: redactors will run on the transcript writer's hot path.
-  Avoid I/O, network calls, or any blocking operation inside a redactor.
-- Do not rely on the exception message surviving. Any raise will be swallowed, and your
-  redactor's name + exception class are all the operator will see.
+- Accept a single `str` positional argument (the serialized event payload).
+- Return a `str` (possibly unchanged).
+- Be **pure and fast**: redactors will run on the transcript writer's hot path once
+  wiring lands. Avoid I/O, network calls, or any blocking operation inside a redactor.
+- Do not rely on the exception message surviving. Any raise will be swallowed once
+  `5pl.6` lands, and your redactor's name + exception class are all the operator will
+  see.
 
 ```python
-def redact_bearer(event: dict) -> dict:
-    """Remove Bearer tokens from Authorization header values inside request payloads."""
-    import re, json
-    payload = json.dumps(event)
-    payload = re.sub(r"Bearer\s+[A-Za-z0-9._-]+", "Bearer ***", payload)
-    return json.loads(payload)
+def redact_bearer(payload: str) -> str:
+    """Remove Bearer tokens from Authorization header values."""
+    import re
+    return re.sub(r"Bearer\s+[A-Za-z0-9._-]+", "Bearer ***", payload)
 ```
 
 ---

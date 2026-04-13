@@ -110,8 +110,10 @@ Readers that care only about a specific depth can filter by list length or by pr
 
 The transcript writer itself is op-agnostic: `TranscriptWriter.write_event(op=..., ...)`
 accepts any string and serialises it verbatim. The op **vocabulary** is defined by the
-emit sites in the rest of the library. The ops currently emitted by the audit log (and
-expected to mirror into the transcript as wiring is completed under `5pl.2`–`5pl.7`) are:
+emit sites in the rest of the library. The table below lists ops emitted by the audit
+log today (expected to mirror into the transcript as wiring is completed under
+`5pl.2`–`5pl.7`), plus planned ops that will appear only once their feature tickets
+land:
 
 | `op`                | Emitted by                 | Meaning                                                   |
 |---------------------|----------------------------|-----------------------------------------------------------|
@@ -130,6 +132,8 @@ expected to mirror into the transcript as wiring is completed under `5pl.2`–`5
 | `det.uuid4`         | `godel.det.uuid4()`        | Deterministic UUID draw.                                  |
 | `UNRECOVERABLE`     | `godel.intervention`       | Intervention tooling marked a failure unrecoverable.      |
 | `rotate`            | `TranscriptWriter` itself  | Rotation sentinel (transcript-only; see below).           |
+| `stdout`            | stdout-capture reader thread (**planned, `5pl.7`**) | One line of captured stdout from a step or subprocess. See [Stdout Capture](stdout-capture.md). |
+| `redactor.error`    | redaction pipeline (**planned, `5pl.6`**) | A redactor raised; original event substituted with a minimal error marker. See [Redaction](redaction.md). |
 
 Additional op-specific fields (e.g. `duration_ms`, `error_type`, `exit_code`) may appear
 alongside the core fields and MUST be ignored by readers that do not recognise them
