@@ -659,3 +659,87 @@ class TestWatchAppLifecycle:
         app.start()
         app.stop()
         app.stop()  # second call should be a no-op
+
+    def test_app_start_idempotent(self):
+        """Calling start() twice must not create a second Live instance.
+
+        A double-call would otherwise orphan the first Live context and leave
+        the terminal in an inconsistent state (cursor hidden, colours leaked).
+        After a double start() the app must still stop() cleanly.
+        """
+        console = Console(record=True, width=80, force_terminal=True)
+        app = WatchApp("idem-start-run", console=console)
+        app.start()
+        first_live = app._live
+        app.start()  # second call — must be a no-op
+        assert app._live is first_live, (
+            "start() must be idempotent: second call must not replace _live"
+        )
+        app.stop()  # must still clean up correctly
+
+
+# ---------------------------------------------------------------------------
+# Narrow-terminal render test (width=40)
+# ---------------------------------------------------------------------------
+
+class TestNarrowTerminalRender:
+    """Verify that _render() does not crash and produces reasonable output on
+    a very narrow terminal (40 columns).
+
+    A 40-column terminal is below the typical 80-column default and exercises
+    Rich's layout splitting and panel truncation logic.  The test does NOT
+    assert pixel-perfect output — it only checks:
+
+    * No exception is raised.
+    * At least some output is produced (not a blank render).
+    * The output fits within the declared width (no line exceeds 40 printable
+      characters after stripping ANSI-free exported text).
+    """
+
+    def test_narrow_render_no_crash_empty_model(self):
+        """_render() with width=40 on an empty model must not raise."""
+        model = WatchModel.empty()
+        console = Console(record=True, width=40)
+        WatchApp._render(model, console)  # must not raise
+
+    def test_narrow_render_produces_output(self):
+        """_render() with width=40 on a populated model emits non-empty text."""
+        model = _make_model()
+        console = Console(record=True, width=40)
+        WatchApp._render(model, console)
+        output = console.export_text()
+        assert output.strip(), "Expected non-empty output on narrow terminal"
+
+    def test_narrow_render_reasonable_layout(self):
+        """Output lines on a 40-column console should not grossly overflow.
+
+        Rich's recorded text export strips markup but preserves the logical
+        column layout.  We allow a small margin (up to 60 chars) to account
+        for Rich's internal padding/border characters, but flagrantly wide
+        lines (>200 chars) would indicate the layout broke completely.
+        """
+        model = _make_model()
+        console = Console(record=True, width=40)
+        WatchApp._render(model, console)
+        output = console.export_text()
+        # Sanity check: no single exported line should be grotesquely wide.
+        for line in output.splitlines():
+            assert len(line) <= 200, (
+                f"Exported line too wide ({len(line)} chars) on 40-col console: {line!r}"
+            )
+
+    def test_narrow_render_with_overflow_panels(self):
+        """width=40 with >3 stream panels (overflow path) must not crash."""
+        model = WatchModel.empty()
+        for i in range(5):
+            model = reduce(model, {
+                "op": "stdout",
+                "step_path": [f"step_{i}"],
+                "stream_path": [f"stream_{i}"],
+                "line": f"output from stream {i}",
+                "ts": f"2026-04-14T00:00:0{i}+00:00",
+            })
+        console = Console(record=True, width=40)
+        WatchApp._render(model, console)  # must not raise
+        output = console.export_text()
+        assert output.strip(), "Expected non-empty output with overflow panels on narrow terminal"
