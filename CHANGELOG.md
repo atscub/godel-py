@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.17.1 (2026-04-14)
+
+### Bug Fixes
+
+- **agents**: Map Claude text blocks to agent.response, thinking to agent.thought
+  ([`0852fc7`](https://github.com/atscub/godel-py/commit/0852fc79d2b46a46d3280d92dfc201c23e615054))
+
+
 ## v1.17.0 (2026-04-14)
 
 ### Features
