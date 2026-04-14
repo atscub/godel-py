@@ -362,6 +362,12 @@ def workflow(
                 event_log._replay_suppress = False
                 event_log.close()
                 if transcript is not None:
+                    # Emit the terminal sentinel before closing so live watchers
+                    # know the run is done and can exit their follow loop.
+                    try:
+                        transcript.write_workflow_finished()
+                    except Exception:
+                        pass
                     transcript.close()
                 try:
                     from godel._pause import clear_pause_request
