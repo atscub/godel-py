@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.16.0 (2026-04-14)
+
+### Features
+
+- **watch**: Separate event blocks with blank lines in plain-log
+  ([`5d73791`](https://github.com/atscub/godel-py/commit/5d7379168cd8fa685198e050461221dc7d935263))
+
+
 ## v1.15.0 (2026-04-14)
 
 ### Features
