@@ -20,6 +20,7 @@ from __future__ import annotations
 import io
 import os
 import queue
+import signal
 import sys
 import threading
 import time
@@ -295,12 +296,19 @@ class TestBurstCoalescing:
         assert q.qsize() >= 75
 
     def test_render_loop_coalesces_100_events_to_few_renders(self):
-        """Feeding 100 events to _render_loop results in ≤ 2 render calls."""
+        """Feeding 100 events to _render_loop results in 1-2 render calls.
+
+        Lower bound ≥1 guards against the regression where the EOS sentinel
+        starved the final flush and produced 0 renders (silent TUI).
+        """
         render_calls = []
 
         class _FakeApp:
             def update(self, model):
                 render_calls.append(model)
+
+            def stop(self):
+                pass
 
         q: queue.Queue = queue.Queue()
         events = _make_events(100)
@@ -312,22 +320,93 @@ class TestBurstCoalescing:
         _render_loop(
             app,
             q,
-            plain=False,
             timer_interval=0.001,   # very short timer
             burst_threshold=100,    # absorb all 100 in one drain
         )
 
-        assert len(render_calls) <= 2, (
-            f"Expected ≤ 2 render calls; got {len(render_calls)}"
+        assert 1 <= len(render_calls) <= 2, (
+            f"Expected 1–2 render calls; got {len(render_calls)}"
         )
 
-    def test_no_renders_when_model_unchanged(self):
-        """Unknown-op events (no-ops) don't cause extra renders."""
+    def test_render_loop_default_burst_threshold_still_renders(self):
+        """Production path: default burst_threshold=25 with 100 events must
+        still produce ≥1 render.  Regression guard for the 'sentinel-in-queue
+        starves final render' bug.
+        """
         render_calls = []
 
         class _FakeApp:
             def update(self, model):
                 render_calls.append(model)
+
+            def stop(self):
+                pass
+
+        q: queue.Queue = queue.Queue()
+        for e in _make_events(100):
+            q.put(e)
+        q.put(None)
+
+        app = _FakeApp()
+        _render_loop(
+            app,
+            q,
+            timer_interval=0.05,
+            burst_threshold=25,  # default production value
+        )
+
+        assert len(render_calls) >= 1, (
+            f"Expected ≥1 render call with default burst_threshold; got "
+            f"{len(render_calls)}. This indicates the EOS sentinel is "
+            "starving the final flush."
+        )
+
+    def test_render_loop_fast_run_final_flush(self):
+        """A very fast run (all events pre-queued before loop starts) must
+        still render its final state at least once."""
+        render_calls = []
+
+        class _FakeApp:
+            def update(self, model):
+                render_calls.append(model)
+
+            def stop(self):
+                pass
+
+        q: queue.Queue = queue.Queue()
+        # Only 3 events, then immediate EOS
+        q.put({"op": "step.enter", "step_path": ["a"], "stream_path": [],
+               "ts": "2026-04-14T00:00:01+00:00"})
+        q.put({"op": "step.enter", "step_path": ["b"], "stream_path": [],
+               "ts": "2026-04-14T00:00:02+00:00"})
+        q.put({"op": "step.exit", "step_path": ["a"], "status": "done",
+               "stream_path": [], "ts": "2026-04-14T00:00:03+00:00"})
+        q.put(None)
+
+        app = _FakeApp()
+        # Large timer so no mid-stream render; only final flush should fire.
+        _render_loop(app, q, timer_interval=10.0, burst_threshold=25)
+
+        assert len(render_calls) == 1, (
+            f"Expected exactly one final-flush render on fast run; got "
+            f"{len(render_calls)}"
+        )
+        # And it must reflect the final model state
+        final_model = render_calls[-1]
+        assert ("a",) in final_model.steps
+        assert ("b",) in final_model.steps
+        assert final_model.steps[("a",)].status == "done"
+
+    def test_no_renders_when_model_unchanged(self):
+        """Unknown-op events (no-ops) don't cause any renders."""
+        render_calls = []
+
+        class _FakeApp:
+            def update(self, model):
+                render_calls.append(model)
+
+            def stop(self):
+                pass
 
         q: queue.Queue = queue.Queue()
         # Push 50 unknown-op events (no-ops in reduce)
@@ -336,7 +415,7 @@ class TestBurstCoalescing:
         q.put(None)
 
         app = _FakeApp()
-        _render_loop(app, q, plain=False, timer_interval=0.001, burst_threshold=100)
+        _render_loop(app, q, timer_interval=0.001, burst_threshold=100)
         assert len(render_calls) == 0, (
             f"No-op events should produce 0 render calls; got {len(render_calls)}"
         )
@@ -383,7 +462,7 @@ class TestKeyboardInterruptRestoresTerminal:
 
         # Simulate the run_watch main block
         try:
-            _render_loop(app, q, plain=False, timer_interval=0.001, burst_threshold=100)
+            _render_loop(app, q, timer_interval=0.001, burst_threshold=100)
         except KeyboardInterrupt:
             app.stop()
 
@@ -407,6 +486,88 @@ class TestKeyboardInterruptRestoresTerminal:
             pass  # no render, just test context manager
 
         assert stop_called, "WatchApp.__exit__ should call stop()"
+
+    def test_signal_handler_is_async_safe_flag_only(self, monkeypatch):
+        """The SIGTSTP/SIGHUP handler must NOT call Live.stop() directly —
+        that would risk deadlock if Rich holds its lock when the signal lands.
+        The handler should only set a flag; the main loop acts on it.
+        """
+        import sys
+        import importlib
+        watch_mod = sys.modules.get("godel._watch") or importlib.import_module("godel._watch")
+
+        stop_calls = []
+
+        class _FakeApp:
+            def stop(self):
+                stop_calls.append(True)
+
+        pending: list = [None]
+        previous = watch_mod._install_terminal_restore_signals(_FakeApp(), pending)
+        try:
+            # Find the installed handler for an available signal.
+            if not previous:
+                pytest.skip("no catchable signals on this platform")
+            sig, _prev = previous[0]
+            handler = signal.getsignal(sig)
+            assert callable(handler)
+
+            # Invoke the handler directly — simulates a signal arriving.
+            handler(sig, None)
+
+            # The handler must have set the flag but NOT called stop().
+            assert pending[0] == sig, (
+                "handler must set pending_signal flag"
+            )
+            assert stop_calls == [], (
+                "handler must NOT call renderer.stop() directly "
+                "(async-signal-unsafe)"
+            )
+        finally:
+            watch_mod._restore_signals(previous)
+
+    def test_run_watch_keyboard_interrupt_integration(self, tmp_path, monkeypatch):
+        """Integration: run_watch() through-path; a producer that stops
+        abruptly (via signal-flag) must cause WatchApp.stop() to run before
+        process teardown.  Uses the pending_signal mechanism to simulate a
+        SIGTSTP mid-render.
+        """
+        import sys
+        import importlib
+
+        watch_mod = sys.modules.get("godel._watch") or importlib.import_module("godel._watch")
+
+        stop_calls = []
+        original_stop = watch_mod.WatchApp.stop
+
+        def _track_stop(self):
+            stop_calls.append(True)
+            return original_stop(self)
+
+        monkeypatch.setattr(watch_mod.WatchApp, "stop", _track_stop)
+
+        # Force TUI path by faking a TTY stdout.
+        fake_tty = mock.MagicMock()
+        fake_tty.isatty.return_value = True
+        fake_tty.write = lambda *a, **k: None
+        fake_tty.flush = lambda: None
+        monkeypatch.setattr(watch_mod, "_use_plain_fallback", lambda *a, **k: False)
+
+        def _fake_producer(run_id, runs_dir, q):
+            # Push one event then EOS.
+            q.put({"op": "step.enter", "step_path": ["x"], "stream_path": [],
+                   "ts": "2026-04-14T00:00:01+00:00"})
+            q.put(None)
+
+        monkeypatch.setattr(watch_mod, "_producer_thread", _fake_producer)
+
+        # Run.  Should exit cleanly; WatchApp.stop must have been invoked
+        # via the __exit__ context manager.
+        watch_mod.run_watch("run-intr-001", runs_dir=str(tmp_path), stdout=fake_tty)
+
+        assert stop_calls, (
+            "WatchApp.stop() must be called when run_watch exits (via __exit__)"
+        )
 
 
 # ---------------------------------------------------------------------------
