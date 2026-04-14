@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.8.1 (2026-04-14)
+
+### Bug Fixes
+
+- **watch**: Hygiene nits from 5pl.11 review
+  ([`9e19288`](https://github.com/atscub/godel-py/commit/9e192882da9947fa119be9184adb09374a08d7ad))
+
+
 ## v1.8.0 (2026-04-14)
 
 ### Bug Fixes
