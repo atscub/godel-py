@@ -1,11 +1,12 @@
 from godel import workflow, step, run, print
-from godel.agents import claude_code
+from godel.agents import copilot
+
 
 @step
 async def slow_step(n: int) -> str:
-    # Shells out to bash — gets its own process group; Ctrl+C kills it cleanly.
     r = await run(f"for i in $(seq {n} -1 1); do echo t-minus: $i; sleep 1; done")
     return r.stdout
+
 
 @step
 async def ask_topic(agent) -> str:
@@ -21,21 +22,14 @@ async def ask_haiku(agent, animal: str) -> str:
 async def ask_critique(agent) -> str:
     return await agent("In one sentence, what's the weakest line of your haiku and why?")
 
+
 @step
 async def write_about_photosynthsis(agent):
     return await agent("Write 5 paragraphs on photosynthesis.")
 
+
 @workflow
 async def chat():
-    # await print("Countdown ...")
-    # await slow_step(5)
-    # Same agent instance → session persists across calls
-    # agent = claude_code(model="haiku", skip_permissions=True)
-    # animal = (await ask_topic(agent)).strip()
-    # haiku = await ask_haiku(agent, animal)
-    # critique = await ask_critique(agent)
-    # return {"animal": animal, "haiku": haiku, "critique": critique, "photosynthesis": photosynthesis}
-    
-    agent2 = claude_code(model="sonnet", skip_permissions=True)
+    agent2 = copilot(model="default", skip_permissions=True)
     photosynthesis = await write_about_photosynthsis(agent2)
     return {"photosynthesis": photosynthesis}

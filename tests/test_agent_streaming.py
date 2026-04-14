@@ -241,7 +241,7 @@ class TestAgentInvokeStreaming:
             stdout = b"".join(COPILOT_STREAM_LINES).decode("utf-8", errors="replace")
             return CommandResult(stdout=stdout, stderr="", returncode=0)
 
-        @workflow(stream_agents=True)
+        @workflow
         async def wf():
             agent = copilot(model="default")
             with patch("godel.agents._common.run", side_effect=fake_run):
@@ -284,7 +284,7 @@ class TestAgentInvokeStreaming:
             stdout = b"".join(COPILOT_STREAM_LINES).decode("utf-8", errors="replace")
             return CommandResult(stdout=stdout, stderr="", returncode=0)
 
-        @workflow(stream_agents=True)
+        @workflow
         async def wf():
             agent = copilot(model="default")
             with patch("godel.agents._common.run", side_effect=fake_run):
@@ -308,7 +308,7 @@ class TestAgentInvokeStreaming:
         async def fake_run_raises(cmd, *, cwd=None, **kwargs):
             raise CommandFailure("boom")
 
-        @workflow(stream_agents=True)
+        @workflow
         async def wf():
             agent = copilot(model="default")
             try:
@@ -322,8 +322,9 @@ class TestAgentInvokeStreaming:
         assert observer_after == [None], "Observer must be reset even after exception"
 
     def test_no_streaming_no_observer_installed(self, tmp_path, monkeypatch):
-        """With stream_agents=False, no _line_observer is set during _invoke."""
+        """With GODEL_STREAM_AGENTS=0, no _line_observer is set during _invoke."""
         os.chdir(tmp_path)
+        monkeypatch.setenv("GODEL_STREAM_AGENTS", "0")
 
         from godel._decorators import workflow
         from godel.agents._copilot import copilot
@@ -335,7 +336,7 @@ class TestAgentInvokeStreaming:
             stdout = b"".join(COPILOT_STREAM_LINES).decode("utf-8", errors="replace")
             return CommandResult(stdout=stdout, stderr="", returncode=0)
 
-        @workflow(stream_agents=False)
+        @workflow
         async def wf():
             agent = copilot(model="default")
             with patch("godel.agents._common.run", side_effect=fake_run):

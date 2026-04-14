@@ -59,13 +59,17 @@ def _subprocess_env(**extra: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def _write_workflow(path: Path, *, stream_agents: bool = False) -> None:
-    """Write a minimal @workflow file to *path*."""
-    flag = "True" if stream_agents else "False"
+    """Write a minimal @workflow file to *path*.
+
+    ``stream_agents`` is retained as a parameter for legacy callers but is
+    no longer reflected in the workflow source — streaming is now controlled
+    by the CLI (--no-stream) or the GODEL_STREAM_AGENTS env var.
+    """
     path.write_text(
         "import asyncio\n"
         "from godel import workflow, step\n"
         "\n"
-        f"@workflow(stream_agents={flag})\n"
+        "@workflow\n"
         "async def my_workflow():\n"
         "    await asyncio.sleep(0.05)\n"
         "    return 'done'\n"
@@ -125,7 +129,7 @@ def test_run_watch_spawns_subprocess(tmp_path):
         "import asyncio\n"
         "from godel import workflow\n"
         "\n"
-        "@workflow(stream_agents=True)\n"
+        "@workflow\n"
         "async def my_workflow():\n"
         "    await asyncio.sleep(0.3)\n"
         "    return 'done'\n"
@@ -157,7 +161,7 @@ def test_run_watch_run_completes_after_watcher_killed(tmp_path):
         "import asyncio\n"
         "from godel import workflow\n"
         "\n"
-        "@workflow(stream_agents=True)\n"
+        "@workflow\n"
         "async def my_workflow():\n"
         "    await asyncio.sleep(0.5)\n"
         "    return 'done'\n"
@@ -304,7 +308,7 @@ def test_watch_cmd_hint_stream_agents_false(tmp_path):
     elapsed = time.monotonic() - start
 
     assert elapsed < 6.0, f"Hint took too long: {elapsed:.2f}s"
-    hint_text = "agent streaming disabled"
+    hint_text = "agent streaming was disabled"
     assert hint_text in result.stderr, (
         f"Expected hint '{hint_text}' not found in stderr:\n{result.stderr}"
     )
@@ -334,7 +338,7 @@ def test_watch_subprocess_hint_stream_agents_false(tmp_path):
     elapsed = time.monotonic() - start
 
     assert elapsed < 6.0, f"Hint took too long: {elapsed:.2f}s"
-    hint_text = "agent streaming disabled"
+    hint_text = "agent streaming was disabled"
     assert hint_text in result.stderr, (
         f"Expected hint '{hint_text}' not found in stderr:\n{result.stderr}"
     )
@@ -546,7 +550,7 @@ def test_workflow_finished_status_failed_on_exception(tmp_path, monkeypatch):
         "from godel import workflow\n"
         "from godel._decorators import WorkflowFail\n"
         "\n"
-        "@workflow(stream_agents=True)\n"
+        "@workflow\n"
         "async def my_workflow():\n"
         "    raise WorkflowFail('boom')\n"
     )
@@ -592,7 +596,7 @@ def test_workflow_finished_status_finished_on_success(tmp_path, monkeypatch):
         "import asyncio\n"
         "from godel import workflow\n"
         "\n"
-        "@workflow(stream_agents=True)\n"
+        "@workflow\n"
         "async def my_workflow():\n"
         "    return 'ok'\n"
     )
@@ -876,7 +880,7 @@ def test_pause_does_not_emit_workflow_finished_sentinel(tmp_path, monkeypatch):
     async def raising_step():
         raise PauseSignal(reason="test pause")
 
-    @workflow(stream_agents=True)
+    @workflow
     async def pausing_wf():
         await raising_step()
         return "unreachable"

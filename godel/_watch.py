@@ -1174,8 +1174,8 @@ def run_watch(
 # ---------------------------------------------------------------------------
 
 _STREAM_AGENTS_HINT = (
-    "agent streaming disabled for this workflow; "
-    "enable with @workflow(stream_agents=True). "
+    "agent streaming was disabled for this run (--no-stream); "
+    "re-run without --no-stream to enable live streaming. "
     "See docs/transcript-format.md"
 )
 
@@ -1183,8 +1183,9 @@ _STREAM_AGENTS_HINT = (
 def _transcript_dir_exists(run_id: str, runs_dir: str) -> bool:
     """Return True if the transcript directory for *run_id* exists.
 
-    A transcript directory is created only when ``stream_agents=True`` is set
-    on the ``@workflow`` decorator.  Its absence indicates streaming is disabled.
+    A transcript directory is created when agent streaming is enabled
+    (the default; disabled only via ``godel run --no-stream``).  Its
+    absence indicates streaming was disabled for this run.
     """
     from pathlib import Path
     return (Path(runs_dir) / run_id).exists()

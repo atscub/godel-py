@@ -192,7 +192,7 @@ godel watch RUN_ID [--runs-dir DIR] [--plain|-p]
 
 **Notes:**
 - `RUN_ID` can be a prefix (minimum characters to resolve uniquely).
-- If the workflow was started without `stream_agents=True`, a discoverability hint is printed on stderr and the command exits immediately.
+- If the run was started with `--no-stream` (streaming disabled), a discoverability hint is printed on stderr and the command exits immediately.
 - Without `--plain` and without `GODEL_WATCH_PLAIN=1`, the Rich TUI is used on capable terminals (auto-fallback to plain on non-TTY, `TERM=dumb`, or non-UTF-8 locales).
 
 ---

@@ -242,8 +242,8 @@ async def run(cmd: str, *, cwd: str | None = None, timeout: float | None = None,
                 stream_path=new_stream_path,
             )
         # Surface the command to the transcript so live watchers can show what
-        # shell input produced the stdout that follows.  Guarded on stream_agents
-        # to avoid bloating transcripts for workflows that didn't opt in.
+        # shell input produced the stdout that follows.  Skipped when
+        # streaming is disabled (GODEL_STREAM_AGENTS=0 / --no-stream).
         if ctx and ctx.stream_agents and ctx.transcript is not None:
             ctx.transcript.write_event(
                 "run.start",

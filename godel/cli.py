@@ -189,13 +189,19 @@ def main():
 @click.option("--no-lint", is_flag=True, help="Skip lint pre-flight check")
 @click.option("--watch", is_flag=True, help="Stream live output (requires godel[watch])")
 @click.option(
+    "--no-stream",
+    is_flag=True,
+    default=False,
+    help="Disable agent-response streaming for this run (default: streaming enabled).",
+)
+@click.option(
     "--plain",
     "-p",
     is_flag=True,
     default=False,
     help="Force plain line-log output in the watcher subprocess (implies --watch; also: GODEL_WATCH_PLAIN=1).",
 )
-def run_cmd(file, extra, no_strict, no_lint, watch, plain):
+def run_cmd(file, extra, no_strict, no_lint, watch, no_stream, plain):
     """Execute a @workflow-decorated function from FILE.
 
     Pass arguments to the workflow after a '--' separator:
@@ -208,6 +214,8 @@ def run_cmd(file, extra, no_strict, no_lint, watch, plain):
     """
     if plain:
         watch = True
+    if no_stream:
+        os.environ["GODEL_STREAM_AGENTS"] = "0"
     if watch:
         try:
             from godel import _watch  # noqa: F401 — triggers import-time guard
@@ -392,7 +400,9 @@ def run_cmd(file, extra, no_strict, no_lint, watch, plain):
               help="Policy when a cached @step's source has been edited (default: warn)")
 @click.option("--no-strict", is_flag=True, help="Disable strict mode (allow non-deterministic ops)")
 @click.option("--no-lint", is_flag=True, help="Skip lint pre-flight check")
-def resume_cmd(run_id, file, on_mismatch, on_source_edit, no_strict, no_lint):
+@click.option("--no-stream", is_flag=True, default=False,
+              help="Disable agent-response streaming for this run (default: streaming enabled).")
+def resume_cmd(run_id, file, on_mismatch, on_source_edit, no_strict, no_lint, no_stream):
     """Resume a workflow run from its audit log."""
     from pathlib import Path
     from godel._event_log import EventLog
@@ -401,6 +411,9 @@ def resume_cmd(run_id, file, on_mismatch, on_source_edit, no_strict, no_lint):
         SourceEditPolicy, set_source_edit_policy,
     )
     from godel._context import _pending_replay
+
+    if no_stream:
+        os.environ["GODEL_STREAM_AGENTS"] = "0"
 
     # 1. Find JSONL by prefix
     runs_dir = Path("./runs")
@@ -996,8 +1009,8 @@ def tail_cmd(run_id, output_format, no_follow, no_wait):
 # ---------------------------------------------------------------------------
 
 _STREAM_AGENTS_HINT = (
-    "agent streaming disabled for this workflow; "
-    "enable with @workflow(stream_agents=True). "
+    "agent streaming was disabled for this run (--no-stream); "
+    "re-run without --no-stream to enable live streaming. "
     "See docs/transcript-format.md"
 )
 
@@ -1007,9 +1020,9 @@ _HINT_PROBE_TIMEOUT = 5.0  # seconds to wait before showing the hint
 def _check_stream_agents_disabled(run_id: str, runs_dir: str) -> bool:
     """Return True if streaming is disabled for *run_id*.
 
-    Streaming is enabled (stream_agents=True) when a transcript directory
-    exists under ``<runs_dir>/<run_id>/``.  When that directory is absent,
-    the workflow was run with stream_agents=False and the discoverability
+    Streaming is enabled by default; a transcript directory exists under
+    ``<runs_dir>/<run_id>/`` when streaming is on.  When that directory is
+    absent, the run was executed with ``--no-stream`` and the discoverability
     hint should be shown.
 
     Returns True (hint should show) when no transcript directory is found.
@@ -1090,10 +1103,8 @@ def watch_cmd(run_id, runs_dir, plain):
         sys.exit(1)
     run_id = next(iter(candidates))
 
-    # Discoverability hint: show banner if stream_agents=False (no transcript dir).
-    # We detect this synchronously: if the runs/<run_id>/ directory is absent,
-    # the workflow was not configured with stream_agents=True.
-    # The hint is emitted on stderr within 6 s as required by the AC.
+    # Discoverability hint: show banner if the run was executed with
+    # --no-stream (no transcript dir).  Emitted on stderr within 6 s per AC.
     streaming_disabled = _check_stream_agents_disabled(run_id, runs_dir)
     if streaming_disabled:
         click.echo(

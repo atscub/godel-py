@@ -140,7 +140,7 @@ def test_observer_suppresses_stdout_transcript_events(tmp_path):
     captured_by_observer: list[bytes] = []
     transcript_stdout_events: list[dict] = []
 
-    @workflow(stream_agents=True)
+    @workflow
     async def wf():
         def _obs(line: bytes) -> None:
             captured_by_observer.append(line)
@@ -179,7 +179,7 @@ def test_no_observer_stream_agents_emits_stdout_events(tmp_path):
     import os
     os.chdir(tmp_path)
 
-    @workflow(stream_agents=True)
+    @workflow
     async def wf():
         await run("printf 'foo\\nbar\\n'")
 

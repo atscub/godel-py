@@ -64,8 +64,8 @@ Parse Claude/Copilot streaming JSONL into transcript events. Hardening from day 
 - **Line reader** — handles partial reads, >64 KB lines, CRLF, non-UTF8 (`errors="replace"`).
 - **Burst coalescing** on read side (TUI), not on write side — writer just appends.
 - **Parse-xor-tee** — if `--verbose`, raw bytes go to a separate `raw.log`, never the same fd being parsed.
-- **Per-workflow opt-in** — `@workflow(stream_agents=True)` until proven stable.
-- **Discoverability**: when `--watch` is set but `stream_agents=False`, TUI shows a one-line hint pointing at docs. Addresses the "two layers of opt-in = silent emptiness" trap.
+- ~~**Per-workflow opt-in** — `@workflow(stream_agents=True)` until proven stable.~~ **Superseded:** streaming is now on by default and disabled per-run via `godel run --no-stream` (sets `GODEL_STREAM_AGENTS=0`). The `stream_agents` decorator kwarg was removed.
+- **Discoverability**: when `--watch` is set but the run used `--no-stream`, TUI shows a one-line hint pointing at docs.
 
 ### Redaction — infrastructure, not patterns
 

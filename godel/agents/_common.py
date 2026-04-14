@@ -348,7 +348,8 @@ class _BaseAgent:
 
         When ``persist_session`` is True, the session id from the response
         (if any) is stored on the instance so the next call can resume it.
-        When the active workflow has ``stream_agents=True``, an
+        When agent streaming is enabled (the default; disabled only via
+        ``godel run --no-stream`` or ``GODEL_STREAM_AGENTS=0``), an
         :class:`AdapterStreamSink` is installed as the ``_line_observer`` so
         that ``agent.thought`` / ``agent.tool_call`` / ``agent.tool_result``
         events are written to the workflow transcript in real-time, one line

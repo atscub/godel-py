@@ -407,7 +407,7 @@ def test_stream_agents_true_emits_transcript_events(tmp_path, monkeypatch):
                 observer(raw_line)
         return _make_mock_run(COPILOT_JSONL_STREAM)
 
-    @workflow(stream_agents=True)
+    @workflow
     async def wf():
         agent = copilot(model="default")
         with patch("godel.agents._common.run", side_effect=fake_run_with_observer):
@@ -428,12 +428,13 @@ def test_stream_agents_true_emits_transcript_events(tmp_path, monkeypatch):
 
 
 def test_stream_agents_false_no_transcript_file(tmp_path, monkeypatch):
-    """With stream_agents=False, no transcript.jsonl is created."""
+    """With GODEL_STREAM_AGENTS=0, no transcript.jsonl is created."""
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GODEL_STREAM_AGENTS", "0")
 
     from godel.agents._copilot import copilot
 
-    @workflow(stream_agents=False)
+    @workflow
     async def wf():
         agent = copilot(model="default")
         with patch("godel.agents._common.run", new_callable=AsyncMock) as mock_run:
@@ -443,7 +444,7 @@ def test_stream_agents_false_no_transcript_file(tmp_path, monkeypatch):
     asyncio.run(wf())
 
     transcript_files = list((tmp_path / "runs").rglob("transcript.jsonl"))
-    assert transcript_files == [], "No transcript.jsonl should be written when stream_agents=False"
+    assert transcript_files == [], "No transcript.jsonl should be written when streaming is disabled"
 
 
 def test_claude_streaming_command_includes_stream_json(tmp_path, monkeypatch):
@@ -460,7 +461,7 @@ def test_claude_streaming_command_includes_stream_json(tmp_path, monkeypatch):
         result_line = json.dumps({"type": "result", "result": "ok", "session_id": None})
         return CommandResult(stdout=result_line + "\n", stderr="", returncode=0)
 
-    @workflow(stream_agents=True)
+    @workflow
     async def wf():
         agent = claude_code(model="sonnet")
         with patch("godel.agents._common.run", side_effect=fake_run):
@@ -473,8 +474,9 @@ def test_claude_streaming_command_includes_stream_json(tmp_path, monkeypatch):
 
 
 def test_claude_non_streaming_command_uses_json(tmp_path, monkeypatch):
-    """Claude CLI uses --output-format json when stream_agents=False."""
+    """Claude CLI uses --output-format json when streaming is disabled."""
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GODEL_STREAM_AGENTS", "0")
 
     from godel.agents._claude import claude_code
 
@@ -488,7 +490,7 @@ def test_claude_non_streaming_command_uses_json(tmp_path, monkeypatch):
             returncode=0,
         )
 
-    @workflow(stream_agents=False)
+    @workflow
     async def wf():
         agent = claude_code(model="sonnet")
         with patch("godel.agents._common.run", side_effect=fake_run):

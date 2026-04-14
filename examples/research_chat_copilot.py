@@ -1,15 +1,12 @@
 """Multi-step conversation that exercises tool calls + intermediate thinking.
 
 Run:
-    godel run examples/research_chat.py --plain
+    godel run examples/research_chat_copilot.py --plain
 
-The first step asks the agent to do real work on disk (creating a tmp file,
-listing it, reading it back) so stream-json emits tool_use / tool_result
-events.  The follow-ups keep the same session so you can see the agent
-reason about the earlier result.
+Copilot variant of research_chat.py.
 """
 from godel import workflow, step, print
-from godel.agents import claude_code
+from godel.agents import copilot
 
 
 @step
@@ -41,8 +38,8 @@ async def finalize(agent, count: str, reflection: str) -> str:
 
 @workflow
 async def chat():
-    await print("── research demo ──")
-    agent = claude_code(model="haiku", skip_permissions=True)
+    await print("── research demo (copilot) ──")
+    agent = copilot(model="default", skip_permissions=True)
     count = await investigate(agent)
     reflection = await reflect(agent)
     summary = await finalize(agent, count, reflection)

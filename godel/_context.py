@@ -21,8 +21,10 @@ class WorkflowContext:
     source_file: str = ""
     _event_id_stack: list[str] = field(default_factory=list)
     # Observability: whether agent stdout is streamed to the transcript.
-    stream_agents: bool = False
-    # Advisory transcript writer (None when stream_agents is False or outside @workflow).
+    # Defaults to True; disabled by setting GODEL_STREAM_AGENTS=0 in the env
+    # (typically via `godel run --no-stream`).
+    stream_agents: bool = True
+    # Advisory transcript writer (None outside @workflow or when streaming disabled).
     transcript: "TranscriptWriter | None" = None
     # Ordered list of event_ids for every @step that reached FINISHED.
     # Populated by the @step decorator; used by last_step_event_id().

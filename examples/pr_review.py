@@ -101,7 +101,7 @@ async def handle_feedback(engineer, comments: list[dict]) -> Feedback:
     return feedback
 
 
-@workflow(stream_agents=True)
+@workflow
 async def pr_review():
     engineer = claude_code(model='sonnet', skip_permissions=True)
     reviewer = claude_code(model='sonnet', skip_permissions=True)

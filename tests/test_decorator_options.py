@@ -1,4 +1,4 @@
-"""Tests for decorator options: stream_agents, capture_stdout, redact.
+"""Tests for decorator options: capture_stdout, redact.
 
 Covers acceptance criteria from godel-py-5pl.8:
 - Round-trip: values passed to @workflow / @step are retrievable from metadata.
@@ -6,6 +6,10 @@ Covers acceptance criteria from godel-py-5pl.8:
     * capture_stdout + parallel → ConfigError
     * non-callable in redact → TypeError
 - Default-off: all options off by default (safe state preserved).
+
+Agent streaming is no longer a decorator option — it is always on and
+can only be disabled by the caller via ``godel run --no-stream`` (which
+sets ``GODEL_STREAM_AGENTS=0`` in the environment).
 """
 import asyncio
 import pytest
@@ -27,17 +31,8 @@ def test_workflow_defaults():
         return 1
 
     opts = wf._workflow_options
-    assert opts["stream_agents"] is False
     assert opts["capture_stdout"] is False
     assert opts["redact"] == []
-
-
-def test_workflow_stream_agents():
-    @workflow(stream_agents=True)
-    async def wf():
-        return 1
-
-    assert wf._workflow_options["stream_agents"] is True
 
 
 def test_workflow_capture_stdout():
@@ -80,12 +75,11 @@ def test_workflow_redact_empty_list():
 def test_workflow_all_options():
     r = lambda s: s
 
-    @workflow(stream_agents=True, capture_stdout=True, redact=[r])
+    @workflow(capture_stdout=True, redact=[r])
     async def wf():
         return 1
 
     opts = wf._workflow_options
-    assert opts["stream_agents"] is True
     assert opts["capture_stdout"] is True
     assert opts["redact"] == [r]
 
@@ -214,7 +208,6 @@ def test_workflow_bare_decorator_runs():
 
     assert asyncio.run(wf()) == 99
     opts = wf._workflow_options
-    assert opts["stream_agents"] is False
     assert opts["capture_stdout"] is False
     assert opts["redact"] == []
 

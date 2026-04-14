@@ -7,7 +7,7 @@ async def slow_step(n: int) -> str:
     r = await run(f"for i in $(seq 1 {n}); do echo line-$i; sleep 1; done")
     return r.stdout
 
-@workflow(stream_agents=True)
+@workflow
 async def demo():
     out = await slow_step(8)
     return out

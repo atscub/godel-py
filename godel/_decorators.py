@@ -91,7 +91,6 @@ class WorkflowFail(Exception):
 def workflow(
     fn=None,
     *,
-    stream_agents: bool = False,
     capture_stdout: bool = False,
     redact: list[Callable] | None = None,
 ):
@@ -100,9 +99,6 @@ def workflow(
     Can be applied as ``@workflow`` (bare) or ``@workflow(...)`` with options:
 
     Args:
-        stream_agents: When ``True``, agent responses will be streamed to the
-            transcript writer as they arrive (instead of buffered).  Defaults
-            to ``False`` (buffered).
         capture_stdout: When ``True``, stdout emitted during the workflow is
             captured and attached to the event log.  Defaults to ``False``.
         redact: A list of callables (redactors).  Each callable receives a
@@ -214,14 +210,17 @@ def workflow(
 
             source_file = getattr(fn, '_source_file', '') or getattr(wrapper, '_source_file', '')
 
-            # Create a TranscriptWriter for advisory streaming events when
-            # stream_agents=True.  We place the transcript in a run-specific
-            # subdirectory (runs/<run_id>/) so it is co-located with and
-            # trivially correlated to the audit log by run_id.
-            # The writer is closed in the finally block below.
+            # Agent streaming is on by default; disable via env var
+            # GODEL_STREAM_AGENTS=0 (set by `godel run --no-stream`).
+            import os as _os
+            stream_agents = _os.environ.get("GODEL_STREAM_AGENTS", "1") != "0"
+
+            # Create a TranscriptWriter for advisory streaming events.  We
+            # place the transcript in a run-specific subdirectory
+            # (runs/<run_id>/) so it is co-located with and trivially
+            # correlated to the audit log by run_id.  Closed in finally below.
             transcript = None
             if stream_agents:
-                import os as _os
                 from godel._transcript import TranscriptWriter
                 _transcript_dir = _os.path.join(
                     str(event_log._file_path.parent), run_id
@@ -411,7 +410,6 @@ def workflow(
 
         wrapper._is_workflow = True
         wrapper._workflow_options = {
-            "stream_agents": stream_agents,
             "capture_stdout": capture_stdout,
             "redact": list(redact) if redact is not None else [],
         }
