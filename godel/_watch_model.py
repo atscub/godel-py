@@ -307,12 +307,9 @@ def _summarize_tool_call(tool: str, inp) -> str:
             snippet = json.dumps(inp, default=str)[:80]
             line = f"[tool_call] {tool}: {snippet}"
     else:
-        # inp is a string or some other scalar
+        # inp is a string or some other scalar — fall back to a generic label.
         snippet = str(inp)[:80]
-        if tool in ("Read", "Bash", "Edit", "Write", "Grep", "Glob"):
-            line = f"[tool_call] {tool}: {snippet}"
-        else:
-            line = f"[tool_call] {tool}: {snippet}"
+        line = f"[tool_call] {tool}: {snippet}"
     return _truncate(line)
 
 

@@ -722,3 +722,55 @@ def test_tool_result_large_output_capped_in_ring():
     line = m.panels[("agent",)].ring[0]
     assert len(line) <= _MAX_LINE_LEN
     assert "[tool_result]" in line
+
+
+def test_oversized_tool_events_capped_via_disk_fixture(tmp_path):
+    """AC4: replay a JSONL transcript from disk through _feed_stream-style
+    loading and verify every ring entry is capped at _MAX_LINE_LEN.
+
+    Covers the end-to-end path: file → json.loads → reduce → panel.ring.
+    """
+    import json as _json
+
+    fixture = tmp_path / "oversized.jsonl"
+    lines = [
+        {"header": {"version": 1, "run_id": "r1"}},
+        {"event": {
+            "ts": "2026-04-14T00:00:00+00:00", "seq": 1, "op": "agent.tool_call",
+            "step_path": ["s"], "stream_path": ["s", "agent"],
+            "tool": "Read",
+            "input": {"file_path": "/very/long/" + "dir/" * 80 + "bigfile.py"},
+        }},
+        {"event": {
+            "ts": "2026-04-14T00:00:01+00:00", "seq": 2, "op": "agent.tool_result",
+            "step_path": ["s"], "stream_path": ["s", "agent"],
+            "tool": "Read",
+            "output": "first line\n" + "x" * 500_000,
+        }},
+        {"event": {
+            "ts": "2026-04-14T00:00:02+00:00", "seq": 3, "op": "agent.tool_call",
+            "step_path": ["s"], "stream_path": ["s", "agent"],
+            "tool": "Bash",
+            "input": {"command": "echo " + "y" * 5000},
+        }},
+    ]
+    with open(fixture, "w") as f:
+        for obj in lines:
+            f.write(_json.dumps(obj) + "\n")
+
+    model = WatchModel.empty(ring_size=200)
+    with open(fixture) as f:
+        for raw in f:
+            raw = raw.strip()
+            if not raw:
+                continue
+            obj = _json.loads(raw)
+            if "header" in obj:
+                model = reduce_header(model, obj["header"])
+            elif "event" in obj:
+                model = reduce(model, obj["event"])
+
+    panel = model.panels[("s", "agent")]
+    assert len(panel.ring) >= 3
+    for entry in panel.ring:
+        assert len(entry) <= _MAX_LINE_LEN, f"ring entry too long: {len(entry)}: {entry!r}"
