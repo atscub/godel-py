@@ -178,7 +178,14 @@ class TestAC1Snapshot:
     * ``width=120``          — fixed width for deterministic wrapping
     * ``height=30``          — fixed height for deterministic Rich Layout sizing
     * ``color_system=None``  — no ANSI codes so the golden file is plain text
-    * ``force_terminal=False``— treat as non-TTY so Rich does not query the tty
+
+    Rich version sensitivity
+    ------------------------
+    The golden file is tied to Rich's layout and border-glyph output, which
+    has historically shifted between major versions.  The ``watch`` extra
+    pins ``rich>=13.0,<15`` — this snapshot was recorded on Rich 14.x and
+    is expected to remain stable across the Rich 13/14 line.  When bumping
+    the upper bound, re-record with ``pytest --snapshot-update``.
 
     Run ``pytest --snapshot-update`` once to write / refresh the golden file.
     """
@@ -191,10 +198,9 @@ class TestAC1Snapshot:
             width=120,
             height=30,
             color_system=None,
-            force_terminal=False,
         )
         WatchApp._render(model, console)
-        output = console.export_text()
+        output = console.export_text(clear=False)
         assert output == snapshot
 
 
