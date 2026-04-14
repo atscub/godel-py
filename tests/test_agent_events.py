@@ -18,7 +18,7 @@ def test_agent_call_emits_events(tmp_path, monkeypatch):
     @workflow
     async def wf():
         agent = claude_code(model="sonnet")
-        with patch("godel.agents._claude.run", new_callable=AsyncMock) as mock_run:
+        with patch("godel.agents._common.run", new_callable=AsyncMock) as mock_run:
             mock_run.return_value = _mock_run_result()
             return await agent("Write hello world")
 
@@ -41,7 +41,7 @@ def test_agent_call_emits_finished(tmp_path, monkeypatch):
     @workflow
     async def wf():
         agent = claude_code(model="sonnet")
-        with patch("godel.agents._claude.run", new_callable=AsyncMock) as mock_run:
+        with patch("godel.agents._common.run", new_callable=AsyncMock) as mock_run:
             mock_run.return_value = _mock_run_result()
             return await agent("test prompt")
 
@@ -62,7 +62,7 @@ def test_agent_call_emits_failed(tmp_path, monkeypatch):
     @workflow
     async def wf():
         agent = claude_code(model="sonnet")
-        with patch("godel.agents._claude.run", new_callable=AsyncMock) as mock_run:
+        with patch("godel.agents._common.run", new_callable=AsyncMock) as mock_run:
             mock_run.side_effect = CommandFailure("claude failed", returncode=1)
             return await agent("test prompt")
 
@@ -99,7 +99,7 @@ def test_agent_call_cancelled_emits_failed(tmp_path, monkeypatch):
                 # Block until cancelled — simulates a slow CLI call.
                 await asyncio.sleep(999)
 
-            with patch("godel.agents._claude.run", side_effect=_blocking_run):
+            with patch("godel.agents._common.run", side_effect=_blocking_run):
                 return await agent("test prompt")
 
         task = asyncio.create_task(wf())
@@ -164,7 +164,7 @@ def test_agent_call_emit_failed_logging_error_does_not_mask_original(
     @workflow
     async def wf():
         agent = claude_code(model="sonnet")
-        with patch("godel.agents._claude.run", new_callable=AsyncMock) as mock_run:
+        with patch("godel.agents._common.run", new_callable=AsyncMock) as mock_run:
             mock_run.side_effect = OriginalError("real cause")
             # Patch emit_failed only around the call so STARTED still gets
             # persisted normally via emit_started.

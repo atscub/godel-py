@@ -387,7 +387,7 @@ def test_stream_agents_true_emits_transcript_events(tmp_path, monkeypatch):
     @workflow(stream_agents=True)
     async def wf():
         agent = copilot(model="default")
-        with patch("godel.agents._copilot.run", new_callable=AsyncMock) as mock_run:
+        with patch("godel.agents._common.run", new_callable=AsyncMock) as mock_run:
             mock_run.return_value = _make_mock_run(COPILOT_JSONL_STREAM)
             return await agent("do stuff")
 
@@ -414,7 +414,7 @@ def test_stream_agents_false_no_transcript_file(tmp_path, monkeypatch):
     @workflow(stream_agents=False)
     async def wf():
         agent = copilot(model="default")
-        with patch("godel.agents._copilot.run", new_callable=AsyncMock) as mock_run:
+        with patch("godel.agents._common.run", new_callable=AsyncMock) as mock_run:
             mock_run.return_value = _make_mock_run(COPILOT_JSONL_STREAM)
             return await agent("do stuff")
 
@@ -441,7 +441,7 @@ def test_claude_streaming_command_includes_stream_json(tmp_path, monkeypatch):
     @workflow(stream_agents=True)
     async def wf():
         agent = claude_code(model="sonnet")
-        with patch("godel.agents._claude.run", side_effect=fake_run):
+        with patch("godel.agents._common.run", side_effect=fake_run):
             return await agent("hello")
 
     asyncio.run(wf())
@@ -469,7 +469,7 @@ def test_claude_non_streaming_command_uses_json(tmp_path, monkeypatch):
     @workflow(stream_agents=False)
     async def wf():
         agent = claude_code(model="sonnet")
-        with patch("godel.agents._claude.run", side_effect=fake_run):
+        with patch("godel.agents._common.run", side_effect=fake_run):
             return await agent("hello")
 
     asyncio.run(wf())

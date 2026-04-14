@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import shlex
 
-from godel._run import run  # noqa: F401 — re-exported so tests can patch `godel.agents._claude.run`
+from godel._run import run  # noqa: F401 — re-exported for backward-compat; canonical patch target is godel.agents._common.run
 from godel.agents._common import SchemaValidationFailure, _BaseAgent
 
 __all__ = ["claude_code", "SchemaValidationFailure"]
