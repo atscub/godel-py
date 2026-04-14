@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v3.0.0 (2026-04-14)
+
+### Features
+
+- **cli**: Add `godel guide` for bundled agent onboarding docs
+  ([`3aa0184`](https://github.com/atscub/godel-py/commit/3aa018422873b171ea5f52cfac88987464440413))
+
+- **config**: Two-tier .godel/ + ~/.godel/ config with named workflows
+  ([`2a0d8dc`](https://github.com/atscub/godel-py/commit/2a0d8dc267660274b79756cc632abe3f70fdbb52))
+
+
 ## v2.0.0 (2026-04-14)
 
 ### Refactoring
