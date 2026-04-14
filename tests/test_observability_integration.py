@@ -545,7 +545,7 @@ def test_c_godel_watch_cli_late_attaches_to_completed_run(tmp_path):
     # Parse the plain-log output: lines for step.enter events embed
     # step_path='step_N'.  Match them all and collect the indices.
     import re
-    step_path_re = re.compile(r"step_path='step_(\d+)'")
+    step_path_re = re.compile(r"step_(\d+)\b")
     seen_indices: set[int] = set()
     for line in result.stdout.splitlines():
         m = step_path_re.search(line)

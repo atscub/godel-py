@@ -744,9 +744,9 @@ def test_watch_plain_flag_forces_plain_log(tmp_path):
         timeout=15,
     )
     assert result.returncode == 0, f"stderr: {result.stderr}\nstdout: {result.stdout}"
-    # Plain log emits [godel-watch] prefixed lines
-    assert "[godel-watch]" in result.stdout, (
-        f"Expected [godel-watch] prefix in stdout, got:\n{result.stdout!r}"
+    # Plain log emits a workflow-finished banner stanza
+    assert "── workflow" in result.stdout, (
+        f"Expected plain-log workflow banner in stdout, got:\n{result.stdout!r}"
     )
 
 
@@ -770,8 +770,8 @@ def test_watch_plain_short_flag(tmp_path):
         timeout=15,
     )
     assert result.returncode == 0, f"stderr: {result.stderr}\nstdout: {result.stdout}"
-    assert "[godel-watch]" in result.stdout, (
-        f"Expected [godel-watch] prefix in stdout, got:\n{result.stdout!r}"
+    assert "── workflow" in result.stdout, (
+        f"Expected plain-log workflow banner in stdout, got:\n{result.stdout!r}"
     )
 
 
@@ -796,8 +796,8 @@ def test_watch_plain_env_var(tmp_path):
         timeout=15,
     )
     assert result.returncode == 0, f"stderr: {result.stderr}\nstdout: {result.stdout}"
-    assert "[godel-watch]" in result.stdout, (
-        f"Expected [godel-watch] prefix in stdout with GODEL_WATCH_PLAIN=1, got:\n{result.stdout!r}"
+    assert "── workflow" in result.stdout, (
+        f"Expected plain-log workflow banner in stdout with GODEL_WATCH_PLAIN=1, got:\n{result.stdout!r}"
     )
 
 
@@ -819,8 +819,8 @@ def test_watch_plain_flag_via_run_watch(tmp_path):
     watch_mod.run_watch(run_id, runs_dir=str(runs_dir), plain=True, stdout=captured)
 
     output = captured.getvalue()
-    assert "[godel-watch]" in output, (
-        f"Expected [godel-watch] prefix lines from PlainLineLog, got:\n{output!r}"
+    assert "── workflow" in output, (
+        f"Expected plain-log workflow banner from PlainLineLog, got:\n{output!r}"
     )
 
 
@@ -839,8 +839,8 @@ def test_watch_plain_env_var_via_run_watch(tmp_path, monkeypatch):
     watch_mod.run_watch(run_id, runs_dir=str(runs_dir), stdout=captured)
 
     output = captured.getvalue()
-    assert "[godel-watch]" in output, (
-        f"Expected [godel-watch] prefix lines from PlainLineLog, got:\n{output!r}"
+    assert "── workflow" in output, (
+        f"Expected plain-log workflow banner from PlainLineLog, got:\n{output!r}"
     )
 
 

@@ -260,7 +260,7 @@ class TestNonTTYFallback:
             watch_mod._producer_thread = original
 
         output = buf.getvalue()
-        assert "[godel-watch]" in output, f"Expected plain-log prefix. Got: {output!r}"
+        assert "▸" in output, f"Expected plain-log prefix. Got: {output!r}"
         assert "Traceback" not in output
 
     def test_run_watch_non_tty_exit_code_unchanged(self, tmp_path, monkeypatch):
@@ -649,7 +649,7 @@ class TestPlainLineLog:
             "ts": "2026-04-14T00:00:01+00:00",
         })
         out = buf.getvalue()
-        assert "[godel-watch]" in out
+        assert "▸" in out
         assert "step.enter" in out
         assert "my_step" in out
 
@@ -663,7 +663,6 @@ class TestPlainLineLog:
             "ts": "2026-04-14T00:00:02+00:00",
         })
         out = buf.getvalue()
-        assert "stdout" in out
         assert "hello world" in out
 
     def test_print_event_no_ts(self):
@@ -672,7 +671,7 @@ class TestPlainLineLog:
         log = _PlainLineLog(file=buf)
         log.print_event({"op": "agent.thought", "text": "thinking..."})
         out = buf.getvalue()
-        assert "[godel-watch]" in out
+        assert "thinking..." in out
 
     def test_plain_loop_processes_all_events(self):
         """_plain_loop processes every event from the queue and stops on sentinel."""

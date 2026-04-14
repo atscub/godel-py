@@ -241,6 +241,17 @@ async def run(cmd: str, *, cwd: str | None = None, timeout: float | None = None,
                 parent_event_id=ctx.current_parent_event_id,
                 stream_path=new_stream_path,
             )
+        # Surface the command to the transcript so live watchers can show what
+        # shell input produced the stdout that follows.  Guarded on stream_agents
+        # to avoid bloating transcripts for workflows that didn't opt in.
+        if ctx and ctx.stream_agents and ctx.transcript is not None:
+            ctx.transcript.write_event(
+                "run.start",
+                step_path=tuple(ctx.step_stack),
+                stream_path=new_stream_path,
+                cmd=cmd,
+                cwd=cwd or "",
+            )
 
         token = _privileged.set(True)
         try:

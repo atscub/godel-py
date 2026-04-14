@@ -45,6 +45,14 @@ async def print(*values: object, sep: str = " ", end: str = "\n") -> None:
             step_local_seq=local_seq,
             parent_event_id=ctx.current_parent_event_id,
         )
+    if ctx and ctx.stream_agents and ctx.transcript is not None:
+        from godel._context import _current_stream_path
+        ctx.transcript.write_event(
+            "print",
+            step_path=tuple(ctx.step_stack),
+            stream_path=list(_current_stream_path.get() or []),
+            text=text.rstrip("\n"),
+        )
 
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, sys.stdout.write, text)

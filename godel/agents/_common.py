@@ -367,9 +367,9 @@ class _BaseAgent:
 
         sink = None
         observer_token = None
+        step_path = tuple(ctx.step_stack) if ctx else ()
+        stream_path = list(_current_stream_path.get()) if streaming else []
         if streaming:
-            step_path = tuple(ctx.step_stack) if ctx else ()
-            stream_path = list(_current_stream_path.get())
             sink = AdapterStreamSink(
                 self._make_adapter(),
                 ctx.transcript,
@@ -377,6 +377,17 @@ class _BaseAgent:
                 stream_path=stream_path,
             )
             observer_token = _line_observer.set(sink.feed)
+            # Surface the prompt as its own transcript event so watchers can
+            # pair input → output.  Without this the user only ever sees the
+            # agent's reply, breaking continuity.
+            ctx.transcript.write_event(
+                "agent.prompt",
+                step_path=step_path,
+                stream_path=stream_path,
+                model=model_id,
+                prompt=prompt,
+                session_id=self._session_id,
+            )
 
         try:
             result = await run(cmd, cwd=self._cwd)
@@ -386,6 +397,14 @@ class _BaseAgent:
                 sink.close()
 
         text, new_session_id = self._parse_output(result.stdout)
+        if streaming:
+            ctx.transcript.write_event(
+                "agent.response",
+                step_path=step_path,
+                stream_path=stream_path,
+                model=model_id,
+                text=text,
+            )
         if persist_session and new_session_id:
             self._session_id = new_session_id
         return text

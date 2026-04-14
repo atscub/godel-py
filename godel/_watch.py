@@ -318,20 +318,54 @@ class WatchApp:
 # Plain line-log fallback (non-TTY / dumb terminal / non-UTF-8 locale)
 # ---------------------------------------------------------------------------
 
+_ANSI = {
+    "dim": "\x1b[2m",
+    "bold": "\x1b[1m",
+    "cyan": "\x1b[36m",
+    "green": "\x1b[32m",
+    "yellow": "\x1b[33m",
+    "magenta": "\x1b[35m",
+    "blue": "\x1b[34m",
+    "red": "\x1b[31m",
+    "reset": "\x1b[0m",
+}
+
+
+def _wrap_multiline(text: str, *, indent: str, width: int = 100) -> list[str]:
+    """Split *text* into display lines, preserving existing newlines and
+    soft-wrapping overlong lines.  Continuation lines are prefixed by *indent*."""
+    out: list[str] = []
+    for raw in text.split("\n"):
+        if not raw:
+            out.append("")
+            continue
+        while len(raw) > width:
+            cut = raw.rfind(" ", 0, width)
+            if cut <= 0:
+                cut = width
+            out.append(raw[:cut])
+            raw = indent + raw[cut:].lstrip()
+        out.append(raw)
+    return out
+
+
 class _PlainLineLog:
-    """Minimal line-by-line printer used when the TUI cannot be shown.
+    """Line-based renderer used when the Rich TUI cannot (or should not) run.
 
-    Each event produces one line on *stdout* of the form::
+    Output is modeled after how ``claude`` itself renders a session in a
+    terminal: one stanza per event, indented by step depth, with prompts,
+    commands, tool calls and their results all shown inline so the reader can
+    follow the conversation end-to-end.
 
-        [godel-watch] <op>  <key=value …>
-
-    This class intentionally mirrors the ``WatchApp`` interface used in
+    The class intentionally mirrors the :class:`WatchApp` lifecycle used in
     :func:`run_watch` so the main loop can treat both uniformly.
     """
 
     def __init__(self, *, file: IO | None = None) -> None:
         self._file = file or sys.stdout
         self._model = WatchModel.empty()
+        self._use_color = bool(getattr(self._file, "isatty", lambda: False)())
+        self._last_step_path: tuple[str, ...] | None = None
 
     def start(self) -> None:
         pass
@@ -345,28 +379,149 @@ class _PlainLineLog:
     def __exit__(self, *_) -> None:
         pass
 
-    def print_event(self, event: dict) -> None:
-        """Print a single event as a prefixed line."""
-        op = event.get("op", "?")
-        ts = event.get("ts", "")
-        prefix = f"[godel-watch]"
-        if ts:
-            prefix += f" {ts[:19]}"
-        prefix += f"  {op}"
+    # ------------------------------------------------------------------
+    # Rendering helpers
+    # ------------------------------------------------------------------
 
+    def _c(self, color: str, text: str) -> str:
+        if not self._use_color:
+            return text
+        return f"{_ANSI.get(color, '')}{text}{_ANSI['reset']}"
+
+    def _emit(self, lines: list[str]) -> None:
+        for line in lines:
+            print(line, file=self._file, flush=True)
+
+    def _step_header(self, step_path: list | tuple) -> None:
+        sp = tuple(step_path or ())
+        if sp == self._last_step_path:
+            return
+        self._last_step_path = sp
+        if not sp:
+            return
+        indent = "  " * (len(sp) - 1)
+        label = " / ".join(str(p) for p in sp)
+        self._emit([f"{indent}{self._c('cyan', '▸ ' + label)}"])
+
+    # ------------------------------------------------------------------
+    # Main dispatch
+    # ------------------------------------------------------------------
+
+    def print_event(self, event: dict) -> None:
+        op = event.get("op", "?")
+        step_path = event.get("step_path") or []
+        depth = len(step_path)
+        pad = "  " * max(depth, 1)
+        cont = pad + "    "  # continuation indent for multi-line text
+
+        # Group events by step for readability.
+        if op not in ("rotate", "WORKFLOW_FINISHED"):
+            self._step_header(step_path)
+
+        if op == "agent.prompt":
+            prompt = event.get("prompt", "")
+            model = event.get("model", "")
+            header = pad + self._c("magenta", f"› prompt") + (f" {self._c('dim', '(' + model + ')')}" if model else "")
+            self._emit([header] + [cont + ln for ln in _wrap_multiline(prompt, indent="")])
+            return
+
+        if op == "agent.response":
+            text = event.get("text", "")
+            self._emit(
+                [pad + self._c("green", "‹ response")]
+                + [cont + ln for ln in _wrap_multiline(text, indent="")]
+            )
+            return
+
+        if op == "agent.thought":
+            text = event.get("text", "")
+            self._emit(
+                [pad + self._c("blue", "• thinking")]
+                + [cont + ln for ln in _wrap_multiline(text, indent="")]
+            )
+            return
+
+        if op == "agent.tool_call":
+            tool = event.get("tool", "?")
+            inp = event.get("input")
+            head = pad + self._c("yellow", f"⚒ {tool}")
+            body: list[str] = [head]
+            if inp is not None:
+                import json as _json
+                try:
+                    rendered = _json.dumps(inp, indent=2, ensure_ascii=False)
+                except Exception:
+                    rendered = repr(inp)
+                for ln in rendered.split("\n"):
+                    body.append(cont + ln)
+            self._emit(body)
+            return
+
+        if op == "agent.tool_result":
+            tool = event.get("tool", "?")
+            out = event.get("output")
+            if isinstance(out, (dict, list)):
+                import json as _json
+                try:
+                    text = _json.dumps(out, indent=2, ensure_ascii=False)
+                except Exception:
+                    text = repr(out)
+            else:
+                text = "" if out is None else str(out)
+            lines = text.split("\n")
+            shown = lines[:8]
+            more = len(lines) - len(shown)
+            body = [pad + self._c("dim", f"↳ {tool} result")]
+            body += [cont + ln for ln in shown]
+            if more > 0:
+                body.append(cont + self._c("dim", f"… (+{more} more lines)"))
+            self._emit(body)
+            return
+
+        if op == "agent.raw":
+            text = event.get("text", "")
+            reason = event.get("reason", "")
+            head = pad + self._c("red", "! raw") + (f" {self._c('dim', '(' + reason + ')')}" if reason else "")
+            self._emit([head] + [cont + ln for ln in _wrap_multiline(text, indent="")])
+            return
+
+        if op == "run.start":
+            cmd = event.get("cmd", "")
+            self._emit(
+                [pad + self._c("yellow", "$ ") + cmd.split("\n", 1)[0][:200]]
+                + ([cont + ln for ln in cmd.split("\n")[1:]] if "\n" in cmd else [])
+            )
+            return
+
+        if op == "stdout":
+            line = event.get("line", "")
+            self._emit([pad + self._c("dim", "│ ") + line])
+            return
+
+        if op == "print":
+            text = event.get("text", "")
+            self._emit(
+                [pad + self._c("bold", "» ") + (text.split("\n", 1)[0] if text else "")]
+                + [cont + ln for ln in text.split("\n")[1:]]
+            )
+            return
+
+        if op == "WORKFLOW_FINISHED":
+            status = event.get("status", "FINISHED")
+            color = "green" if status == "FINISHED" else "red"
+            self._emit([self._c(color, f"── workflow {status.lower()} ──")])
+            return
+
+        # Fallback for any other / future op: compact key=val line.
         extras = []
-        for key in ("step_path", "stream_path", "text", "line", "tool", "status"):
+        for key in ("stream_path", "text", "line", "tool", "status"):
             val = event.get(key)
             if val:
                 if isinstance(val, list):
                     val = "/".join(str(v) for v in val)
                 extras.append(f"{key}={val!r}")
-        if extras:
-            suffix = "  " + "  ".join(extras)
-        else:
-            suffix = ""
-
-        print(prefix + suffix, file=self._file, flush=True)
+        suffix = ("  " + "  ".join(extras)) if extras else ""
+        self._emit([pad + self._c("dim", f"· {op}") + suffix])
 
 
 # ---------------------------------------------------------------------------
