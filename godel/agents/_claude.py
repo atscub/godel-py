@@ -47,6 +47,8 @@ class _ClaudeCodeAgent(_BaseAgent):
         # regular json format otherwise (preserves pre-change output shape).
         output_format = "stream-json" if streaming else "json"
         cmd_parts = ["claude", "--output-format", output_format]
+        if streaming:
+            cmd_parts.append("--verbose")
         if self._skip_permissions:
             cmd_parts.append("--dangerously-skip-permissions")
         if tools == []:

@@ -67,6 +67,8 @@ import os
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
+
+from godel._context import _privileged
 from typing import IO
 
 from godel._redact import RedactorRegistry
@@ -114,7 +116,11 @@ class TranscriptWriter:
         redactors: list | None = None,
     ) -> None:
         self._run_dir = Path(run_dir)
-        self._run_dir.mkdir(parents=True, exist_ok=True)
+        token = _privileged.set(True)
+        try:
+            self._run_dir.mkdir(parents=True, exist_ok=True)
+        finally:
+            _privileged.reset(token)
 
         env_max = os.environ.get("GODEL_TRANSCRIPT_MAX_BYTES")
         if max_bytes is not None:
@@ -298,7 +304,11 @@ class TranscriptWriter:
         restored — crash recovery is out of scope for v1.
         """
         path = self._run_dir / _FILENAME
-        self._file = open(path, "a", buffering=1, encoding="utf-8")  # noqa: WPS515
+        token = _privileged.set(True)
+        try:
+            self._file = open(path, "a", buffering=1, encoding="utf-8")  # noqa: WPS515
+        finally:
+            _privileged.reset(token)
         self._file_size = path.stat().st_size
         self._current_file_has_real_event = False
         if self._file_size == 0:
