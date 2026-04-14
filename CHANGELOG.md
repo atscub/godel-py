@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v1.3.0 (2026-04-14)
+
+### Bug Fixes
+
+- **agents**: Emit all content blocks from multi-block assistant events; add UTF-8 tests
+  ([`5fb6df4`](https://github.com/atscub/godel-py/commit/5fb6df4ace230ab6c89d76429896cf2d7c35bafa))
+
+### Features
+
+- **agents**: Wire Copilot + Claude agents to transcript (godel-py-5pl.4)
+  ([`77b6083`](https://github.com/atscub/godel-py/commit/77b608320573e22c36c188040249c8b3ffbfdb3b))
+
+- **tail**: Replace monolithic _fmt_event allow-list with formatter registry (godel-py-5pl.9)
+  ([`3581758`](https://github.com/atscub/godel-py/commit/358175811e065fe274068ea6039400a200e1e009))
+
+
 ## v1.2.2 (2026-04-13)
 
 ### Bug Fixes
