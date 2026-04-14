@@ -628,6 +628,14 @@ def test_watch_plain_flag_forces_plain_log(tmp_path):
     Even though the test process is not a TTY, the presence of [godel-watch]
     prefix lines in stdout is the observable signature of _PlainLineLog.
     We verify the flag is accepted and the command exits cleanly.
+
+    Limitation: ``subprocess.run(..., capture_output=True)`` forces a non-TTY
+    pipe, so ``_use_plain_fallback()`` already returns True here — this test
+    would still pass even if the CLI silently dropped ``--plain``.  The
+    deliberate ``plain=True`` code path is exercised by
+    ``test_watch_plain_flag_via_run_watch`` below; argparse acceptance of
+    the flag is verified by ``test_watch_plain_help_shows_flag``.  A real
+    TTY-context regression test would require pexpect / ``script -q``.
     """
     run_id = "plain-flag-test"
     runs_dir = tmp_path / "runs"
@@ -649,7 +657,12 @@ def test_watch_plain_flag_forces_plain_log(tmp_path):
 
 
 def test_watch_plain_short_flag(tmp_path):
-    """``godel watch <run_id> -p`` (short form) is equivalent to --plain."""
+    """``godel watch <run_id> -p`` (short form) is equivalent to --plain.
+
+    Same TTY-detection limitation as ``test_watch_plain_flag_forces_plain_log``:
+    capture_output=True already triggers the non-TTY auto-fallback.  This test
+    primarily verifies that argparse accepts ``-p`` as the short form.
+    """
     run_id = "plain-short-test"
     runs_dir = tmp_path / "runs"
     _write_transcript_dir(runs_dir, run_id)
@@ -669,7 +682,13 @@ def test_watch_plain_short_flag(tmp_path):
 
 
 def test_watch_plain_env_var(tmp_path):
-    """``GODEL_WATCH_PLAIN=1 godel watch <run_id>`` forces plain line-log."""
+    """``GODEL_WATCH_PLAIN=1 godel watch <run_id>`` forces plain line-log.
+
+    Same TTY-detection limitation as ``test_watch_plain_flag_forces_plain_log``.
+    The deterministic env-var → run_watch() handoff is exercised by
+    ``test_watch_plain_env_var_via_run_watch``; this test verifies the env var
+    survives a real subprocess invocation.
+    """
     run_id = "plain-env-test"
     runs_dir = tmp_path / "runs"
     _write_transcript_dir(runs_dir, run_id)
@@ -695,7 +714,6 @@ def test_watch_plain_flag_via_run_watch(tmp_path):
     without going through the CLI subprocess.
     """
     import io as _io
-    from unittest.mock import patch
     from godel import _watch as watch_mod
 
     run_id = "rw-plain-unit"

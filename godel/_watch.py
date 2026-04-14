@@ -21,6 +21,8 @@ when any of the following conditions are true:
 * ``sys.stdout.isatty()`` is ``False``
 * The ``TERM`` environment variable equals ``"dumb"``
 * The locale encoding is not UTF-8 (checked via ``locale.getpreferredencoding``)
+* The caller passes ``plain=True`` to :func:`run_watch` (CLI: ``--plain`` / ``-p``)
+* The ``GODEL_WATCH_PLAIN`` environment variable is set to ``"1"``
 
 Terminal hazards
 ----------------
