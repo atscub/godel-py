@@ -318,6 +318,8 @@ class WatchApp:
 # Plain line-log fallback (non-TTY / dumb terminal / non-UTF-8 locale)
 # ---------------------------------------------------------------------------
 
+_SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
 _ANSI = {
     "dim": "\x1b[2m",
     "bold": "\x1b[1m",
@@ -366,6 +368,12 @@ class _PlainLineLog:
         self._model = WatchModel.empty()
         self._use_color = bool(getattr(self._file, "isatty", lambda: False)())
         self._last_step_path: tuple[str, ...] | None = None
+        # Spinner state: pending agent call awaiting a response on the same
+        # stream_path.  Only animated on TTY output; no-op elsewhere.
+        self._pending_stream: tuple | None = None
+        self._pending_depth: int = 0
+        self._spin_idx: int = 0
+        self._spinner_active: bool = False
 
     def start(self) -> None:
         pass
@@ -392,6 +400,35 @@ class _PlainLineLog:
         for line in lines:
             print(line, file=self._file, flush=True)
 
+    # ------------------------------------------------------------------
+    # Spinner (thinking animation)
+    # ------------------------------------------------------------------
+
+    def tick(self) -> None:
+        """Advance the spinner one frame.  Called from the event loop when
+        the queue is idle and there's a pending agent call."""
+        if not self._use_color or self._pending_stream is None:
+            return
+        frame = _SPINNER_FRAMES[self._spin_idx % len(_SPINNER_FRAMES)]
+        self._spin_idx += 1
+        pad = "  " * max(self._pending_depth, 1)
+        msg = f"{pad}{_ANSI['dim']}{frame} thinking…{_ANSI['reset']}"
+        try:
+            self._file.write("\r\x1b[K" + msg)
+            self._file.flush()
+        except Exception:
+            pass
+        self._spinner_active = True
+
+    def _clear_spinner(self) -> None:
+        if self._spinner_active:
+            try:
+                self._file.write("\r\x1b[K")
+                self._file.flush()
+            except Exception:
+                pass
+            self._spinner_active = False
+
     def _step_header(self, step_path: list | tuple) -> None:
         sp = tuple(step_path or ())
         if sp == self._last_step_path:
@@ -410,9 +447,18 @@ class _PlainLineLog:
     def print_event(self, event: dict) -> None:
         op = event.get("op", "?")
         step_path = event.get("step_path") or []
+        stream_path = tuple(event.get("stream_path") or [])
         depth = len(step_path)
         pad = "  " * max(depth, 1)
         cont = pad + "    "  # continuation indent for multi-line text
+
+        # Any visible output must first wipe any in-progress spinner line.
+        self._clear_spinner()
+
+        # An event on the pending agent's stream means the response (or a
+        # tool call / thought) is arriving — stop the spinner.
+        if self._pending_stream is not None and stream_path == self._pending_stream and op != "agent.prompt":
+            self._pending_stream = None
 
         # Group events by step for readability.
         if op not in ("rotate", "WORKFLOW_FINISHED"):
@@ -423,6 +469,10 @@ class _PlainLineLog:
             model = event.get("model", "")
             header = pad + self._c("magenta", f"› prompt") + (f" {self._c('dim', '(' + model + ')')}" if model else "")
             self._emit([header] + [cont + ln for ln in _wrap_multiline(prompt, indent="")])
+            # Arm the spinner for the forthcoming response.
+            self._pending_stream = stream_path
+            self._pending_depth = depth
+            self._spin_idx = 0
             return
 
         if op == "agent.response":
@@ -881,12 +931,16 @@ def _plain_loop(
 ) -> None:
     """Event loop for the plain line-log fallback.
 
-    Reads events from *q* and prints them one-by-one.
+    Reads events from *q* and prints them one-by-one.  Idle ticks drive the
+    thinking-spinner so prompts in flight animate while awaiting a response.
     """
+    # Tick the spinner roughly every 100ms regardless of event arrival rate.
+    spinner_interval = 0.1
     while True:
         try:
-            item = q.get(timeout=timer_interval)
+            item = q.get(timeout=spinner_interval)
         except queue.Empty:
+            plain_log.tick()
             continue
 
         if item is None:
