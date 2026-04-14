@@ -357,10 +357,34 @@ class _PlainLineLog:
 # Signal handling
 # ---------------------------------------------------------------------------
 
-def _install_terminal_restore_signals(app: WatchApp) -> list:
-    """Install signal handlers that restore the terminal before default action.
+def _install_terminal_restore_signals(
+    app: WatchApp,
+    pending_signal: list,
+) -> list:
+    """Install signal handlers that flag a pending signal for the main loop.
 
-    Returns the list of previous handlers (for cleanup / testing).
+    The handler is **async-signal-safe**: it only sets a flag (``pending_signal``
+    is a single-element list used as a mutable cell) and does not touch any
+    Rich state.  The main render loop observes the flag, calls
+    :meth:`WatchApp.stop` under normal control flow, restores the default
+    disposition, and re-raises the signal for the OS to handle.
+
+    This avoids the deadlock risk of calling ``Live.stop()`` directly from
+    a signal handler when Rich is mid-render and holds its internal lock.
+
+    Parameters
+    ----------
+    app:
+        The ``WatchApp`` to stop on signal (unused directly by the handler;
+        kept for parity with the call site and future extensions).
+    pending_signal:
+        A single-element mutable list.  The handler writes the signal number
+        into ``pending_signal[0]``; the caller observes it.
+
+    Returns
+    -------
+    list
+        Pairs of ``(signum, previous_handler)`` for cleanup.
     """
     previous: list = []
     _signals = []
@@ -369,11 +393,11 @@ def _install_terminal_restore_signals(app: WatchApp) -> list:
     if hasattr(signal, "SIGHUP"):
         _signals.append(signal.SIGHUP)
 
-    def _handler(signum, frame, _app=app, _sig=None):
-        _app.stop()
-        # Restore default disposition and re-raise so the OS can handle it.
-        signal.signal(signum, signal.SIG_DFL)
-        os.kill(os.getpid(), signum)
+    def _handler(signum, frame):
+        # Async-signal-safe: only write a Python int into a pre-allocated list
+        # slot.  Do NOT call Rich / Live.stop() here — that would risk deadlock
+        # if the signal lands while Rich holds its internal lock.
+        pending_signal[0] = signum
 
     for sig in _signals:
         try:
@@ -460,24 +484,66 @@ def _producer_thread(
 
     Pushes raw dicts (parsed JSON lines) into *q*.  Pushes ``None`` as the
     end-of-stream sentinel when the tail reader is exhausted or errors.
+
+    Back-pressure policy: if *q* is bounded (``maxsize > 0``) and full, the
+    **oldest** queued event is dropped to make room for the new one.  This
+    preserves the most-recent run state at the cost of lost scrollback.
+    A single warning is logged per producer-thread session.
     """
-    import json
+    import logging
     from godel._tail import TranscriptTail, TranscriptTailError
+
+    logger_ = logging.getLogger(__name__)
+    overflow_warned = False
+
+    def _put_with_drop_oldest(item):
+        nonlocal overflow_warned
+        try:
+            q.put_nowait(item)
+            return
+        except queue.Full:
+            if not overflow_warned:
+                logger_.warning(
+                    "watch event queue full (maxsize=%s); dropping oldest "
+                    "events to keep pace with producer",
+                    q.maxsize,
+                )
+                overflow_warned = True
+            # Drop oldest, then append.  Races with the consumer are benign:
+            # if the consumer drains concurrently, put_nowait may now succeed
+            # immediately; worst case we drop one extra oldest item.
+            try:
+                q.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                q.put_nowait(item)
+            except queue.Full:
+                # Give up silently — consumer is making progress, next put
+                # will likely succeed.
+                pass
 
     try:
         reader = TranscriptTail.from_run(run_id, runs_dir)
-        for raw_line in reader:
-            # TranscriptTail yields parsed event dicts
-            q.put(raw_line if isinstance(raw_line, dict) else raw_line)
+        for event in reader:
+            _put_with_drop_oldest(event)
     except TranscriptTailError as exc:
-        # Non-fatal: push sentinel so the main loop can exit cleanly.
-        import logging
-        logging.getLogger(__name__).warning("TranscriptTail error: %s", exc)
+        logger_.warning("TranscriptTail error: %s", exc)
     except Exception as exc:
-        import logging
-        logging.getLogger(__name__).warning("Producer thread error: %s", exc)
+        logger_.warning("Producer thread error: %s", exc)
     finally:
-        q.put(None)
+        # Sentinel must always get through — use blocking put so we never
+        # strand the main loop waiting for EOS.
+        try:
+            q.put(None, timeout=1.0)
+        except queue.Full:
+            # Queue is full AND consumer is not draining — best effort: drop
+            # oldest and retry once.
+            try:
+                q.get_nowait()
+                q.put_nowait(None)
+            except (queue.Empty, queue.Full):
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -485,44 +551,75 @@ def _producer_thread(
 # ---------------------------------------------------------------------------
 
 def _render_loop(
-    renderer,  # WatchApp | _PlainLineLog
+    renderer,  # WatchApp
     q: "queue.Queue[dict | None]",
-    plain: bool,
     *,
     timer_interval: float = _TIMER_INTERVAL,
     burst_threshold: int = _BURST_THRESHOLD,
+    pending_signal: list | None = None,
 ) -> None:
     """Main loop: drain queue, coalesce bursts, update renderer.
 
     Uses a ``timer_interval``-second timer to trigger periodic renders even
-    when the queue is quiet.
+    when the queue is quiet.  Guarantees a **final flush render** before
+    exiting on end-of-stream so that fully-completed runs still display their
+    final state.
+
+    Parameters
+    ----------
+    renderer:
+        An object with an ``update(model)`` method (typically a ``WatchApp``).
+    q:
+        Queue producing event dicts; ``None`` sentinel signals end-of-stream.
+    timer_interval, burst_threshold:
+        Coalescing knobs.
+    pending_signal:
+        Optional single-element list used by the signal handler to communicate
+        a pending SIGTSTP/SIGHUP.  When set, the loop stops the renderer,
+        restores default disposition, and re-raises the signal.
     """
     model = WatchModel.empty()
     last_render = time.monotonic()
+    any_update_since_last_render = False
 
     while True:
+        # Check for a pending signal before doing work — handler-to-loop
+        # handoff, safe to call Rich here (no signal context).
+        if pending_signal is not None and pending_signal[0] is not None:
+            signum = pending_signal[0]
+            try:
+                renderer.stop()
+            finally:
+                signal.signal(signum, signal.SIG_DFL)
+                os.kill(os.getpid(), signum)
+            return
+
         model, did_update, end_of_stream = _drain_queue(
             q, model, burst_threshold=burst_threshold
         )
 
+        if did_update:
+            any_update_since_last_render = True
+
         now = time.monotonic()
         elapsed = now - last_render
 
-        should_render = did_update and (
-            elapsed >= timer_interval
-            or q.qsize() == 0
-        )
+        # Render when the timer elapsed AND we have something new.  The
+        # previous `q.qsize() == 0` branch was unreliable because the ``None``
+        # sentinel sits in the queue during the last real-event drain — that
+        # masked fast-run progress entirely.
+        should_render = any_update_since_last_render and elapsed >= timer_interval
 
         if should_render:
-            if plain:
-                # For plain fallback, we rendered per-event in the producer.
-                # Nothing extra to do here — model is tracked for completeness.
-                pass
-            else:
-                renderer.update(model)
+            renderer.update(model)
             last_render = now
+            any_update_since_last_render = False
 
         if end_of_stream:
+            # Guarantee a final flush render if any events were applied since
+            # the last paint.  Fixes the "0 renders on fast run" bug.
+            if any_update_since_last_render:
+                renderer.update(model)
             break
 
         # Avoid busy-spinning when queue is empty.
@@ -561,6 +658,13 @@ def _plain_loop(
 # Public entry point
 # ---------------------------------------------------------------------------
 
+# Default bound on the event queue.  A fast producer (e.g. a replay burst)
+# should not be able to exhaust memory if the renderer stalls.  On overflow
+# ``_producer_thread`` drops the *oldest* event and logs a warning, which
+# preserves the most-recent run state at the cost of lost scrollback.
+_EVENT_QUEUE_MAXSIZE = 10_000
+
+
 def run_watch(
     run_id: str,
     *,
@@ -568,6 +672,7 @@ def run_watch(
     stdout: IO | None = None,
     _burst_threshold: int = _BURST_THRESHOLD,
     _timer_interval: float = _TIMER_INTERVAL,
+    _queue_maxsize: int = _EVENT_QUEUE_MAXSIZE,
 ) -> None:
     """Start the live TUI (or plain line-log) for *run_id*.
 
@@ -579,12 +684,12 @@ def run_watch(
         Directory containing per-run transcript directories.
     stdout:
         Output stream override (used by tests to capture output).
-    _burst_threshold, _timer_interval:
-        Coalescing knobs — exposed for testing only.
+    _burst_threshold, _timer_interval, _queue_maxsize:
+        Coalescing / back-pressure knobs — exposed for testing only.
     """
     plain = _use_plain_fallback(stdout)
 
-    event_q: queue.Queue[dict | None] = queue.Queue()
+    event_q: queue.Queue[dict | None] = queue.Queue(maxsize=_queue_maxsize)
 
     # Start producer thread
     t = threading.Thread(
@@ -602,18 +707,19 @@ def run_watch(
     else:
         console = Console(file=stdout or sys.stdout)
         app = WatchApp(run_id, console=console)
-        previous_signals = _install_terminal_restore_signals(app)
+        # Single-element mutable cell shared with the signal handler.  The
+        # handler writes the received signum; the render loop observes it.
+        pending_signal: list = [None]
+        previous_signals = _install_terminal_restore_signals(app, pending_signal)
         try:
             with app:
                 _render_loop(
                     app,
                     event_q,
-                    plain=False,
                     timer_interval=_timer_interval,
                     burst_threshold=_burst_threshold,
+                    pending_signal=pending_signal,
                 )
-        except KeyboardInterrupt:
-            app.stop()
         finally:
             _restore_signals(previous_signals)
 
