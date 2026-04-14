@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.9.1 (2026-04-14)
+
+### Bug Fixes
+
+- **watch**: Unblock --watch + agent streaming end-to-end
+  ([`20316bb`](https://github.com/atscub/godel-py/commit/20316bb08f17a46e6187b623629f19f208e3c32b))
+
+
 ## v1.9.0 (2026-04-14)
 
 ### Bug Fixes
