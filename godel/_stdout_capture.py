@@ -47,6 +47,7 @@ step.  Use ``GODEL_NO_CAPTURE=1`` whenever you need a debugger.
 """
 from __future__ import annotations
 
+import logging
 import os
 import threading
 from contextlib import contextmanager
@@ -54,6 +55,8 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     pass
+
+_logger = logging.getLogger(__name__)
 
 
 @runtime_checkable
@@ -120,7 +123,10 @@ def capture(
         # so binary noise from child processes doesn't kill the thread.
         with os.fdopen(r, "r", buffering=1, errors="replace") as pipe_r:
             for line in pipe_r:
-                chunk = line.rstrip("\n")
+                # NIT-1: strip both \n and bare \r (e.g. progress bars that
+                # emit carriage-return-terminated lines) so trailing control
+                # chars do not leak into the transcript chunk field.
+                chunk = line.rstrip("\r\n")
                 try:
                     transcript.write_event(
                         "stdout",
@@ -151,3 +157,15 @@ def capture(
         os.close(saved)
         # Wait up to 1 second for the reader to drain.
         t.join(timeout=1.0)
+        # WARN-3: if the reader thread did not exit within the join timeout
+        # (e.g. a transcript.write_event call is wedged), surface a warning so
+        # the silent expiry is observable in logs.  The thread remains daemon
+        # so it will not block interpreter shutdown.
+        if t.is_alive():
+            _logger.warning(
+                "godel stdout capture reader thread did not exit within 1s "
+                "after fd 1 restore (step_path=%r, stream_path=%r); "
+                "thread left running as daemon.",
+                _step_path,
+                _stream_path,
+            )

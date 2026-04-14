@@ -180,6 +180,7 @@ def workflow(
             _wf_transcript = None
             _wf_transcript_token = None
             _wf_owns_transcript = False  # True only when WE created the TranscriptWriter
+            _wf_owned_tmpdir: str | None = None
             if capture_stdout:
                 from godel._stdout_capture import capture as _wf_capture
                 # Reuse an already-injected transcript (e.g. from tests or a
@@ -190,8 +191,8 @@ def workflow(
                 else:
                     import tempfile
                     from godel._transcript import TranscriptWriter
-                    _wf_tmpdir = tempfile.mkdtemp(prefix="godel-wf-capture-")
-                    _wf_transcript = TranscriptWriter(_wf_tmpdir)
+                    _wf_owned_tmpdir = tempfile.mkdtemp(prefix="godel-wf-capture-")
+                    _wf_transcript = TranscriptWriter(_wf_owned_tmpdir)
                     _wf_transcript_token = _current_transcript.set(_wf_transcript)
                     _wf_owns_transcript = True
 
@@ -354,6 +355,13 @@ def workflow(
                         _wf_transcript.close()
                     except Exception:
                         pass
+                    # NIT-2: remove the temp directory we created for this run.
+                    if _wf_owned_tmpdir is not None:
+                        try:
+                            import shutil as _shutil
+                            _shutil.rmtree(_wf_owned_tmpdir, ignore_errors=True)
+                        except Exception:
+                            pass
                 if _wf_transcript_token is not None:
                     _current_transcript.reset(_wf_transcript_token)
 
@@ -537,22 +545,37 @@ def step(fn=None, *, name=None, idempotent=False, capture_stdout: bool = False):
                 # contextvar (set by the enclosing @workflow when it also opts in,
                 # or created lazily here for step-level capture).
                 if capture_stdout:
+                    import shutil
                     import tempfile
                     from godel._stdout_capture import capture as _capture
                     from godel._transcript import TranscriptWriter
                     tw = _current_transcript.get()
+                    _owns_transcript = False
+                    _owned_tmpdir: str | None = None
                     if tw is None:
                         # No workflow-level transcript: create a temp one for this step.
-                        _tmpdir = tempfile.mkdtemp(prefix="godel-capture-")
-                        tw = TranscriptWriter(_tmpdir, run_id=str(step_path))
+                        _owned_tmpdir = tempfile.mkdtemp(prefix="godel-capture-")
+                        tw = TranscriptWriter(_owned_tmpdir, run_id=str(step_path))
                         _owns_transcript = True
-                    else:
-                        _owns_transcript = False
                     _stream_path = list(_current_stream_path.get() or [])
-                    with _capture(step_path=list(step_path), stream_path=_stream_path, transcript=tw):
-                        result = await fn(*args, **kwargs)
-                    if _owns_transcript:
-                        tw.close()
+                    try:
+                        with _capture(step_path=list(step_path), stream_path=_stream_path, transcript=tw):
+                            result = await fn(*args, **kwargs)
+                    finally:
+                        # WARN-1 fix: close/cleanup the owned transcript even
+                        # when fn() raised, so the TranscriptWriter file handle
+                        # and mkdtemp dir are not leaked on the exception path.
+                        if _owns_transcript:
+                            try:
+                                tw.close()
+                            except Exception:
+                                pass
+                            # NIT-2: remove the temp directory we created.
+                            if _owned_tmpdir is not None:
+                                try:
+                                    shutil.rmtree(_owned_tmpdir, ignore_errors=True)
+                                except Exception:
+                                    pass
                 else:
                     result = await fn(*args, **kwargs)
                 if event:
