@@ -479,3 +479,99 @@ def test_ring_buffer_respects_size_over_fixture_stream():
     model = _feed_stream("simple_workflow.jsonl", ring_size=ring_size)
     for panel in model.panels.values():
         assert len(panel.ring) <= ring_size
+
+
+# ---------------------------------------------------------------------------
+# Read-only mapping guarantees (W1 fix)
+# ---------------------------------------------------------------------------
+
+def test_run_meta_is_read_only():
+    """Callers must not be able to mutate run_meta on a returned model."""
+    m = WatchModel.empty()
+    m = reduce_header(m, {"run_id": "abc"})
+    with pytest.raises(TypeError):
+        m.run_meta["run_id"] = "hacked"  # type: ignore[index]
+
+
+def test_steps_is_read_only():
+    m = WatchModel.empty()
+    m = reduce(m, _make_event("step.enter", step_path=["s"]))
+    with pytest.raises(TypeError):
+        m.steps[("s",)] = StepNode(path=("x",), status="running")  # type: ignore[index]
+
+
+def test_panels_is_read_only():
+    m = WatchModel.empty()
+    m = reduce(m, _make_event("stdout", stream_path=["w"], line="x"))
+    with pytest.raises(TypeError):
+        m.panels[("w",)] = StreamPanel(stream_path=("x",))  # type: ignore[index]
+
+
+def test_mutating_caller_copy_does_not_corrupt_model():
+    """Even if a caller copies run_meta into a local dict and mutates it, the
+    model's run_meta and subsequent merges must remain uncorrupted."""
+    m = WatchModel.empty()
+    m = reduce_header(m, {"run_id": "abc", "v": 1})
+    # Caller constructs a dict view and mutates it — model must be unaffected.
+    local = dict(m.run_meta)
+    local["run_id"] = "hacked"
+    assert m.run_meta["run_id"] == "abc"
+    # Further merge still operates on the original.
+    m2 = reduce_header(m, {"started_at": "2026-04-14T00:00:00+00:00"})
+    assert m2.run_meta["run_id"] == "abc"
+
+
+def test_empty_model_mappings_are_read_only():
+    """Even the default empty model must expose read-only mappings."""
+    m = WatchModel.empty()
+    with pytest.raises(TypeError):
+        m.run_meta["x"] = 1  # type: ignore[index]
+    with pytest.raises(TypeError):
+        m.steps[("a",)] = StepNode(path=("a",), status="running")  # type: ignore[index]
+    with pytest.raises(TypeError):
+        m.panels[("a",)] = StreamPanel(stream_path=("a",))  # type: ignore[index]
+
+
+# ---------------------------------------------------------------------------
+# Schema tolerance (N2)
+# ---------------------------------------------------------------------------
+
+def test_stream_event_missing_stream_path_skipped():
+    """Stream-op event lacking stream_path must not crash or add a () panel."""
+    m = WatchModel.empty()
+    e = {"op": "stdout", "line": "orphan", "ts": "2026-04-14T00:00:00+00:00"}
+    m2 = reduce(m, e)
+    assert m2 is m, "missing stream_path should be a same-object no-op"
+    assert () not in m2.panels
+    assert len(m2.panels) == 0
+
+
+def test_stream_event_empty_stream_path_skipped():
+    """Empty-list stream_path must not create a () panel key."""
+    m = WatchModel.empty()
+    e = _make_event("stdout", stream_path=[], line="orphan")
+    m2 = reduce(m, e)
+    assert m2 is m
+    assert () not in m2.panels
+
+
+def test_stream_event_null_stream_path_skipped():
+    """stream_path=None must not crash or pollute."""
+    m = WatchModel.empty()
+    e = {"op": "agent.thought", "stream_path": None, "text": "x",
+         "ts": "2026-04-14T00:00:00+00:00"}
+    m2 = reduce(m, e)
+    assert m2 is m
+    assert () not in m2.panels
+
+
+def test_step_event_missing_step_path_still_skipped():
+    """step.enter without step_path must not crash or create a () step key.
+
+    (Covered at the op level already; this pins the schema-tolerance contract.)
+    """
+    m = WatchModel.empty()
+    e = {"op": "step.enter", "ts": "2026-04-14T00:00:00+00:00"}
+    m2 = reduce(m, e)
+    assert m2 is m
+    assert () not in m2.steps
