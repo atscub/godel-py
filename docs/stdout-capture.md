@@ -140,6 +140,7 @@ This is useful when:
 | **Large output** | Captured output is streamed line-by-line through a pipe, not buffered indefinitely — but steps that emit enormous stdout volumes will still pay the serialisation cost on the reader thread. |
 | **`parallel()`** | See [above](#parallel-incompatibility). |
 | **pytest stdout capture** | pytest replaces `sys.stdout` at the Python object level; the fd-level redirect captures subprocess output but `print()` calls go through pytest's capture instead. Use `capsys.disabled()` or `os.write(1, ...)` in tests that exercise capture. |
+| **asyncio cross-task contamination** | fd 1 is process-global, so if a captured step `await`s and another coroutine in the same event loop writes to stdout while the step is suspended, that output is routed through the captured step's pipe and tagged with the *captured step's* `step_path` — even though it originated in an unrelated task. This is inherent to single-event-loop, process-global fd semantics; there is no safe interleaving. For workloads that fan out over concurrent stdout-producing tasks, prefer `capture_stdout=True` at the `@workflow` level (single pipe, workflow-scoped tagging) over per-`@step` capture. |
 
 ---
 

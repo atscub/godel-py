@@ -510,6 +510,77 @@ def test_step_without_capture_does_not_emit_stdout_events():
     assert stdout_evts == [], f"Unexpected stdout events: {stdout_evts}"
 
 
+def test_step_capture_cleans_up_owned_transcript_on_exception(monkeypatch):
+    """WARN-1 regression: when @step(capture_stdout=True) owns its transcript
+    (no workflow-level transcript is active) and the step body raises, the
+    TranscriptWriter must still be closed and the temp mkdtemp directory
+    removed — no file handle or dir leak on the exception path.
+    """
+    import tempfile as _tempfile
+
+    created_dirs: list[str] = []
+    real_mkdtemp = _tempfile.mkdtemp
+
+    def _tracking_mkdtemp(*a, **kw):
+        d = real_mkdtemp(*a, **kw)
+        created_dirs.append(d)
+        return d
+
+    monkeypatch.setattr(_tempfile, "mkdtemp", _tracking_mkdtemp)
+
+    @step(capture_stdout=True)
+    async def boom_step():
+        os.write(1, b"before the boom\n")
+        raise RuntimeError("boom from step body")
+
+    @workflow
+    async def wf():
+        return await boom_step()
+
+    with pytest.raises(RuntimeError, match="boom from step body"):
+        asyncio.run(wf())
+
+    # Any temp dirs created with the godel-capture- prefix (owned by the
+    # step-level capture path) must be gone, even though the step raised.
+    leaked = [
+        d for d in created_dirs
+        if os.path.basename(d).startswith("godel-capture-")
+        and os.path.exists(d)
+    ]
+    assert leaked == [], f"Temp dirs leaked after step exception: {leaked}"
+
+
+def test_workflow_capture_cleans_up_owned_transcript_on_exception(monkeypatch):
+    """Companion regression for the @workflow(capture_stdout=True) path: the
+    mkdtemp dir is removed even when the workflow body raises.
+    """
+    import tempfile as _tempfile
+
+    created_dirs: list[str] = []
+    real_mkdtemp = _tempfile.mkdtemp
+
+    def _tracking_mkdtemp(*a, **kw):
+        d = real_mkdtemp(*a, **kw)
+        created_dirs.append(d)
+        return d
+
+    monkeypatch.setattr(_tempfile, "mkdtemp", _tracking_mkdtemp)
+
+    @workflow(capture_stdout=True)
+    async def wf_boom():
+        raise RuntimeError("boom from workflow body")
+
+    with pytest.raises(RuntimeError, match="boom from workflow body"):
+        asyncio.run(wf_boom())
+
+    leaked = [
+        d for d in created_dirs
+        if os.path.basename(d).startswith("godel-wf-capture-")
+        and os.path.exists(d)
+    ]
+    assert leaked == [], f"Workflow temp dirs leaked: {leaked}"
+
+
 def test_step_capture_subprocess_in_workflow():
     """Subprocess stdout inside @step(capture_stdout=True) lands in transcript."""
     from godel._context import _current_transcript
