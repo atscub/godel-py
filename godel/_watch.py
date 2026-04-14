@@ -536,6 +536,13 @@ class _PlainLineLog:
             return
 
         if op == "run.start":
+            # Suppress nested run.start: when stream_path depth > 1 the
+            # command was launched by an agent (or another run) whose own
+            # event already surfaces the semantic input.  Showing the raw
+            # `claude -p ...` shell invocation next to the agent.prompt is
+            # redundant noise.
+            if len(stream_path) > 1:
+                return
             cmd = event.get("cmd", "")
             self._emit(
                 [pad + self._c("yellow", "$ ") + cmd.split("\n", 1)[0][:200]]
