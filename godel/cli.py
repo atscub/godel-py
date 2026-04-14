@@ -81,7 +81,14 @@ def _spawn_watch_subprocess(run_id: str, runs_dir: str = "./runs") -> "subproces
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     else:
         kwargs["start_new_session"] = True
-    return subprocess.Popen(cmd, **kwargs)
+    # The watcher is a godel-internal subprocess, not a workflow operation, so
+    # bypass the strict-mode audit hook that blocks subprocess.Popen.
+    from godel._context import _privileged
+    token = _privileged.set(True)
+    try:
+        return subprocess.Popen(cmd, **kwargs)
+    finally:
+        _privileged.reset(token)
 
 
 @click.group()

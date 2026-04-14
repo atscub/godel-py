@@ -1,6 +1,24 @@
 """Godel — deterministic orchestrator for AI agent workflows."""
 __version__ = "1.8.1"
 
+import sys
+from pathlib import Path
+
+
+def version() -> str:
+    """Return the package version string from pyproject.toml."""
+    pyproject = Path(__file__).parent.parent / "pyproject.toml"
+    if sys.version_info >= (3, 11):
+        import tomllib
+        with open(pyproject, "rb") as f:
+            data = tomllib.load(f)
+    else:
+        import tomli  # type: ignore[import]
+        with open(pyproject, "rb") as f:
+            data = tomli.load(f)
+    return data["project"]["version"]
+
+
 from godel._decorators import workflow, step, WorkflowFail, parallel, retry
 from godel._run import run, CommandResult, CommandFailure
 from godel.io import print, input
@@ -66,4 +84,5 @@ __all__ = [
     "clear_pause_request",
     "pause",
     "tail",
+    "version",
 ]
