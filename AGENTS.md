@@ -13,6 +13,7 @@ godel-py/
 ├── examples/           # End-to-end example workflows
 ├── .agents/CLI.md      # godel CLI command reference
 ├── .agents/HANDOFF.md  # Technical handoff / milestone context
+├── .agents/MONITORING.md # How to monitor a live workflow run efficiently
 ├── pyproject.toml      # Package metadata + semantic-release config
 └── .github/workflows/  # CI: tests + release on merge to master
 ```
