@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.14.0 (2026-04-14)
+
+### Features
+
+- **watch**: Add thinking spinner while an agent prompt is in flight
+  ([`3b34bb1`](https://github.com/atscub/godel-py/commit/3b34bb12d2c48e8bbb5230747b434b3d6ddd5c6c))
+
+
 ## v1.13.0 (2026-04-14)
 
 ### Features
