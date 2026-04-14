@@ -126,6 +126,8 @@ def run_cmd(file, extra, no_strict, no_lint, watch, plain):
     Tokens containing '=' with a valid identifier LHS become keyword args;
     other tokens become positional args.  All values are passed as strings.
     """
+    if plain:
+        watch = True
     if watch:
         try:
             from godel import _watch  # noqa: F401 — triggers import-time guard

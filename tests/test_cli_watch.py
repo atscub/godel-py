@@ -487,6 +487,46 @@ def test_spawn_watch_subprocess_no_plain_flag_by_default(tmp_path):
     assert "--plain" not in cmd, f"--plain should not be in default watcher cmd; got: {cmd}"
 
 
+def test_run_plain_implies_watch(tmp_path, monkeypatch):
+    """`godel run --plain FILE` must spawn the watcher even without --watch.
+
+    Regression for review finding: --plain was a dead flag unless --watch was
+    also passed, despite help text claiming it implies --watch.
+    """
+    import unittest.mock as mock
+    from click.testing import CliRunner
+    from godel.cli import main
+
+    wf = tmp_path / "wf.py"
+    wf.write_text(
+        "from godel import workflow, step\n"
+        "@step\n"
+        "async def s():\n    return 1\n"
+        "@workflow\n"
+        "async def w():\n    return await s()\n"
+    )
+
+    captured_cmds: list = []
+
+    def _fake_popen(cmd, **kwargs):
+        captured_cmds.append(list(cmd))
+        m = mock.MagicMock()
+        m.pid = 99999
+        m.poll.return_value = 0
+        m.wait.return_value = 0
+        m.returncode = 0
+        return m
+
+    monkeypatch.chdir(tmp_path)
+    with mock.patch("subprocess.Popen", side_effect=_fake_popen):
+        runner = CliRunner()
+        result = runner.invoke(main, ["run", str(wf), "--plain"])
+
+    assert result.exit_code == 0, f"run failed: {result.output}\n{result.exception}"
+    assert captured_cmds, "Watcher subprocess was not spawned (--plain did not imply --watch)"
+    assert "--plain" in captured_cmds[0]
+
+
 # ---------------------------------------------------------------------------
 # W-2: WORKFLOW_FINISHED status reflects actual outcome
 # ---------------------------------------------------------------------------
