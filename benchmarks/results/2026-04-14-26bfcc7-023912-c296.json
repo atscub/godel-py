@@ -1,0 +1,35 @@
+{
+  "run_id": "bench-obs-1776134317",
+  "config": {
+    "n_agents": 4,
+    "rate_per_agent": 200.0,
+    "target_aggregate_rate": 800.0,
+    "duration_s": 30.0
+  },
+  "write_latency_ms": {
+    "p50": 0.0902,
+    "p95": 0.2603,
+    "p99": 0.444,
+    "max": 19.6258,
+    "count": 23564
+  },
+  "tail_latency_ms": {
+    "p50": 10.2963,
+    "p95": 18.9598,
+    "p99": 20.1885,
+    "max": 102.1254,
+    "count": 11778
+  },
+  "tail_samples_dropped": {
+    "negative_skew": 0,
+    "above_10s": 0
+  },
+  "rotation_count": 0,
+  "transcript_total_bytes": 21180953,
+  "total_events_written": 23564,
+  "wall_elapsed_s": 35.016,
+  "actual_aggregate_rate": 672.9,
+  "wall_time_s": 35.04,
+  "timestamp": "2026-04-14T02:39:12.055141+00:00",
+  "git_sha": "26bfcc7"
+}

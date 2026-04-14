@@ -36,6 +36,7 @@ import json
 import math
 import os
 import queue
+import random
 import subprocess
 import sys
 import tempfile
@@ -155,12 +156,18 @@ def _writer_thread(
 async def _tail_reader(
     run_id: str,
     runs_dir: str,
-    write_timestamps: list[float],
-    tail_latencies: list[float],
+    latency_queue: "queue.Queue[float]",
+    skew_counters: dict,
     rotation_count_ref: list[int],
     stop_event: asyncio.Event,
 ) -> int:
-    """Read events from the JSONL tail and record latency from write to observation."""
+    """Read events from the JSONL tail and record latency from write to observation.
+
+    Latency samples are pushed onto *latency_queue* (thread-safe) so the main
+    thread can safely drain them after join.  *skew_counters* is a dict with
+    keys ``negative`` and ``too_large`` that count dropped samples caused by
+    clock skew — surfaced in the output JSON so the operator can see them.
+    """
     from godel._tail import tail  # local import to avoid polluting module level
 
     # We can't easily correlate individual write timestamps to tail events without
@@ -188,9 +195,12 @@ async def _tail_reader(
             try:
                 ts_start = datetime.fromisoformat(event.ts_start).timestamp()
                 latency_ms = (time.time() - ts_start) * 1000
-                # Cap outliers from clock skew to 10 s
-                if 0 <= latency_ms <= 10_000:
-                    tail_latencies.append(latency_ms)
+                if latency_ms < 0:
+                    skew_counters["negative"] += 1
+                elif latency_ms > 10_000:
+                    skew_counters["too_large"] += 1
+                else:
+                    latency_queue.put(latency_ms)
             except ValueError:
                 pass
 
@@ -226,10 +236,14 @@ def run_benchmark(
 
         write_latencies: list[list[float]] = [[] for _ in range(n_agents)]
         write_timestamps: list[list[float]] = [[] for _ in range(n_agents)]
-        tail_latencies: list[float] = []
+        # Use a thread-safe Queue because the async tail coroutine runs on a
+        # different OS thread than the main thread that drains it.
+        latency_queue: "queue.Queue[float]" = queue.Queue()
+        skew_counters: dict = {"negative": 0, "too_large": 0}
         rotation_count_ref: list[int] = []
 
         stop_threads = threading.Event()
+        start_monotonic = time.monotonic()
 
         # Launch writer threads
         threads = []
@@ -256,9 +270,18 @@ def run_benchmark(
 
         # Run tail reader on the first agent's log
         tail_run_id = f"{run_id}-agent0"
-        stop_tail = asyncio.Event()
+
+        # stop_tail is created inside the loop thread so it is bound to that
+        # loop.  A container dict lets the main thread retrieve it once ready.
+        tail_state: dict = {}
+        ready_evt = threading.Event()
 
         async def _run_tail() -> None:
+            stop_tail = asyncio.Event()
+            tail_state["stop_tail"] = stop_tail
+            tail_state["loop"] = asyncio.get_running_loop()
+            ready_evt.set()
+
             # Stop tailing after duration + a grace period
             async def _stopper() -> None:
                 await asyncio.sleep(duration + 2.0)
@@ -268,8 +291,8 @@ def run_benchmark(
                 _tail_reader(
                     tail_run_id,
                     runs_dir,
-                    write_timestamps[0],
-                    tail_latencies,
+                    latency_queue,
+                    skew_counters,
                     rotation_count_ref,
                     stop_tail,
                 ),
@@ -278,20 +301,44 @@ def run_benchmark(
             )
 
         loop = asyncio.new_event_loop()
-        tail_thread = threading.Thread(target=loop.run_until_complete, args=(_run_tail(),), daemon=True)
+
+        def _thread_target() -> None:
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(_run_tail())
+            finally:
+                loop.close()
+
+        tail_thread = threading.Thread(target=_thread_target, daemon=True)
         tail_thread.start()
+
+        # Wait until the tail coroutine has created its stop_tail event
+        ready_evt.wait(timeout=5.0)
 
         # Wait for all writers to finish
         for t in threads:
             t.join()
 
         stop_threads.set()
-        stop_tail.set()  # signal tail to stop
+        # Signal the asyncio.Event from the correct loop via the thread-safe
+        # scheduler.  Calling .set() directly from another thread is unsafe.
+        stop_tail = tail_state.get("stop_tail")
+        target_loop = tail_state.get("loop")
+        if stop_tail is not None and target_loop is not None and not target_loop.is_closed():
+            target_loop.call_soon_threadsafe(stop_tail.set)
 
         tail_thread.join(timeout=5.0)
-        # Close the loop only after its thread has exited
-        if not loop.is_running():
-            loop.close()
+
+        # Measure actual elapsed wall time (captures warm-up, pacing, etc.)
+        elapsed = time.monotonic() - start_monotonic
+
+        # Drain the thread-safe queue into a list for percentile computation
+        tail_latencies: list[float] = []
+        while True:
+            try:
+                tail_latencies.append(latency_queue.get_nowait())
+            except queue.Empty:
+                break
 
         # Aggregate write latencies across all agents
         all_write_latencies: list[float] = []
@@ -308,7 +355,6 @@ def run_benchmark(
                 pass
 
         total_events = len(all_write_latencies)
-        elapsed = duration  # nominal
 
         return {
             "run_id": run_id,
@@ -320,9 +366,14 @@ def run_benchmark(
             },
             "write_latency_ms": _stats(all_write_latencies),
             "tail_latency_ms": _stats(tail_latencies),
+            "tail_samples_dropped": {
+                "negative_skew": skew_counters["negative"],
+                "above_10s": skew_counters["too_large"],
+            },
             "rotation_count": rotation_count_ref[0] if rotation_count_ref else 0,
             "transcript_total_bytes": total_bytes,
             "total_events_written": total_events,
+            "wall_elapsed_s": round(elapsed, 3),
             "actual_aggregate_rate": round(total_events / elapsed, 1) if elapsed > 0 else 0,
         }
 
@@ -356,6 +407,13 @@ def main() -> None:
     # Pretty-print summary
     wl = results["write_latency_ms"]
     tl = results["tail_latency_ms"]
+    skew = results["tail_samples_dropped"]
+    skew_note = ""
+    if skew["negative_skew"] or skew["above_10s"]:
+        skew_note = (
+            f"  skew dropped  : -={skew['negative_skew']}  "
+            f">10s={skew['above_10s']}  (check NTP / clock stability)\n"
+        )
     print(
         f"\nResults:\n"
         f"  events written : {results['total_events_written']:,}\n"
@@ -363,20 +421,24 @@ def main() -> None:
         f"  write_latency  : p50={wl['p50']} ms  p95={wl['p95']} ms  "
         f"p99={wl['p99']} ms  max={wl['max']} ms\n"
         f"  tail_latency   : p50={tl['p50']} ms  p99={tl['p99']} ms\n"
+        f"{skew_note}"
         f"  transcript     : {results['transcript_total_bytes']:,} bytes\n"
         f"  rotations      : {results['rotation_count']}\n"
         f"  wall time      : {wall:.1f}s\n"
     )
 
-    # Write result file
+    # Write result file.  Include HHMMSS + a short random suffix so same-day
+    # reruns never collide, even when several finish in the same minute.
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    now = datetime.now(timezone.utc)
+    date_str = now.strftime("%Y-%m-%d")
+    hms = now.strftime("%H%M%S")
+    rand_suffix = f"{random.randint(0, 0xFFFF):04x}"
     sha = results["git_sha"]
-    out_path = args.output_dir / f"{date_str}-{sha}.json"
+    out_path = args.output_dir / f"{date_str}-{sha}-{hms}-{rand_suffix}.json"
 
-    # Accumulate runs in the same file (one JSON object per line)
-    with open(out_path, "a") as f:
-        f.write(json.dumps(results, separators=(",", ":")) + "\n")
+    with open(out_path, "w") as f:
+        f.write(json.dumps(results, indent=2) + "\n")
 
     print(f"Result written to: {out_path}")
 
