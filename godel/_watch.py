@@ -374,6 +374,9 @@ class _PlainLineLog:
         self._pending_depth: int = 0
         self._spin_idx: int = 0
         self._spinner_active: bool = False
+        # Whether any block has been emitted yet — used to gate the
+        # separator blank line.
+        self._emitted_any: bool = False
 
     def start(self) -> None:
         pass
@@ -399,6 +402,21 @@ class _PlainLineLog:
     def _emit(self, lines: list[str]) -> None:
         for line in lines:
             print(line, file=self._file, flush=True)
+        if lines:
+            self._emitted_any = True
+
+    def _maybe_separator(self, op: str) -> None:
+        """Insert a blank line between visual blocks.
+
+        ``stdout`` and ``agent.raw`` are continuations of the preceding block
+        (a run command's streaming output, or malformed JSONL in the middle
+        of an agent's reply) so they skip the separator.
+        """
+        if not self._emitted_any:
+            return
+        if op in ("stdout", "agent.raw", "rotate"):
+            return
+        print("", file=self._file, flush=True)
 
     # ------------------------------------------------------------------
     # Spinner (thinking animation)
@@ -459,6 +477,8 @@ class _PlainLineLog:
         # tool call / thought) is arriving — stop the spinner.
         if self._pending_stream is not None and stream_path == self._pending_stream and op != "agent.prompt":
             self._pending_stream = None
+
+        self._maybe_separator(op)
 
         # Group events by step for readability.
         if op not in ("rotate", "WORKFLOW_FINISHED"):
