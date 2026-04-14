@@ -74,13 +74,13 @@ def stream_into_transcript(
         if isinstance(item, Parsed):
             result = adapter.map(item.data)
             if result is not None:
-                op, extra = result
-                transcript.write_event(
-                    op,
-                    step_path=step_path,
-                    stream_path=stream_path,
-                    **extra,
-                )
+                for op, extra in result:
+                    transcript.write_event(
+                        op,
+                        step_path=step_path,
+                        stream_path=stream_path,
+                        **extra,
+                    )
         elif isinstance(item, Raw):
             transcript.write_event(
                 "agent.raw",
