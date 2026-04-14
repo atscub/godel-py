@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.5.1 (2026-04-14)
+
+### Bug Fixes
+
+- **agents**: Replace sys.modules run-lookup with direct import in _invoke
+  ([`427099c`](https://github.com/atscub/godel-py/commit/427099ccb0d83412a48a91695ee83d0ac9361cae))
+
+### Refactoring
+
+- **tests**: Extract stamped_stream_path async context manager
+  ([`8ff6dc0`](https://github.com/atscub/godel-py/commit/8ff6dc0929fa3df95fbf25b618395f7a1e4af25b))
+
+
 ## v1.5.0 (2026-04-14)
 
 ### Bug Fixes
