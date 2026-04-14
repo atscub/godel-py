@@ -2,6 +2,28 @@
 
 <!-- version list -->
 
+## v1.12.0 (2026-04-14)
+
+### Bug Fixes
+
+- **cli**: Make --plain imply --watch in godel run
+  ([`8117fb3`](https://github.com/atscub/godel-py/commit/8117fb36e6d9ccfc2cf51680bd29d0af2ea6469c))
+
+- **run**: Address c1y review — bound proc.wait, kill on observer exception
+  ([`cbbf157`](https://github.com/atscub/godel-py/commit/cbbf157e57114a797fbc08d31fca994c2e3620ea))
+
+- **test**: Use --no-strict in test_run_plain_implies_watch
+  ([`9165169`](https://github.com/atscub/godel-py/commit/9165169ce33d894bd3b73a3ed1c1fd0281e249b1))
+
+### Features
+
+- **cli**: Forward --plain to watcher subprocess spawned by godel run --watch
+  ([`1cbd2b5`](https://github.com/atscub/godel-py/commit/1cbd2b501740b0c7b8ff4331c670b6726f14af0e))
+
+- **run**: Stream run() stdout line-by-line; ContextVar observer for agent classification
+  ([`42cfd16`](https://github.com/atscub/godel-py/commit/42cfd1625f55aee538f644a5ed0f973571c126fb))
+
+
 ## v1.11.0 (2026-04-14)
 
 ### Bug Fixes
