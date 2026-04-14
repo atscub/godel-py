@@ -168,9 +168,11 @@ string repr of the pydantic model. To get the full structured output:
   1. **Rewind then resume.** Identify the last `step.enter FINISHED`
      (or `agent.call FINISHED`) in `runs/<id>.jsonl`, then
      `godel rewind <id> --to <event_id>` followed by
-     `godel resume <id>`. The rewind trims the log past that point so
-     resume has a clean tail to replay from. Useful when the failed
-     call was unrecoverable but the step above it can be re-executed.
+     `godel resume <id>`. The log is append-only — rewind does not
+     delete events, it marks everything past the target as invalidated
+     so resume treats them as absent and re-executes from there.
+     Useful when the failed call was unrecoverable but the step above
+     it can be re-executed.
   2. `godel repair <id>` — drops an intervention agent into the
      crashed run to unstick manually.
   3. Fresh run (last resort — loses all prior agent tokens).
