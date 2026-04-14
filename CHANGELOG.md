@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.10.0 (2026-04-14)
+
+### Features
+
+- **watch**: Add --plain flag and GODEL_WATCH_PLAIN env var to godel watch
+  ([`80db6bb`](https://github.com/atscub/godel-py/commit/80db6bbb5fe8e214d45aaacfba25c913eeb06028))
+
+### Testing
+
+- **watch**: Document subprocess --plain test limitations + cleanup
+  ([`9af016a`](https://github.com/atscub/godel-py/commit/9af016a9c64768487468ed2abb4e54f88de7a198))
+
+
 ## v1.9.1 (2026-04-14)
 
 ### Bug Fixes
