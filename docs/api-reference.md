@@ -20,10 +20,10 @@ returns its recorded result without executing. Arguments must be JSON-serializab
 
 ## Agent factories
 
-### `godel.agents.claude_code(*, model="opus", cwd=None, tools=None, skip_permissions=False)`
+### `godel.agents.claude_code(*, model="sonnet", cwd=None, tools=None, skip_permissions=False)`
 Returns an async callable wrapping the `claude` CLI.
 
-- `model` — `"opus"`, `"sonnet"`, `"haiku"`, or a full model ID.
+- `model` — `"sonnet"` (default), `"opus"`, `"haiku"`, or a full model ID.
 - `cwd` — working directory for the subprocess (default: workflow CWD).
 - `tools` — list of tool names to allow (default: claude's defaults).
 - `skip_permissions` — pass `--dangerously-skip-permissions`.

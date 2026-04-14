@@ -50,5 +50,8 @@ agent calls.
 
 ## Status
 
-Pre-1.0. Core primitives (workflow/step/agent, audit log, strict mode, replay, pause,
-rewind, repair) are implemented and covered by tests. API may shift before 1.0.
+Released — current version 3.0.0 (semantic-release, auto-published from `master`).
+Core primitives (workflow/step/agent, audit log, strict mode, replay, pause, rewind,
+repair) plus the two-tier `.godel/` + `~/.godel/` config and live `godel watch`
+renderer are implemented and covered by tests. Breaking changes are reflected in
+major-version bumps.

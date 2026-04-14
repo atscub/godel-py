@@ -1,6 +1,6 @@
 # Examples
 
-All examples live in [`py-library/examples/`](../examples/).
+All examples live in [`examples/`](../examples/).
 
 ## Hello agent
 
@@ -33,7 +33,6 @@ Key ideas demonstrated:
 Run it:
 
 ```bash
-cd py-library
 godel run examples/pr_review.py
 ```
 

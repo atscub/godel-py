@@ -38,6 +38,17 @@ Execute the single `@workflow` function in `FILE`.
 godel run examples/pr_review.py
 ```
 
+`FILE` may be either a path to a `.py` file **or** the name of a workflow registered
+under `<project>/.godel/workflows/` or `~/.godel/workflows/` (see
+[`godel init`](#godel-init) and [`godel workflows`](#godel-workflows)). Path match wins;
+otherwise name lookup runs and the resolved path is echoed on stderr.
+
+| Flag            | Purpose                                                                     |
+|-----------------|-----------------------------------------------------------------------------|
+| `--watch`       | Spawn the live TUI renderer as a subprocess alongside the run (requires `godel[watch]`). |
+| `--no-stream`   | Disable agent-response streaming for this run (streaming is on by default). Sets `GODEL_STREAM_AGENTS=0`. |
+| `--plain`, `-p` | Force plain line-log output in the watcher (implies `--watch`; also honours `GODEL_WATCH_PLAIN=1`). |
+
 **Passing arguments to the workflow.** Tokens after `--` are forwarded to the
 `@workflow` function. Tokens containing `=` with a valid Python identifier LHS become
 keyword args; all other tokens become positional args. All values are passed as strings —
@@ -68,6 +79,7 @@ if omitted.
 | `--on-mismatch {continue|invalidate|abort}` | Policy when a cached operation's `request_hash` differs.      |
 | `--on-source-edit {warn|abort|ignore}`      | Policy when a cached `@step`'s source was edited (default: `warn`). |
 | `--no-strict`, `--no-lint`                  | Same semantics as `run`.                                      |
+| `--no-stream`                               | Disable agent-response streaming on this resume.              |
 
 ### `godel show RUN_ID`
 Render the audit log.
@@ -130,11 +142,50 @@ inspect events, patch state, and propose resume.
 Exit codes: `0` agent requested resume · `1` agent gave up · `2` bad state or bad
 `--agent` · `3` agent crashed.
 
+### `godel watch RUN_ID`
+Attach the live Rich-TUI renderer to a running or completed run. Replays any archived
+transcript, then follows the live transcript until the run ends or `Ctrl+C`. Requires
+`godel[watch]`.
+
+| Flag             | Purpose                                                              |
+|------------------|----------------------------------------------------------------------|
+| `--runs-dir DIR` | Override the transcript root (default: resolved from config).        |
+| `--plain`, `-p`  | Plain line-log output instead of the TUI (also: `GODEL_WATCH_PLAIN=1`). |
+
+If the target run was executed with `--no-stream`, `watch` prints a hint on stderr and
+exits — there is no transcript directory to follow.
+
+### `godel init`
+Scaffold a `.godel/` directory (with `workflows/` subdir and a `settings.json` stub) in
+the current project. Idempotent — existing files are reported as `exists, skipped`
+rather than overwritten.
+
+### `godel config path`
+Print the config source chain in precedence order (user `~/.godel/settings.json` →
+project `.godel/settings.json` → `GODEL_*` env → CLI flags) along with the effective
+merged view and resolved `runs_dir`.
+
+### `godel workflows`
+Named-workflow registry. Workflows live in `.godel/workflows/*.py` (project) or
+`~/.godel/workflows/*.py` (user); project entries shadow user entries on name collision.
+
+- `godel workflows list` — list every discoverable workflow name → path.
+- `godel workflows which NAME` — print the resolved path for `NAME` without running it
+  (exit `1` if unresolved).
+
+### `godel guide [NAME]`
+Print one of the bundled onboarding guides shipped with the installed package, so agents
+can pull just-in-time context without the godel repo being present. Available slugs:
+`getting-started`, `concepts`, `engineer`, `runner`, `cli`, `api-reference`. Call with
+no `NAME` to list them all.
+
 ## Run-lifecycle cheat sheet
 
 ```
 godel run workflow.py               # fresh run
-godel tail <run_id>                 # watch progress in another terminal
+godel run workflow.py --watch       # fresh run + live TUI
+godel watch <run_id>                # attach TUI to a running/finished run
+godel tail <run_id>                 # follow raw JSONL events
 godel pause <run_id>                # ask it to pause cleanly
 godel show <run_id> --graph         # inspect the DAG
 godel rewind <run_id> --to <eid>    # undo a bad decision

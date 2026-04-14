@@ -5,12 +5,13 @@
 Godel is not yet on PyPI. Install from source:
 
 ```bash
-git clone https://github.com/atscub/godel-lang.git
-cd godel-lang/py-library
+git clone https://github.com/atscub/godel-py.git
+cd godel-py
 pip install -e .
 ```
 
-Requires Python **3.10+**.
+Requires Python **3.10+**. For the live TUI renderer used by `godel watch` /
+`godel run --watch`, install the extra: `pip install -e '.[watch]'`.
 
 For the bundled `claude_code` agent you also need the [`claude` CLI](https://docs.claude.com/en/docs/claude-code)
 installed and authenticated (via a claude.ai subscription or `ANTHROPIC_API_KEY`).
