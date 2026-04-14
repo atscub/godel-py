@@ -70,12 +70,16 @@ def _spawn_watch_subprocess(run_id: str, runs_dir: str = "./runs") -> "subproces
     subprocess.Popen
     """
     cmd = [sys.executable, "-m", "godel._watch", run_id, "--runs-dir", runs_dir]
-    # start_new_session=True creates a new process group/session on POSIX so
-    # SIGINT from the terminal (Ctrl+C) does NOT automatically reach the watcher
-    # process.  The watcher exits naturally when it reads the EOS sentinel from
-    # the transcript.  If the watcher crashes the run continues unaffected.
+    # Isolate the watcher from the parent's console-control signals so a
+    # terminal Ctrl+C (or a crashing renderer) cannot affect the underlying
+    # run.  On POSIX ``start_new_session=True`` starts the child in a new
+    # session/process group; on Windows the equivalent is the
+    # CREATE_NEW_PROCESS_GROUP creation flag (Ctrl+C handling is inherited by
+    # default on Windows, so the POSIX-only guard used previously was wrong).
     kwargs: dict = {}
-    if hasattr(os, "setsid"):
+    if sys.platform == "win32":
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    else:
         kwargs["start_new_session"] = True
     return subprocess.Popen(cmd, **kwargs)
 
