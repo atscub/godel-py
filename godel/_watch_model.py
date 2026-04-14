@@ -35,7 +35,23 @@ Burst coalescing is NOT done here; that is ticket godel-py-5pl.11's concern.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from types import MappingProxyType
 from typing import Mapping
+
+
+# An empty read-only mapping — used as the default for frozen fields.
+# Sharing a single instance is safe because MappingProxyType is immutable.
+_EMPTY_MAP: Mapping = MappingProxyType({})
+
+
+def _freeze_mapping(d: dict) -> Mapping:
+    """Wrap a dict in a read-only MappingProxyType view.
+
+    Callers must not retain a reference to the underlying dict after this
+    function returns — doing so would defeat the read-only guarantee.  All
+    call sites in this module build a fresh dict immediately before wrapping.
+    """
+    return MappingProxyType(d)
 
 
 # ---------------------------------------------------------------------------
@@ -104,9 +120,9 @@ class WatchModel:
         Default: 200.
     """
 
-    run_meta: dict = field(default_factory=dict)
-    steps: Mapping[tuple, StepNode] = field(default_factory=dict)
-    panels: Mapping[tuple, StreamPanel] = field(default_factory=dict)
+    run_meta: Mapping[str, object] = field(default_factory=lambda: _EMPTY_MAP)
+    steps: Mapping[tuple, StepNode] = field(default_factory=lambda: _EMPTY_MAP)
+    panels: Mapping[tuple, StreamPanel] = field(default_factory=lambda: _EMPTY_MAP)
     ring_size: int = 200
 
     @staticmethod
@@ -174,7 +190,7 @@ def reduce_header(model: WatchModel, header: dict) -> WatchModel:
         New model with ``run_meta`` updated.
     """
     merged = {**model.run_meta, **header}
-    return replace(model, run_meta=merged)
+    return replace(model, run_meta=_freeze_mapping(merged))
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +210,7 @@ def _handle_step_enter(model: WatchModel, event: dict) -> WatchModel:
         node = StepNode(path=path, status="running", started_at=ts)
 
     new_steps = {**model.steps, path: node}
-    return replace(model, steps=new_steps)
+    return replace(model, steps=_freeze_mapping(new_steps))
 
 
 def _handle_step_exit(model: WatchModel, event: dict) -> WatchModel:
@@ -211,12 +227,21 @@ def _handle_step_exit(model: WatchModel, event: dict) -> WatchModel:
         node = StepNode(path=path, status=status, finished_at=ts)
 
     new_steps = {**model.steps, path: node}
-    return replace(model, steps=new_steps)
+    return replace(model, steps=_freeze_mapping(new_steps))
 
 
 def _handle_stream_line(model: WatchModel, event: dict) -> WatchModel:
-    """Append a line to the appropriate StreamPanel ring buffer."""
-    stream_path = tuple(event.get("stream_path", []))
+    """Append a line to the appropriate StreamPanel ring buffer.
+
+    Events missing a ``stream_path`` (or carrying an empty/null one) are
+    skipped — routing a line to a ``()`` panel key would pollute the model
+    with a junk drawer of un-addressable lines.  This matches the reader
+    contract that stream output always belongs to *some* named stream.
+    """
+    raw_sp = event.get("stream_path")
+    if not raw_sp:
+        return model
+    stream_path = tuple(raw_sp)
     # Derive a displayable line from the event.
     line = _event_to_line(event)
     ts = event.get("ts")
@@ -232,7 +257,7 @@ def _handle_stream_line(model: WatchModel, event: dict) -> WatchModel:
 
     new_panel = replace(existing, ring=new_ring, last_event_ts=ts or existing.last_event_ts)
     new_panels = {**model.panels, stream_path: new_panel}
-    return replace(model, panels=new_panels)
+    return replace(model, panels=_freeze_mapping(new_panels))
 
 
 def _event_to_line(event: dict) -> str:
