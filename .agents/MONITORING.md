@@ -51,6 +51,13 @@ unless debugging — they are very chatty in any non-trivial workflow.
 `runs/<id>.jsonl` without shell pipe buffering, waits for new events,
 and exits at run completion.
 
+Note: `tail` streams every event raw — it does **not** filter out
+rewind-invalidated or retry-superseded events (no `--all` flag exists
+like on `godel show`). If you rewound the run and are tailing after
+replay, filter invalidated events in your own consumer by tracking
+`status == "INVALIDATED"` or using `seq`/`event_id` ordering against
+the rewind boundary.
+
 ```
 godel tail <id> --format=json   # one JSON object per line, stable schema
 godel tail <id> --format=pretty # human-readable table (step_path + status + duration)
