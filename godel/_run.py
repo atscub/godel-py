@@ -296,6 +296,7 @@ async def run(cmd: str, *, cwd: str | None = None, timeout: float | None = None,
                     ),
                     timeout=timeout,
                 )
+                # Bound proc.wait() so a zombie/D-state process can't hang us.
                 await asyncio.wait_for(proc.wait(), timeout=5.0)
             except asyncio.CancelledError:
                 await asyncio.shield(_kill_process_group(proc))
@@ -327,6 +328,18 @@ async def run(cmd: str, *, cwd: str | None = None, timeout: float | None = None,
                     step_path=step_path,
                     remediation_hint=f"Increase the timeout parameter or optimize the command to complete faster.",
                 )
+            except BaseException:
+                # Observer callback or transcript writer raised — don't leak the
+                # child process. Kill and reap before re-raising.
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=5.0)
+                except Exception:
+                    pass
+                raise
             stdout = stdout_b.decode("utf-8", errors="replace")
             stderr = stderr_b.decode("utf-8", errors="replace")
             if proc.returncode != 0:
