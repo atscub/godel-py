@@ -154,22 +154,24 @@ def test_run_watch_run_completes_after_watcher_killed(tmp_path):
         cwd=str(tmp_path),
     )
 
+    # psutil is required to reliably find + kill the watcher subprocess.
+    # Without it we cannot actually verify the isolation guarantee, so skip
+    # rather than silently pass.
+    psutil = pytest.importorskip("psutil")
+
     # Give the watcher subprocess time to spawn
     time.sleep(0.3)
 
     # Find child processes of proc and kill any watcher subprocess
-    try:
-        import psutil
-        parent = psutil.Process(proc.pid)
-        children = parent.children(recursive=True)
-        for child in children:
-            try:
-                child.kill()
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
-    except ImportError:
-        # psutil not available — skip the kill step but still verify run
-        pass
+    parent = psutil.Process(proc.pid)
+    children = parent.children(recursive=True)
+    killed_any = False
+    for child in children:
+        try:
+            child.kill()
+            killed_any = True
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
 
     # Wait for the main run to complete
     try:
@@ -589,3 +591,52 @@ def test_producer_error_surfaces_banner(tmp_path, monkeypatch):
         f"Expected error banner in stderr, got:\n{err_output}"
     )
     assert "simulated transcript disappearance" in err_output
+
+
+# ---------------------------------------------------------------------------
+# Pass-2 C-1: PauseSignal must NOT emit WORKFLOW_FINISHED
+# ---------------------------------------------------------------------------
+
+
+def test_pause_does_not_emit_workflow_finished_sentinel(tmp_path, monkeypatch):
+    """A paused workflow must NOT write WORKFLOW_FINISHED to the transcript.
+
+    A paused run is not terminal — it will be resumed later and append further
+    events to the same transcript.  Writing WORKFLOW_FINISHED on pause would
+    (a) mislabel a pause as a failure, and (b) cause a live watcher's follow
+    loop to exit on the stale sentinel, missing all post-resume events.
+    """
+    import asyncio
+    from godel import workflow, step
+    from godel._exceptions import PauseSignal
+
+    # Isolate run artefacts into tmp_path/runs.
+    monkeypatch.chdir(tmp_path)
+
+    @step
+    async def raising_step():
+        raise PauseSignal(reason="test pause")
+
+    @workflow(stream_agents=True)
+    async def pausing_wf():
+        await raising_step()
+        return "unreachable"
+
+    with pytest.raises(PauseSignal):
+        asyncio.run(pausing_wf())
+
+    run_id = pausing_wf._last_run_id
+    assert run_id is not None
+
+    transcript_path = tmp_path / "runs" / run_id / "transcript.jsonl"
+    assert transcript_path.exists(), f"transcript.jsonl not found at {transcript_path}"
+
+    lines = [
+        json.loads(ln)
+        for ln in transcript_path.read_text().splitlines()
+        if ln.strip()
+    ]
+    ops = [ev.get("op") for ev in lines]
+    assert "WORKFLOW_FINISHED" not in ops, (
+        f"PauseSignal must not emit WORKFLOW_FINISHED, got ops={ops}"
+    )
