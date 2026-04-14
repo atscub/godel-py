@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.4.0 (2026-04-14)
+
+### Features
+
+- **redact**: Redaction infrastructure with string-based pipeline (godel-py-5pl.6)
+  ([`58298b8`](https://github.com/atscub/godel-py/commit/58298b8f20d72ad7eee56a169932579843a725c6))
+
+### Refactoring
+
+- **redact**: Address pass-1 review (godel-py-5pl.6)
+  ([`7fb39fa`](https://github.com/atscub/godel-py/commit/7fb39fa8ef8019ecf392849c383ebfa1a088054c))
+
+
 ## v1.3.0 (2026-04-14)
 
 ### Bug Fixes
