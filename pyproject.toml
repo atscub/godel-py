@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "ruff", "build", "python-semantic-release"]
+dev = ["pytest", "ruff", "build", "python-semantic-release", "syrupy>=4.0"]
 watch = ["rich>=13.0"]
 
 [project.scripts]

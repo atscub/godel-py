@@ -165,6 +165,40 @@ class TestStaticRender:
 
 
 # ---------------------------------------------------------------------------
+# AC1 — Byte-exact golden-file snapshot test (syrupy)
+# ---------------------------------------------------------------------------
+
+class TestAC1Snapshot:
+    """Byte-exact recorded-console snapshot of WatchApp._render() for AC1.
+
+    Uses syrupy's snapshot fixture to compare the full Rich ``export_text()``
+    output against a checked-in golden file.  The Console is constructed with:
+
+    * ``record=True``        — enables export_text()
+    * ``width=120``          — fixed width for deterministic wrapping
+    * ``height=30``          — fixed height for deterministic Rich Layout sizing
+    * ``color_system=None``  — no ANSI codes so the golden file is plain text
+    * ``force_terminal=False``— treat as non-TTY so Rich does not query the tty
+
+    Run ``pytest --snapshot-update`` once to write / refresh the golden file.
+    """
+
+    def test_ac1_render_snapshot(self, snapshot):
+        """Full Rich recorded-console output matches the stored golden file."""
+        model = _make_model()
+        console = Console(
+            record=True,
+            width=120,
+            height=30,
+            color_system=None,
+            force_terminal=False,
+        )
+        WatchApp._render(model, console)
+        output = console.export_text()
+        assert output == snapshot
+
+
+# ---------------------------------------------------------------------------
 # AC2 — Non-TTY fallback
 # ---------------------------------------------------------------------------
 
