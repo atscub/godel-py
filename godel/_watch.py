@@ -173,7 +173,6 @@ def _build_panels_renderable(model: WatchModel, *, max_inline: int = 3):
     overflow panels are shown in a tabbed summary (panel titles only, content
     truncated to one line).
     """
-    from rich.columns import Columns
     from rich.table import Table
 
     active = sorted(
@@ -272,7 +271,15 @@ class WatchApp:
     # ------------------------------------------------------------------
 
     def start(self) -> None:
-        """Start the Rich Live display."""
+        """Start the Rich Live display.
+
+        Idempotent: if the Live display is already running (``self._live`` is
+        not ``None``), this method returns immediately without creating a
+        second ``Live`` instance.  This prevents a double-call from orphaning
+        the first ``Live`` context and corrupting terminal state.
+        """
+        if self._live is not None:
+            return
         self._live = Live(
             self._build_layout(self._model),
             console=self.console,
