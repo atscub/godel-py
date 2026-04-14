@@ -1,20 +1,18 @@
 # Redaction
 
-> **Status: option accepted at decoration time; runtime behavior is TODO.**
-> In master today, `@workflow(redact=[...])` accepts a list of callables and validates
-> them at decoration time (callable + one-positional-arg check). **The runtime pipeline
-> that actually applies redactors to transcript events does not exist yet.** It is
-> tracked by `godel-py-5pl.6` (redaction infrastructure). This page documents the
-> intended contract so users who write redactors today will be compatible when the
-> pipeline lands. Until then, redactors are never invoked and no events are filtered.
+> **Godel does not guess at secrets.** Godel ships with no built-in redactors, no
+> allow-lists, and no heuristic patterns. Secret classification is your responsibility.
+> Godel provides the registration hook; you supply the logic.
 
-> **Godel does not guess at secrets.** There will be no built-in redactors, no
-> allow-lists, no heuristic patterns. Secret classification is your responsibility. Godel
-> provides the registration hook; you supply the logic.
+Redactors are applied to transcript **events** before they are serialised to disk.
+Redaction is a transcript-only feature — the audit log (`runs/<run_id>.jsonl`) is not
+redacted.
 
-When the pipeline lands (`5pl.6`), redactors are applied to transcript **events** before
-they are serialised to disk. Redaction will be a transcript-only feature — the audit log
-(`runs/<run_id>.jsonl`) is not redacted.
+> **Future compatibility.** The redactor contract is currently string-based
+> (`Callable[[str], str | None]`). A future release may introduce a richer dict-based
+> contract; if that happens, the string API will either be preserved alongside it or
+> deprecated with an explicit migration path. Write redactors against the string
+> signature documented below.
 
 ---
 
@@ -35,10 +33,9 @@ async def my_workflow():
     ...
 ```
 
-### What is validated today
+### Decoration-time validation
 
-`@workflow` currently performs these checks at decoration time (see
-`godel/_decorators.py`):
+`@workflow` performs these checks at decoration time (see `godel/_decorators.py`):
 
 - Every entry must be **callable**; a non-callable entry raises `TypeError` immediately.
 - Every entry must accept **exactly one required positional argument**, or be variadic
@@ -54,36 +51,25 @@ async def my_workflow():
 These checks fire at decoration time, not at call time, so wrong-shape redactors fail
 fast before any workflow runs.
 
-### Signature validated today
-
-Per `godel/_decorators.py` (the `@workflow` decorator's docstring and arity validator):
-**a redactor takes a single `str` and returns a `str`.** It is invoked on event
-**payloads** — the serialized string representation of an event's content — not on the
-full event dict. The decorator enforces this shape at decoration time via the arity
-rules above.
+### Signature
 
 ```python
-Redactor = Callable[[str], str]  # contract validated today
+Redactor = Callable[[str], "str | None"]
 ```
 
-### Intended runtime contract (TODO, tracked in `5pl.6`)
+A redactor takes a single `str` — the JSON-serialised event body (everything inside the
+`{"event": ...}` wrapper, already compact-JSON-encoded) — and returns either:
 
-Note: ticket `godel-py-5pl.6` proposes evolving the contract to operate on event dicts
-(`Callable[[dict], dict | None]`) with richer return semantics. **That evolution has not
-landed and has not yet been reconciled with the string contract the decorator currently
-validates.** Until `5pl.6` merges and the decorator validation is updated to match,
-write redactors against the string signature above. The semantics below describe the
-target behavior once the pipeline lands — they are aspirational, not current.
+- a `str` (possibly the same, possibly transformed) → written verbatim as the event
+  payload, or
+- `None` → **drops the event entirely**; nothing is written to disk and no error
+  sentinel is emitted.
 
-- **If the contract stays string → string:** a raising redactor substitutes a
-  `redactor.error` event containing only the redactor's name and exception class (no
-  message, no payload); subsequent redactors continue processing.
-- **If `5pl.6` lands the dict evolution:** `None` return drops the event silently;
-  raising substitutes a `redactor.error` event with the same name-plus-class payload;
-  `BaseException` is caught (not just `Exception`) so `KeyboardInterrupt` / `SystemExit`
-  inside a redactor cannot exfiltrate data by bypassing the catch.
+### Raising redactor → sentinel event
 
-Anticipated substituted event shape (either contract):
+If a redactor raises `BaseException` (including `KeyboardInterrupt`, `SystemExit`, and
+other non-`Exception` subclasses), the failing event is dropped and a minimal sentinel
+event is written in its place:
 
 ```json
 {"event": {"ts": "...", "seq": 12, "op": "redactor.error",
@@ -91,12 +77,19 @@ Anticipated substituted event shape (either contract):
            "redactor": "strip_api_keys", "error_class": "KeyError"}}
 ```
 
+The sentinel intentionally carries **only** the redactor name and the exception class
+name — never the exception message and never any part of the original event payload.
+This prevents secret-leakage through exception reprs.
+
+Subsequent redactors are **not** run on a failed event; the sentinel is the only output
+for that event. Subsequent events continue through the full pipeline normally.
+
 ---
 
-## Composition order (intended)
+## Composition order
 
-Redactors will be applied **left-to-right** in registration order. The output of
-redactor `i` is the input to redactor `i+1`:
+Redactors are applied **left-to-right** in registration order. The output of redactor
+`i` is the input to redactor `i+1`:
 
 ```
 raw_payload (str)
@@ -106,22 +99,21 @@ raw_payload (str)
 ```
 
 Ordering matters when redactors interact — e.g. a URL-stripping redactor should run
-before one that scans query-string contents for email addresses. The `5pl.6` acceptance
-criteria pin this ordering to an explicit test.
+before one that scans query-string contents for email addresses.
+
+If any redactor returns `None`, the pipeline short-circuits immediately: later redactors
+are not called and the event is dropped.
 
 ---
 
 ## Writing a redactor
 
-Against the string contract validated today:
-
 - Accept a single `str` positional argument (the serialized event payload).
-- Return a `str` (possibly unchanged).
-- Be **pure and fast**: redactors will run on the transcript writer's hot path once
-  wiring lands. Avoid I/O, network calls, or any blocking operation inside a redactor.
-- Do not rely on the exception message surviving. Any raise will be swallowed once
-  `5pl.6` lands, and your redactor's name + exception class are all the operator will
-  see.
+- Return a `str` (possibly unchanged), or `None` to drop the event.
+- Be **pure and fast**: redactors run on the transcript writer's hot path. Avoid I/O,
+  network calls, or any blocking operation inside a redactor.
+- Do not rely on the exception message surviving. Any raise is swallowed; your
+  redactor's name + exception class are all the operator will see.
 
 ```python
 def redact_bearer(payload: str) -> str:
@@ -132,7 +124,7 @@ def redact_bearer(payload: str) -> str:
 
 ---
 
-## What redaction will NOT cover
+## What redaction does NOT cover
 
 - **The audit log** (`runs/<run_id>.jsonl`). Redaction is a transcript-only feature. If
   your audit log needs redaction, handle it at the storage layer (encrypted volume,
@@ -147,9 +139,7 @@ def redact_bearer(payload: str) -> str:
 
 ## See also
 
-- [Transcript Format](transcript-format.md) — the JSONL wire format that redaction will
-  protect.
+- [Transcript Format](transcript-format.md) — the JSONL wire format that redaction
+  protects.
 - [Stdout Capture](stdout-capture.md) — per-step stdout capture (status: runtime plumbing
   in flight).
-- Ticket `godel-py-5pl.6` — the redaction-infrastructure implementation that will make
-  this page live.
