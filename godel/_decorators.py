@@ -822,6 +822,8 @@ async def parallel(*aws: Awaitable[T]) -> tuple:
             # Per-branch suppress flag: each branch independently tracks whether
             # it is still in replay mode.  Snapshots the shared flag at fork time.
             _local_replay_suppress=ctx.event_log._replay_suppress,
+            stream_agents=ctx.stream_agents,                 # inherit streaming config
+            transcript=ctx.transcript,                       # inherit transcript writer
         )
         token = _current_workflow.set(branch_ctx)
         try:
