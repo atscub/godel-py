@@ -668,7 +668,7 @@ class TestPlainLineLog:
     def test_print_event_no_ts(self):
         """Events without ts don't crash the formatter."""
         buf = io.StringIO()
-        log = _PlainLineLog(file=buf)
+        log = _PlainLineLog(file=buf, show_thinking=True)
         log.print_event({"op": "agent.thought", "text": "thinking..."})
         out = buf.getvalue()
         assert "thinking..." in out

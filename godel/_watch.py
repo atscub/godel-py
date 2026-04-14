@@ -363,10 +363,11 @@ class _PlainLineLog:
     :func:`run_watch` so the main loop can treat both uniformly.
     """
 
-    def __init__(self, *, file: IO | None = None) -> None:
+    def __init__(self, *, file: IO | None = None, show_thinking: bool = False) -> None:
         self._file = file or sys.stdout
         self._model = WatchModel.empty()
         self._use_color = bool(getattr(self._file, "isatty", lambda: False)())
+        self._show_thinking = show_thinking
         self._last_step_path: tuple[str, ...] | None = None
         # Spinner state: pending agent call awaiting a response on the same
         # stream_path.  Only animated on TTY output; no-op elsewhere.
@@ -479,6 +480,12 @@ class _PlainLineLog:
                 # Trailing result event echoing the already-streamed answer.
                 return
 
+        # When thinking is hidden, swallow agent.thought entirely — don't let
+        # it clear the spinner or insert a separator — so the "thinking…"
+        # animation continues until the real response arrives.
+        if op == "agent.thought" and not self._show_thinking:
+            return
+
         self._render(event)
 
         if op == "agent.response":
@@ -528,10 +535,13 @@ class _PlainLineLog:
             return
 
         if op == "agent.thought":
+            if not self._show_thinking:
+                # Suppressed — spinner animation conveys "thinking" instead.
+                return
             text = event.get("text", "")
             self._emit(
-                [pad + self._c("blue", "• thinking")]
-                + [cont + ln for ln in _wrap_multiline(text, indent="")]
+                [pad + self._c("dim", "• thinking")]
+                + [cont + self._c("dim", ln) for ln in _wrap_multiline(text, indent="")]
             )
             return
 
@@ -1022,6 +1032,7 @@ def run_watch(
     *,
     runs_dir: str = "./runs",
     plain: bool = False,
+    show_thinking: bool = False,
     stdout: IO | None = None,
     _burst_threshold: int = _BURST_THRESHOLD,
     _timer_interval: float = _TIMER_INTERVAL,
@@ -1062,7 +1073,7 @@ def run_watch(
 
     if plain:
         fh = stdout or sys.stdout
-        plain_log = _PlainLineLog(file=fh)
+        plain_log = _PlainLineLog(file=fh, show_thinking=show_thinking)
         with plain_log:
             _plain_loop(plain_log, event_q, timer_interval=_timer_interval)
     else:
@@ -1150,6 +1161,12 @@ if __name__ == "__main__":
         default=False,
         help="Force plain line-log output instead of the Rich TUI.",
     )
+    ap.add_argument(
+        "--show-thinking",
+        action="store_true",
+        default=False,
+        help="Render agent thinking blocks inline instead of the spinner animation.",
+    )
     ns = ap.parse_args()
 
     # Discoverability hint: if the transcript directory does not exist within
@@ -1168,7 +1185,7 @@ if __name__ == "__main__":
         _time.sleep(0.1)
 
     try:
-        run_watch(ns.run_id, runs_dir=ns.runs_dir, plain=ns.plain)
+        run_watch(ns.run_id, runs_dir=ns.runs_dir, plain=ns.plain, show_thinking=ns.show_thinking)
     except KeyboardInterrupt:
         sys.exit(0)
     except SystemExit:
