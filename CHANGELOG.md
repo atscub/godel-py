@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v1.11.0 (2026-04-14)
+
+### Bug Fixes
+
+- **watch**: Address 2bf review — disk-fixture AC4 test, remove dead branch
+  ([`9d981ae`](https://github.com/atscub/godel-py/commit/9d981aef2f754f0dfed11096cb4afc42f6bd51da))
+
+### Documentation
+
+- **proposals**: Add web GUI scoping proposal for godel watch
+  ([`28964ff`](https://github.com/atscub/godel-py/commit/28964ffa0f9b3407cae02486bf82a2b8ee82ef49))
+
+- **web-gui**: Correct reducer LOC claim (130→~150 full module)
+  ([`a424bed`](https://github.com/atscub/godel-py/commit/a424beda51cdb6affecaf34db62c13596396b552))
+
+### Features
+
+- **watch**: Truncate/summarize tool-call lines in ring buffer
+  ([`6e7751f`](https://github.com/atscub/godel-py/commit/6e7751fb2bb2824a09cb3e29070da8cfc8143377))
+
+
 ## v1.10.1 (2026-04-14)
 
 ### Bug Fixes
