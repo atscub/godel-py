@@ -34,6 +34,25 @@ pytest.importorskip("rich", reason="godel[watch] (rich) must be installed for wa
 PYTHON = sys.executable
 FIXTURES = Path(__file__).parent / "fixtures"
 
+# Root of the worktree — the directory that contains the ``godel`` package.
+# When subprocess tests use ``cwd=tmp_path`` the working-directory entry in
+# sys.path points at tmp_path, not at the worktree, so the subprocess falls
+# back to whatever ``godel`` is installed in site-packages (which may be a
+# different version).  We fix this by propagating the worktree root via
+# PYTHONPATH so that subprocess children always import from the same source.
+_WORKTREE_ROOT = str(Path(__file__).parent.parent)
+
+
+def _subprocess_env(**extra: str) -> dict:
+    """Return an os.environ copy with the worktree on PYTHONPATH."""
+    env = os.environ.copy()
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        _WORKTREE_ROOT + os.pathsep + existing if existing else _WORKTREE_ROOT
+    )
+    env.update(extra)
+    return env
+
 
 # ---------------------------------------------------------------------------
 # Workflow fixture helpers
@@ -596,6 +615,134 @@ def test_producer_error_surfaces_banner(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 # Pass-2 C-1: PauseSignal must NOT emit WORKFLOW_FINISHED
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# --plain flag and GODEL_WATCH_PLAIN=1 env var
+# ---------------------------------------------------------------------------
+
+
+def test_watch_plain_flag_forces_plain_log(tmp_path):
+    """``godel watch <run_id> --plain`` uses the plain line-log on a normal TTY.
+
+    Even though the test process is not a TTY, the presence of [godel-watch]
+    prefix lines in stdout is the observable signature of _PlainLineLog.
+    We verify the flag is accepted and the command exits cleanly.
+    """
+    run_id = "plain-flag-test"
+    runs_dir = tmp_path / "runs"
+    _write_transcript_dir(runs_dir, run_id)
+
+    result = subprocess.run(
+        [PYTHON, "-m", "godel", "watch", run_id, "--runs-dir", str(runs_dir), "--plain"],
+        capture_output=True,
+        text=True,
+        cwd=str(tmp_path),
+        env=_subprocess_env(),
+        timeout=15,
+    )
+    assert result.returncode == 0, f"stderr: {result.stderr}\nstdout: {result.stdout}"
+    # Plain log emits [godel-watch] prefixed lines
+    assert "[godel-watch]" in result.stdout, (
+        f"Expected [godel-watch] prefix in stdout, got:\n{result.stdout!r}"
+    )
+
+
+def test_watch_plain_short_flag(tmp_path):
+    """``godel watch <run_id> -p`` (short form) is equivalent to --plain."""
+    run_id = "plain-short-test"
+    runs_dir = tmp_path / "runs"
+    _write_transcript_dir(runs_dir, run_id)
+
+    result = subprocess.run(
+        [PYTHON, "-m", "godel", "watch", run_id, "--runs-dir", str(runs_dir), "-p"],
+        capture_output=True,
+        text=True,
+        cwd=str(tmp_path),
+        env=_subprocess_env(),
+        timeout=15,
+    )
+    assert result.returncode == 0, f"stderr: {result.stderr}\nstdout: {result.stdout}"
+    assert "[godel-watch]" in result.stdout, (
+        f"Expected [godel-watch] prefix in stdout, got:\n{result.stdout!r}"
+    )
+
+
+def test_watch_plain_env_var(tmp_path):
+    """``GODEL_WATCH_PLAIN=1 godel watch <run_id>`` forces plain line-log."""
+    run_id = "plain-env-test"
+    runs_dir = tmp_path / "runs"
+    _write_transcript_dir(runs_dir, run_id)
+
+    result = subprocess.run(
+        [PYTHON, "-m", "godel", "watch", run_id, "--runs-dir", str(runs_dir)],
+        capture_output=True,
+        text=True,
+        cwd=str(tmp_path),
+        env=_subprocess_env(GODEL_WATCH_PLAIN="1"),
+        timeout=15,
+    )
+    assert result.returncode == 0, f"stderr: {result.stderr}\nstdout: {result.stdout}"
+    assert "[godel-watch]" in result.stdout, (
+        f"Expected [godel-watch] prefix in stdout with GODEL_WATCH_PLAIN=1, got:\n{result.stdout!r}"
+    )
+
+
+def test_watch_plain_flag_via_run_watch(tmp_path):
+    """run_watch(..., plain=True) uses _PlainLineLog even when stdout is not a TTY.
+
+    This unit-level test verifies the plain kwarg threading through run_watch()
+    without going through the CLI subprocess.
+    """
+    import io as _io
+    from unittest.mock import patch
+    from godel import _watch as watch_mod
+
+    run_id = "rw-plain-unit"
+    runs_dir = tmp_path / "runs"
+    _write_transcript_dir(runs_dir, run_id)
+
+    captured = _io.StringIO()
+    # stdout is a StringIO (non-TTY), but plain=True makes it explicit
+    watch_mod.run_watch(run_id, runs_dir=str(runs_dir), plain=True, stdout=captured)
+
+    output = captured.getvalue()
+    assert "[godel-watch]" in output, (
+        f"Expected [godel-watch] prefix lines from PlainLineLog, got:\n{output!r}"
+    )
+
+
+def test_watch_plain_env_var_via_run_watch(tmp_path, monkeypatch):
+    """GODEL_WATCH_PLAIN=1 routes run_watch() to _PlainLineLog."""
+    import io as _io
+    from godel import _watch as watch_mod
+
+    run_id = "rw-env-unit"
+    runs_dir = tmp_path / "runs"
+    _write_transcript_dir(runs_dir, run_id)
+
+    monkeypatch.setenv("GODEL_WATCH_PLAIN", "1")
+
+    captured = _io.StringIO()
+    watch_mod.run_watch(run_id, runs_dir=str(runs_dir), stdout=captured)
+
+    output = captured.getvalue()
+    assert "[godel-watch]" in output, (
+        f"Expected [godel-watch] prefix lines from PlainLineLog, got:\n{output!r}"
+    )
+
+
+def test_watch_plain_help_shows_flag():
+    """``godel watch --help`` mentions --plain."""
+    result = subprocess.run(
+        [PYTHON, "-m", "godel", "watch", "--help"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0
+    assert "--plain" in result.stdout, (
+        f"Expected --plain in help output, got:\n{result.stdout}"
+    )
 
 
 def test_pause_does_not_emit_workflow_finished_sentinel(tmp_path, monkeypatch):

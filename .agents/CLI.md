@@ -158,6 +158,34 @@ godel repair RUN_ID [--agent MODULE:FUNCTION] [--model MODEL] [--max-iterations 
 
 ---
 
+### `godel watch RUN_ID`
+
+Attach a live TUI renderer to a running or completed workflow.
+
+Replays history from archived transcript files then follows the live transcript
+until the run finishes or Ctrl+C is pressed.  Requires `godel[watch]`
+(`pip install 'godel[watch]'`).
+
+```
+godel watch RUN_ID [--runs-dir DIR] [--plain|-p]
+```
+
+**Options:**
+- `--runs-dir DIR` — Directory containing per-run transcript directories (default: `./runs`).
+- `--plain`, `-p` — Force plain line-log output instead of the Rich TUI panel display.
+  Each event is printed as a single `[godel-watch] <ts>  <op>  ...` line.
+  Useful for CI, pipes, or while the panel UX is being redesigned.
+
+**Environment variables:**
+- `GODEL_WATCH_PLAIN=1` — Equivalent to `--plain`; forces plain line-log without modifying the command invocation.
+
+**Notes:**
+- `RUN_ID` can be a prefix (minimum characters to resolve uniquely).
+- If the workflow was started without `stream_agents=True`, a discoverability hint is printed on stderr and the command exits immediately.
+- Without `--plain` and without `GODEL_WATCH_PLAIN=1`, the Rich TUI is used on capable terminals (auto-fallback to plain on non-TTY, `TERM=dumb`, or non-UTF-8 locales).
+
+---
+
 ### `godel tail RUN_ID`
 
 Follow a workflow's audit log in real time.

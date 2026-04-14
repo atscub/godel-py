@@ -759,6 +759,7 @@ def run_watch(
     run_id: str,
     *,
     runs_dir: str = "./runs",
+    plain: bool = False,
     stdout: IO | None = None,
     _burst_threshold: int = _BURST_THRESHOLD,
     _timer_interval: float = _TIMER_INTERVAL,
@@ -772,12 +773,15 @@ def run_watch(
         The workflow run identifier.
     runs_dir:
         Directory containing per-run transcript directories.
+    plain:
+        Force plain line-log output even on a capable TTY.  Equivalent to
+        setting ``GODEL_WATCH_PLAIN=1`` in the environment.
     stdout:
         Output stream override (used by tests to capture output).
     _burst_threshold, _timer_interval, _queue_maxsize:
         Coalescing / back-pressure knobs — exposed for testing only.
     """
-    plain = _use_plain_fallback(stdout)
+    plain = plain or _use_plain_fallback(stdout) or os.environ.get("GODEL_WATCH_PLAIN") == "1"
 
     # Reset the producer-error cell at the start of every invocation so that
     # stale errors from a prior run do not leak into this one.
@@ -878,6 +882,12 @@ if __name__ == "__main__":
         default=5.0,
         help="Seconds to wait before showing the streaming-disabled hint",
     )
+    ap.add_argument(
+        "--plain",
+        action="store_true",
+        default=False,
+        help="Force plain line-log output instead of the Rich TUI.",
+    )
     ns = ap.parse_args()
 
     # Discoverability hint: if the transcript directory does not exist within
@@ -896,7 +906,7 @@ if __name__ == "__main__":
         _time.sleep(0.1)
 
     try:
-        run_watch(ns.run_id, runs_dir=ns.runs_dir)
+        run_watch(ns.run_id, runs_dir=ns.runs_dir, plain=ns.plain)
     except KeyboardInterrupt:
         sys.exit(0)
     except SystemExit:
