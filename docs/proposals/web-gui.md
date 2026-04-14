@@ -107,7 +107,7 @@ Port `reduce()` and `reduce_header()` from `godel/_watch_model.py` to TypeScript
 **Approach 2 — Server-side reducer + delta protocol:**
 Server maintains a `WatchModel` per subscribed run and ships `{type: "patch", ops: [...]}` JSON Patch diffs. Avoids porting the reducer to TS but adds a stateful server layer and a delta protocol to maintain. Drift risk is higher.
 
-**Recommended:** Approach 1. The `reduce()` function is 130 lines of pure dataclass logic with no Python-specific dependencies. A TypeScript port is straightforward and can be round-trip tested against the Python implementation using shared transcript fixtures.
+**Recommended:** Approach 1. The reducer module (`reduce()` + `reduce_header()` + handlers in `godel/_watch_model.py`) is ~150 lines of pure dataclass logic with no Python-specific dependencies. A TypeScript port is straightforward and can be round-trip tested against the Python implementation using shared transcript fixtures.
 
 ### 3.4 Distribution
 
