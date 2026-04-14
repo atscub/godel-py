@@ -43,6 +43,7 @@ from godel._exceptions import (
     ConfigError,
 )
 from godel._pause import check_pause_request, write_pause_request, clear_pause_request, pause
+from godel._config import load_config, GodelConfig, LoadedConfig, resolve_workflow, list_workflows, open_event_log
 from godel._rewind import rewind
 from godel._tail import tail
 from godel import det
@@ -85,4 +86,10 @@ __all__ = [
     "pause",
     "tail",
     "version",
+    "load_config",
+    "GodelConfig",
+    "LoadedConfig",
+    "resolve_workflow",
+    "list_workflows",
+    "open_event_log",
 ]

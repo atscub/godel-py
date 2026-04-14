@@ -63,7 +63,8 @@ def test_failed_event_has_structured_info():
 
     # Retrieve the last run's event log
     run_id = wf._last_run_id
-    log = EventLog.load(run_id)
+    from godel._config import load_config
+    log = EventLog.load(run_id, runs_dir=str(load_config().runs_dir))
 
     # Find the step.enter event
     step_events = [e for e in log.all_events() if e.op == "step.enter"]
@@ -202,7 +203,8 @@ def test_parallel_branch_failure_emits_failed_events(tmp_path, monkeypatch):
         asyncio.run(wf())
 
     run_id = wf._last_run_id
-    log = EventLog.load(run_id)
+    from godel._config import load_config
+    log = EventLog.load(run_id, runs_dir=str(load_config().runs_dir))
     all_events = log.all_events()
     log.close()
 

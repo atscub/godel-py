@@ -206,7 +206,9 @@ def workflow(
                     pass
             else:
                 run_id = str(uuid.uuid4())
-                event_log = EventLog(run_id)
+                from godel._config import load_config
+                _loaded = load_config()
+                event_log = EventLog(run_id, runs_dir=str(_loaded.runs_dir))
 
             source_file = getattr(fn, '_source_file', '') or getattr(wrapper, '_source_file', '')
 

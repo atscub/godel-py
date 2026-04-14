@@ -14,6 +14,18 @@ from godel._decorators import WorkflowFail
 from godel._exceptions import PauseSignal
 
 
+def _resolve_runs_dir(override: str | None = None) -> "Path":
+    """Resolve the runs directory for CLI commands.
+
+    Precedence: ``--runs-dir`` flag (override) > config-resolved path.
+    """
+    from pathlib import Path
+    if override is not None:
+        return Path(override)
+    from godel._config import load_config
+    return load_config().runs_dir
+
+
 def parse_workflow_args(extra: tuple[str, ...]) -> tuple[list[str], dict[str, str]]:
     """Parse tokens after '--' into positional args and keyword args.
 
@@ -50,7 +62,7 @@ def parse_workflow_args(extra: tuple[str, ...]) -> tuple[list[str], dict[str, st
     return args, kwargs
 
 
-def _spawn_watch_subprocess(run_id: str, runs_dir: str = "./runs", plain: bool = False) -> "subprocess.Popen":
+def _spawn_watch_subprocess(run_id: str, runs_dir: str, plain: bool = False) -> "subprocess.Popen":
     """Spawn ``python -m godel._watch <run_id>`` as an isolated subprocess.
 
     The subprocess is started in a **new process group** (``start_new_session``
@@ -183,7 +195,7 @@ def main():
 
 
 @main.command("run", context_settings={"allow_extra_args": False, "ignore_unknown_options": True})
-@click.argument("file", type=click.Path(exists=True))
+@click.argument("file")
 @click.argument("extra", nargs=-1, type=click.UNPROCESSED)
 @click.option("--no-strict", is_flag=True, help="Disable strict mode (allow non-deterministic ops)")
 @click.option("--no-lint", is_flag=True, help="Skip lint pre-flight check")
@@ -211,7 +223,24 @@ def run_cmd(file, extra, no_strict, no_lint, watch, no_stream, plain):
 
     Tokens containing '=' with a valid identifier LHS become keyword args;
     other tokens become positional args.  All values are passed as strings.
+
+    FILE may be either a path to a .py file or the name of a workflow
+    registered under ``<project>/.godel/workflows/`` or ``~/.godel/workflows/``.
     """
+    # Resolve FILE to an actual path.  A real file path wins; otherwise treat
+    # as a name and look it up in the configured workflows dirs.
+    from pathlib import Path as _Path
+    if not _Path(file).is_file():
+        from godel._config import load_config, resolve_workflow
+        from godel._exceptions import ConfigError
+        try:
+            resolved = resolve_workflow(file, load_config())
+        except ConfigError as exc:
+            click.echo(f"[godel] {exc}", err=True)
+            sys.exit(2)
+        click.echo(f"[godel] resolved workflow {file!r} -> {resolved}", err=True)
+        file = str(resolved)
+
     if plain:
         watch = True
     if no_stream:
@@ -416,7 +445,7 @@ def resume_cmd(run_id, file, on_mismatch, on_source_edit, no_strict, no_lint, no
         os.environ["GODEL_STREAM_AGENTS"] = "0"
 
     # 1. Find JSONL by prefix
-    runs_dir = Path("./runs")
+    runs_dir = _resolve_runs_dir()
     if not runs_dir.exists():
         click.echo("No runs/ directory found", err=True)
         sys.exit(1)
@@ -438,7 +467,7 @@ def resume_cmd(run_id, file, on_mismatch, on_source_edit, no_strict, no_lint, no
     clear_pause_request(full_run_id, runs_dir=str(runs_dir))
 
     # 2. Load EventLog and create ReplayWalker
-    event_log = EventLog.load(full_run_id)
+    event_log = EventLog.load(full_run_id, runs_dir=str(runs_dir))
     walker = ReplayWalker(event_log)
 
     # 2b. Recover workflow args from WORKFLOW_STARTED event.
@@ -609,7 +638,7 @@ def show_cmd(run_id, graph, show_all):
     from pathlib import Path
     from godel._event_log import EventLog
 
-    runs_dir = Path("./runs")
+    runs_dir = _resolve_runs_dir()
     if not runs_dir.exists():
         click.echo("No runs/ directory found", err=True)
         sys.exit(1)
@@ -623,7 +652,7 @@ def show_cmd(run_id, graph, show_all):
         click.echo(f'Ambiguous prefix "{run_id}" — matches: {stems}', err=True)
         sys.exit(1)
 
-    log = EventLog.load(matches[0].stem)
+    log = EventLog.load(matches[0].stem, runs_dir=str(runs_dir))
 
     if graph:
         from godel._dag_render import render_dag
@@ -757,7 +786,7 @@ def rewind_cmd(run_id, target_ids, reason):
     from godel._rewind import apply_rewind
 
     # 1. Find JSONL by prefix (same pattern as resume_cmd)
-    runs_dir = Path("./runs")
+    runs_dir = _resolve_runs_dir()
     if not runs_dir.exists():
         click.echo("No runs/ directory found", err=True)
         sys.exit(1)
@@ -774,7 +803,7 @@ def rewind_cmd(run_id, target_ids, reason):
     full_run_id = matches[0].stem
 
     # 2. Load EventLog
-    event_log = EventLog.load(full_run_id)
+    event_log = EventLog.load(full_run_id, runs_dir=str(runs_dir))
 
     try:
         # 3. Parse comma-separated event IDs
@@ -840,7 +869,7 @@ def repair_cmd(run_id, agent_spec, model, max_iterations, dry_run):
     from godel.intervention._tools import ResumeRequested, GaveUp
 
     # 1. Prefix resolution
-    runs_dir = Path("./runs")
+    runs_dir = _resolve_runs_dir()
     if not runs_dir.exists():
         click.echo("No runs/ directory found", err=True)
         sys.exit(1)
@@ -968,7 +997,7 @@ def tail_cmd(run_id, output_format, no_follow, no_wait):
     from pathlib import Path
     from godel._tail import tail as _tail
 
-    runs_dir = Path("./runs")
+    runs_dir = _resolve_runs_dir()
 
     if no_wait:
         # Resolve prefix and fail fast if the file isn't there yet
@@ -1043,9 +1072,8 @@ def _check_stream_agents_disabled(run_id: str, runs_dir: str) -> bool:
 @click.argument("run_id")
 @click.option(
     "--runs-dir",
-    default="./runs",
-    show_default=True,
-    help="Directory containing per-run transcript directories",
+    default=None,
+    help="Directory containing per-run transcript directories (default: resolved from config)",
 )
 @click.option(
     "--plain",
@@ -1077,11 +1105,8 @@ def watch_cmd(run_id, runs_dir, plain):
             sys.exit(1)
         raise
 
-    # Resolve run_id: a run is uniquely identified by either an audit-log stem
-    # (runs/<id>.jsonl) or a transcript directory (runs/<id>/).  We merge both
-    # sources so a prefix match always resolves to the same full id regardless
-    # of which artifact is present.
-    runs_path = Path(runs_dir)
+    runs_path = _resolve_runs_dir(runs_dir)
+    runs_dir = str(runs_path)
     if not runs_path.exists():
         click.echo(f'No runs directory found at "{runs_dir}"', err=True)
         sys.exit(1)
@@ -1118,3 +1143,122 @@ def watch_cmd(run_id, runs_dir, plain):
         run_watch(run_id, runs_dir=runs_dir, plain=plain)
     except KeyboardInterrupt:
         sys.exit(0)
+
+
+# ---------------------------------------------------------------------------
+# `godel init` — scaffold .godel/ in the current project
+# ---------------------------------------------------------------------------
+
+_INIT_SETTINGS_STUB = """{
+  "runs_dir": null,
+  "workflows_dir": ".godel/workflows",
+  "strict": true,
+  "lint": true,
+  "stream_agents": true
+}
+"""
+
+
+@main.command("init")
+def init_cmd():
+    """Scaffold a ``.godel/`` directory in the current project.
+
+    Idempotent — existing files are never overwritten; each file prints
+    ``created`` or ``exists, skipped``.
+    """
+    from pathlib import Path
+    from godel._config import CONFIG_DIR_NAME, SETTINGS_FILENAME, WORKFLOWS_SUBDIR
+
+    root = Path.cwd() / CONFIG_DIR_NAME
+    workflows = root / WORKFLOWS_SUBDIR
+    settings = root / SETTINGS_FILENAME
+
+    if not root.exists():
+        root.mkdir()
+        click.echo(f"created {root}")
+    else:
+        click.echo(f"exists, skipped {root}")
+    if not workflows.exists():
+        workflows.mkdir(parents=True)
+        click.echo(f"created {workflows}")
+    else:
+        click.echo(f"exists, skipped {workflows}")
+
+    if not settings.exists():
+        settings.write_text(_INIT_SETTINGS_STUB)
+        click.echo(f"created {settings}")
+    else:
+        click.echo(f"exists, skipped {settings}")
+
+
+# ---------------------------------------------------------------------------
+# `godel config` — inspect merged configuration
+# ---------------------------------------------------------------------------
+
+
+@main.group("config")
+def config_group():
+    """Inspect godel configuration."""
+
+
+@config_group.command("path")
+def config_path_cmd():
+    """Print config sources in precedence order with the effective merged view."""
+    import json as _json
+    from godel._config import load_config, global_config_dir, find_project_config
+
+    loaded = load_config()
+    global_settings = global_config_dir() / "settings.json"
+    project_dir = find_project_config()
+    project_settings = (project_dir / "settings.json") if project_dir else None
+
+    click.echo("sources (low -> high precedence):")
+    mark = lambda p: "✓" if (p and p.is_file()) else "✗"
+    click.echo(f"  {mark(global_settings)} {global_settings}")
+    if project_settings:
+        click.echo(f"  {mark(project_settings)} {project_settings}")
+    else:
+        click.echo("  (no project .godel/ found)")
+    click.echo(f"\nproject_root: {loaded.project_root}")
+    click.echo(f"runs_dir:     {loaded.runs_dir}")
+    click.echo("\neffective config:")
+    click.echo(_json.dumps(loaded.config.model_dump(), indent=2))
+
+
+# ---------------------------------------------------------------------------
+# `godel workflows` — list and resolve named workflows
+# ---------------------------------------------------------------------------
+
+
+@main.group("workflows")
+def workflows_group():
+    """List and resolve named workflows."""
+
+
+@workflows_group.command("list")
+def workflows_list_cmd():
+    """List every named workflow discoverable from the current cwd."""
+    from godel._config import load_config, list_workflows
+
+    loaded = load_config()
+    found = list_workflows(loaded)
+    if not found:
+        click.echo("(no workflows found)")
+        return
+    for name in sorted(found):
+        click.echo(f"  {name}  -> {found[name]}")
+
+
+@workflows_group.command("which")
+@click.argument("name")
+def workflows_which_cmd(name):
+    """Print the resolved path for NAME without running it."""
+    from godel._config import load_config, resolve_workflow
+    from godel._exceptions import ConfigError
+
+    try:
+        path = resolve_workflow(name, load_config())
+    except ConfigError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(1)
+    click.echo(str(path))

@@ -14,7 +14,7 @@ from godel._context import _privileged
 class EventLog:
     """In-memory event DAG with append-only JSONL persistence."""
 
-    def __init__(self, run_id: str, runs_dir: str = "./runs"):
+    def __init__(self, run_id: str, runs_dir: str):
         self._run_id = run_id
         self._events: list[Event] = []
         self._events_by_id: dict[str, Event] = {}
@@ -171,7 +171,7 @@ class EventLog:
             _privileged.reset(token)
 
     @classmethod
-    def load(cls, run_id: str, runs_dir: str = "./runs") -> EventLog:
+    def load(cls, run_id: str, runs_dir: str) -> EventLog:
         """Reconstruct EventLog from JSONL file. Last snapshot per event_id wins."""
         log = cls.__new__(cls)
         log._run_id = run_id

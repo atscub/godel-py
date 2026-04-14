@@ -299,7 +299,8 @@ def test_pause_ignored_during_replay(tmp_path, monkeypatch):
     from godel._event_log import EventLog
     from godel._replay import ReplayWalker
 
-    log = EventLog.load(run_id)
+    from godel._config import load_config
+    log = EventLog.load(run_id, runs_dir=str(load_config().runs_dir))
     walker = ReplayWalker(log)
     token = _pending_replay.set(walker)
 
