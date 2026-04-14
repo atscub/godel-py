@@ -39,7 +39,7 @@ async def finalize(agent, count: str, reflection: str) -> str:
 @workflow
 async def chat():
     await print("── research demo (copilot) ──")
-    agent = copilot(model="default", skip_permissions=True)
+    agent = copilot(model="claude-sonnet-4.6", skip_permissions=True)
     count = await investigate(agent)
     reflection = await reflect(agent)
     summary = await finalize(agent, count, reflection)

@@ -30,6 +30,6 @@ async def write_about_photosynthsis(agent):
 
 @workflow
 async def chat():
-    agent2 = copilot(model="default", skip_permissions=True)
+    agent2 = copilot(model="claude-sonnet-4.6", skip_permissions=True)
     photosynthesis = await write_about_photosynthsis(agent2)
     return {"photosynthesis": photosynthesis}

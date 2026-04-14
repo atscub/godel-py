@@ -196,9 +196,16 @@ class CopilotAdapter:
     Copilot emits one JSON object per line with a top-level ``"type"`` field:
 
     * ``"assistant.message"`` (non-ephemeral) → ``agent.thought``
-    * ``"tool_call"`` or ``"function_call"`` → ``agent.tool_call``
-    * ``"tool_result"`` or ``"function_result"`` → ``agent.tool_result``
+    * ``"tool.execution_start"`` / ``"tool_call"`` / ``"function_call"``
+      → ``agent.tool_call``
+    * ``"tool.execution_complete"`` / ``"tool_result"`` / ``"function_result"``
+      → ``agent.tool_result``
     * ``"result"``, ``"progress"``, ephemeral messages, etc. → ``None``
+
+    Current Copilot CLI (1.0.25+) uses ``tool.execution_start`` /
+    ``tool.execution_complete`` with ``toolName`` + ``result.content`` fields.
+    The older ``tool_call`` / ``tool_result`` names are kept for
+    backward-compatibility with earlier CLI versions and tests.
     """
 
     def map(self, data: dict) -> _MapResult:
@@ -210,7 +217,39 @@ class CopilotAdapter:
             content = (data.get("data") or {}).get("content", "")
             if content:
                 return [("agent.thought", {"text": content})]
+            # Empty-content assistant.message may still carry toolRequests,
+            # but the subsequent tool.execution_start events are the
+            # authoritative source — skip to avoid duplicates.
             return None
+
+        if etype == "tool.execution_start":
+            d = data.get("data") or {}
+            return [
+                (
+                    "agent.tool_call",
+                    {
+                        "tool": d.get("toolName", ""),
+                        "input": d.get("arguments"),
+                    },
+                )
+            ]
+
+        if etype == "tool.execution_complete":
+            d = data.get("data") or {}
+            result = d.get("result")
+            if isinstance(result, dict):
+                output = result.get("content", result.get("detailedContent", ""))
+            else:
+                output = result if result is not None else ""
+            return [
+                (
+                    "agent.tool_result",
+                    {
+                        "tool": d.get("toolCallId", d.get("toolName", "")),
+                        "output": output,
+                    },
+                )
+            ]
 
         if etype in ("tool_call", "function_call"):
             d = data.get("data") or data
