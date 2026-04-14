@@ -364,8 +364,14 @@ def workflow(
                 if transcript is not None:
                     # Emit the terminal sentinel before closing so live watchers
                     # know the run is done and can exit their follow loop.
+                    # Inspect sys.exc_info() to report the correct terminal
+                    # status: FAILED if an exception is propagating through
+                    # this finally block, otherwise FINISHED.
+                    import sys as _sys
+                    _exc_type = _sys.exc_info()[0]
+                    _status = "FINISHED" if _exc_type is None else "FAILED"
                     try:
-                        transcript.write_workflow_finished()
+                        transcript.write_workflow_finished(status=_status)
                     except Exception:
                         pass
                     transcript.close()
