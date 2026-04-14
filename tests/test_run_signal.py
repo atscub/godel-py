@@ -78,6 +78,11 @@ def _pid_alive(pid: int) -> bool:
         return True
     except ProcessLookupError:
         return False
+    except PermissionError:
+        # Process exists but is owned by another user — still "alive" for
+        # our purposes. Unlikely in same-user tests, but don't let it
+        # surface as a spurious test failure.
+        return True
 
 
 # ---------------------------------------------------------------------------
@@ -135,8 +140,17 @@ def test_run_process_group_isolation():
 # ---------------------------------------------------------------------------
 
 def test_sigint_kills_child():
-    """SIGINT to the workflow process must kill the child subprocess within 5 s."""
-    marker_file = f"/tmp/godel_signal_test_{os.getpid()}.pid"
+    """SIGINT to the workflow process must kill the child subprocess AND its
+    grandchild (the actual long-running process) within 5 s.
+
+    The bug report concern is that agent grandchildren (e.g. claude CLI)
+    survive, not just the immediate sh wrapper.  We therefore record both
+    the sh PID and the sleep grandchild PID and assert both die.
+    """
+    marker_sh = f"/tmp/godel_signal_sh_{os.getpid()}.pid"
+    marker_gc = f"/tmp/godel_signal_gc_{os.getpid()}.pid"
+    # sh writes its own PID, backgrounds sleep (recording $! as the grandchild
+    # PID), then `wait`s so the sh process stays alive until sleep finishes.
     script = textwrap.dedent(f"""\
         from godel._decorators import workflow
         from godel._run import run
@@ -144,27 +158,31 @@ def test_sigint_kills_child():
         @workflow
         async def wf():
             await run(
-                "sh -c 'echo $$ > {marker_file} && sleep 60'",
+                "sh -c 'echo $$ > {marker_sh}; sleep 60 & echo $! > {marker_gc}; wait'",
             )
     """)
     path = _write_script(script)
     workflow_proc = _spawn_godel_run(path)
 
     try:
-        # Wait for the marker file to appear (child has started).
+        # Wait for BOTH marker files to appear.
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
-            if os.path.exists(marker_file):
+            if os.path.exists(marker_sh) and os.path.exists(marker_gc):
                 break
             time.sleep(0.1)
         else:
             workflow_proc.kill()
-            pytest.fail("Child process did not write marker file in time")
+            pytest.fail("Child processes did not write marker files in time")
 
-        with open(marker_file) as f:
-            child_pid = int(f.read().strip())
+        with open(marker_sh) as f:
+            sh_pid = int(f.read().strip())
+        with open(marker_gc) as f:
+            gc_pid = int(f.read().strip())
 
-        assert _pid_alive(child_pid), "Child should be alive before SIGINT"
+        assert _pid_alive(sh_pid) and _pid_alive(gc_pid), (
+            "Both sh and sleep grandchild should be alive before SIGINT"
+        )
 
         # Send SIGINT to the workflow process.
         workflow_proc.send_signal(signal.SIGINT)
@@ -176,18 +194,23 @@ def test_sigint_kills_child():
             workflow_proc.kill()
             pytest.fail("Workflow did not exit within 5 s after SIGINT")
 
-        # Child should be dead within 2 s of workflow exit.
+        # Both PIDs should be dead within 2 s of workflow exit.
         deadline = time.monotonic() + 2
         while time.monotonic() < deadline:
-            if not _pid_alive(child_pid):
+            if not _pid_alive(sh_pid) and not _pid_alive(gc_pid):
                 break
             time.sleep(0.1)
 
-        assert not _pid_alive(child_pid), (
-            f"Child process {child_pid} is still alive after SIGINT to workflow"
+        survivors = [
+            ("sh", sh_pid) if _pid_alive(sh_pid) else None,
+            ("sleep-grandchild", gc_pid) if _pid_alive(gc_pid) else None,
+        ]
+        survivors = [s for s in survivors if s]
+        assert not survivors, (
+            f"Processes still alive after SIGINT to workflow: {survivors}"
         )
     finally:
-        for p in (marker_file, path):
+        for p in (marker_sh, marker_gc, path):
             try:
                 os.unlink(p)
             except FileNotFoundError:
@@ -199,9 +222,12 @@ def test_sigint_kills_child():
 # ---------------------------------------------------------------------------
 
 def test_sigint_kills_parallel_children():
-    """A single SIGINT must kill all parallel run() children."""
-    marker1 = f"/tmp/godel_par1_{os.getpid()}.pid"
-    marker2 = f"/tmp/godel_par2_{os.getpid()}.pid"
+    """A single SIGINT must kill all parallel run() children AND grandchildren."""
+    pid = os.getpid()
+    marker_sh1 = f"/tmp/godel_par_sh1_{pid}.pid"
+    marker_gc1 = f"/tmp/godel_par_gc1_{pid}.pid"
+    marker_sh2 = f"/tmp/godel_par_sh2_{pid}.pid"
+    marker_gc2 = f"/tmp/godel_par_gc2_{pid}.pid"
     script = textwrap.dedent(f"""\
         from godel._decorators import workflow, parallel
         from godel._run import run
@@ -209,30 +235,36 @@ def test_sigint_kills_parallel_children():
         @workflow
         async def wf():
             await parallel(
-                run("sh -c 'echo $$ > {marker1} && sleep 60'"),
-                run("sh -c 'echo $$ > {marker2} && sleep 60'"),
+                run("sh -c 'echo $$ > {marker_sh1}; sleep 60 & echo $! > {marker_gc1}; wait'"),
+                run("sh -c 'echo $$ > {marker_sh2}; sleep 60 & echo $! > {marker_gc2}; wait'"),
             )
     """)
     path = _write_script(script)
     workflow_proc = _spawn_godel_run(path)
 
     try:
-        # Wait for both marker files.
+        # Wait for all four marker files.
+        all_markers = (marker_sh1, marker_gc1, marker_sh2, marker_gc2)
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
-            if os.path.exists(marker1) and os.path.exists(marker2):
+            if all(os.path.exists(m) for m in all_markers):
                 break
             time.sleep(0.1)
         else:
             workflow_proc.kill()
             pytest.fail("Parallel children did not write marker files in time")
 
-        with open(marker1) as f:
-            child1_pid = int(f.read().strip())
-        with open(marker2) as f:
-            child2_pid = int(f.read().strip())
+        pids = {}
+        for label, m in (
+            ("sh1", marker_sh1), ("gc1", marker_gc1),
+            ("sh2", marker_sh2), ("gc2", marker_gc2),
+        ):
+            with open(m) as f:
+                pids[label] = int(f.read().strip())
 
-        assert _pid_alive(child1_pid) and _pid_alive(child2_pid), "Both children should be alive"
+        assert all(_pid_alive(p) for p in pids.values()), (
+            "All children+grandchildren should be alive before SIGINT"
+        )
 
         workflow_proc.send_signal(signal.SIGINT)
 
@@ -244,14 +276,14 @@ def test_sigint_kills_parallel_children():
 
         deadline = time.monotonic() + 2
         while time.monotonic() < deadline:
-            if not _pid_alive(child1_pid) and not _pid_alive(child2_pid):
+            if not any(_pid_alive(p) for p in pids.values()):
                 break
             time.sleep(0.1)
 
-        survivors = [p for p in (child1_pid, child2_pid) if _pid_alive(p)]
+        survivors = {label: p for label, p in pids.items() if _pid_alive(p)}
         assert not survivors, f"Processes still alive after SIGINT: {survivors}"
     finally:
-        for p in (marker1, marker2, path):
+        for p in (marker_sh1, marker_gc1, marker_sh2, marker_gc2, path):
             try:
                 os.unlink(p)
             except FileNotFoundError:
@@ -263,38 +295,69 @@ def test_sigint_kills_parallel_children():
 # ---------------------------------------------------------------------------
 
 def test_double_sigint_panic_exit():
-    """Two rapid SIGINTs within 1 s should cause immediate exit (code 130)."""
-    script = textwrap.dedent("""\
+    """Two rapid SIGINTs within 1 s should trigger the panic path specifically.
+
+    Both ``os._exit(130)`` (panic) and ``sys.exit(130)`` (normal
+    KeyboardInterrupt handling in ``run_cmd``) yield exit code 130, so exit
+    code alone does not discriminate.  To verify the panic path we:
+      1. Use a marker-file sync to guarantee the subprocess has reached
+         ``proc.communicate()`` before we SIGINT (flake-free on slow CI).
+      2. Measure elapsed time after the SECOND SIGINT.  The panic path exits
+         near-instantly (< 500 ms).  The non-panic path would need to wait
+         for ``_kill_process_group``'s SIGTERM→SIGKILL grace window (~2 s).
+    """
+    marker = f"/tmp/godel_panic_{os.getpid()}.pid"
+    script = textwrap.dedent(f"""\
         from godel._decorators import workflow
         from godel._run import run
 
         @workflow
         async def wf():
-            await run("sleep 60")
+            # Marker file is written by the shell BEFORE sleep, so its
+            # presence proves the subprocess is running and proc.communicate()
+            # is blocked — i.e., the workflow task is awaiting inside run().
+            await run("sh -c 'echo $$ > {marker}; sleep 60'")
     """)
     path = _write_script(script)
     workflow_proc = _spawn_godel_run(path)
 
     try:
-        # Give it a moment to start the subprocess.
-        time.sleep(0.5)
+        # Wait for the marker file — deterministic startup sync.
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if os.path.exists(marker):
+                break
+            time.sleep(0.05)
+        else:
+            workflow_proc.kill()
+            pytest.fail("Subprocess did not write marker file in time")
 
-        # First SIGINT — triggers task cancellation + cleanup.
+        # First SIGINT — schedules task cancellation + cleanup.
         workflow_proc.send_signal(signal.SIGINT)
-        # Second SIGINT < 1 s later — triggers os._exit(130).
+        # Second SIGINT < 1 s later — triggers os._exit(130) panic path.
         time.sleep(0.05)
+        sigint2_at = time.monotonic()
         workflow_proc.send_signal(signal.SIGINT)
 
-        # Should exit quickly (< 3 s) due to os._exit(130).
+        # Panic path exits near-instantly.  Give it up to 3 s in case of
+        # scheduler noise, but assert < 500 ms actually elapsed for the panic
+        # path to be the one that fired (the graceful path would wait for
+        # _kill_process_group's 2 s grace window).
         try:
             rc = workflow_proc.wait(timeout=3)
         except subprocess.TimeoutExpired:
             workflow_proc.kill()
             pytest.fail("Workflow did not exit within 3 s after double SIGINT")
 
+        elapsed = time.monotonic() - sigint2_at
         assert rc == 130, f"Expected exit code 130, got {rc}"
+        assert elapsed < 0.5, (
+            f"Panic path should exit in < 500 ms after second SIGINT; "
+            f"got {elapsed*1000:.0f} ms — graceful cleanup path likely fired instead"
+        )
     finally:
-        try:
-            os.unlink(path)
-        except FileNotFoundError:
-            pass
+        for p in (marker, path):
+            try:
+                os.unlink(p)
+            except FileNotFoundError:
+                pass

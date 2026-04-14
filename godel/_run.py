@@ -34,15 +34,18 @@ async def _kill_process_group(proc: asyncio.subprocess.Process, grace: float = 2
         return
 
     # POSIX path — signal the entire process group.
+    # Catch OSError broadly (not just ProcessLookupError) because restricted
+    # container environments (rootless podman, strict seccomp, some k8s pods)
+    # can raise PermissionError (EPERM) from getpgid/killpg.
     try:
         pgid = os.getpgid(proc.pid)
-    except ProcessLookupError:
-        # Process already gone.
+    except OSError:
+        # Process already gone or signalling denied — nothing we can do.
         return
 
     try:
         os.killpg(pgid, signal.SIGTERM)
-    except ProcessLookupError:
+    except OSError:
         return
 
     try:
@@ -51,11 +54,11 @@ async def _kill_process_group(proc: asyncio.subprocess.Process, grace: float = 2
         # Grace period exhausted — force-kill survivors.
         try:
             os.killpg(pgid, signal.SIGKILL)
-        except ProcessLookupError:
+        except OSError:
             pass
         try:
             await asyncio.wait_for(proc.wait(), timeout=2.0)
-        except (asyncio.TimeoutError, ProcessLookupError):
+        except (asyncio.TimeoutError, OSError):
             pass
 
 
@@ -190,9 +193,10 @@ async def run(cmd: str, *, cwd: str | None = None, timeout: float | None = None,
             _popen_kwargs: dict = {}
             if sys.platform == "win32":
                 import subprocess as _subprocess
-                _popen_kwargs["creationflags"] = getattr(
-                    _subprocess, "CREATE_NEW_PROCESS_GROUP", 0
-                )
+                # Access the constant directly: if a future Windows build
+                # somehow lacks it, a loud AttributeError is preferable to
+                # silently degrading to no process-group isolation.
+                _popen_kwargs["creationflags"] = _subprocess.CREATE_NEW_PROCESS_GROUP
             else:
                 _popen_kwargs["start_new_session"] = True
 
@@ -208,13 +212,24 @@ async def run(cmd: str, *, cwd: str | None = None, timeout: float | None = None,
                     proc.communicate(), timeout=timeout
                 )
             except asyncio.CancelledError:
-                await _kill_process_group(proc)
+                # Shield the cleanup coroutine so that a second cancel
+                # request arriving mid-kill (e.g., from asyncio.gather
+                # propagating cancellation among parallel run() calls) cannot
+                # skip the SIGKILL escalation path inside _kill_process_group.
+                # No emit_failed(): cancellation is not a workflow failure,
+                # so the STARTED event intentionally has no FAILED pair.
+                # Replay will see STARTED-only and either re-execute (if
+                # idempotent) or raise UnsafeResumeError.
+                await asyncio.shield(_kill_process_group(proc))
                 raise
             except asyncio.TimeoutError:
-                await _kill_process_group(proc)
+                await asyncio.shield(_kill_process_group(proc))
+                # Bound the post-kill drain: if SIGKILL somehow failed to
+                # reap the process (kernel D-state, cgroup freeze), don't
+                # turn a handled timeout into a permanent hang.
                 try:
-                    await proc.communicate()
-                except Exception:
+                    await asyncio.wait_for(proc.communicate(), timeout=5.0)
+                except (asyncio.TimeoutError, Exception):
                     pass
                 step_path = tuple(ctx.step_stack) if ctx else ()
                 error_msg = f"command timed out after {timeout}s: {cmd}"

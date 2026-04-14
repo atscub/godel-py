@@ -99,11 +99,14 @@ def _run_workflow_with_sigint(fn, wf_args: list, wf_kwargs: dict):
     SIGINT arriving within one second of the first triggers an immediate
     ``os._exit(130)`` in case cleanup is hung.
 
-    On Windows, SIGINT is delivered by Python as a KeyboardInterrupt on the
-    main thread rather than as an OS signal, so we fall back to the default
-    ``asyncio.run`` behaviour there (the KeyboardInterrupt propagates normally
-    and ``run()``'s ``CancelledError`` handler still fires via
-    ``loop.run_until_complete`` unwinding).
+    POSIX-only.  Windows is **out of scope** for this cleanup path: on Windows
+    we skip installing the SIGINT handler, so a Ctrl+C there raises
+    ``KeyboardInterrupt`` directly in the event loop thread and does NOT
+    cancel the asyncio task — meaning ``run()``'s ``CancelledError`` handler
+    does not fire and spawned subprocesses may be left alive.  Bridging
+    Windows KeyboardInterrupt to ``Task.cancel()`` is tracked as a future
+    enhancement; until then, Windows users should not rely on Ctrl+C for
+    clean subprocess shutdown.
     """
     import signal as _signal
 
