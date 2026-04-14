@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v1.10.1 (2026-04-14)
+
+### Bug Fixes
+
+- **run**: Address review C1/W1-W4/N1-N4 for SIGINT subprocess cleanup
+  ([`0995a62`](https://github.com/atscub/godel-py/commit/0995a626e3b3fbb7758c06ed2869933fac341d8e))
+
+- **run**: Isolate subprocess process groups and propagate SIGINT cleanly
+  ([`b95311a`](https://github.com/atscub/godel-py/commit/b95311a6fc2ac60901560bc2891c5e01bce4ccca))
+
+
 ## v1.10.0 (2026-04-14)
 
 ### Features
