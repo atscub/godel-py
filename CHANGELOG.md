@@ -2,6 +2,39 @@
 
 <!-- version list -->
 
+## v1.9.0 (2026-04-14)
+
+### Bug Fixes
+
+- **cli**: Allow --watch subprocess spawn under strict mode
+  ([`ba38d82`](https://github.com/atscub/godel-py/commit/ba38d82f4baf02d475a7d7d954e7974b3e2eff33))
+
+### Features
+
+- Add version() helper
+  ([`936aa90`](https://github.com/atscub/godel-py/commit/936aa903d401b7867d6e0b6ae33e78108594466e))
+
+### Testing
+
+- Add integration test suite for observability (godel-py-5pl.16)
+  ([`91cdc5d`](https://github.com/atscub/godel-py/commit/91cdc5d144f79e2d9702808570e6624276b6d66b))
+
+- Apply pass-1 review fixes to observability integration suite
+  ([`5e7a4ec`](https://github.com/atscub/godel-py/commit/5e7a4ec171620a0b0d2cbc2b996eaf81a1ffc8bd))
+
+- Strengthen godel watch CLI subprocess assertion (pass-2 C-1)
+  ([`8452f0d`](https://github.com/atscub/godel-py/commit/8452f0d228f11e0ccac85d2ce43d7d6f913c6c7d))
+
+- **watch**: Add byte-exact syrupy snapshot test for AC1 render output
+  ([`d88f836`](https://github.com/atscub/godel-py/commit/d88f836f5a75866c3603857e126eec176c26b473))
+
+- **watch**: Pin rich<15 and tidy snapshot test call sites
+  ([`daf6bd5`](https://github.com/atscub/godel-py/commit/daf6bd57ccce8d9ebbc46456738f0ad2ea37b4ac))
+
+- **watch**: Restructure AC6 KI test to exercise real __exit__ path
+  ([`125da5f`](https://github.com/atscub/godel-py/commit/125da5f4a2388687fe109aebd77013c7d3c33a76))
+
+
 ## v1.8.1 (2026-04-14)
 
 ### Bug Fixes

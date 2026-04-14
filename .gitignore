@@ -9,4 +9,8 @@ runs/
 *.db
 .beads-credential-key
 
+# Obsidian vault files
 .obsidian/
+
+# Lock files
+*.lock
