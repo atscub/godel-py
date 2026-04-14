@@ -69,6 +69,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO
 
+from godel._redact import RedactorRegistry
+
 
 TRANSCRIPT_FORMAT_VERSION = 1
 _FILENAME = "transcript.jsonl"
@@ -109,6 +111,7 @@ class TranscriptWriter:
         *,
         max_bytes: int | None = None,
         run_id: str | None = None,
+        redactors: list | None = None,
     ) -> None:
         self._run_dir = Path(run_dir)
         self._run_dir.mkdir(parents=True, exist_ok=True)
@@ -122,6 +125,7 @@ class TranscriptWriter:
             self._max_bytes = _DEFAULT_MAX_BYTES
 
         self._run_id: str = run_id or self._run_dir.name
+        self._redactor_registry = RedactorRegistry(redactors)
         self._lock = threading.Lock()
         # _seq is the most-recently ASSIGNED seq number.
         # Invariant: every event that has been durably written to disk has
@@ -188,7 +192,31 @@ class TranscriptWriter:
                 "stream_path": list(stream_path) if stream_path else [],
             }
             event_body.update(extra)
-            line = _encode({"event": event_body})
+            serialised_body = _encode(event_body)
+
+            # Apply redaction pipeline (string-based: operates on the serialised
+            # event body, before the outer {"event": ...} wrapper is added).
+            # sentinel_extras carries the standard event fields so that when a
+            # redactor raises, the written sentinel is a well-formed event line.
+            sentinel_extras = {
+                "ts": event_body["ts"],
+                "seq": seq,
+                "step_path": event_body["step_path"],
+                "stream_path": event_body["stream_path"],
+            }
+            redacted = self._redactor_registry.apply(
+                serialised_body, sentinel_extras=sentinel_extras
+            )
+            if redacted is None:
+                # A redactor dropped the event — roll back seq and return.
+                self._seq -= 1
+                return seq
+
+            # redacted is either the (possibly transformed) original body or a
+            # sentinel JSON string injected by the error-substitution path.
+            # Wrap in the standard {"event": ...} envelope.
+            line = '{"event":' + redacted + "}"
+
             try:
                 self._maybe_rotate(line)
             except Exception:
