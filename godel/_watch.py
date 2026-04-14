@@ -367,7 +367,10 @@ class _PlainLineLog:
         self._file = file or sys.stdout
         self._model = WatchModel.empty()
         self._use_color = bool(getattr(self._file, "isatty", lambda: False)())
-        self._last_step_path: tuple[str, ...] | None = None
+        # (step_path, stream_path) keys we've already printed a header for.
+        # Each parallel branch prints its header once; re-entering the branch
+        # after interleaving with a sibling does not reprint.
+        self._step_header_seen: set = set()
         # Spinner state: pending agent call awaiting a response on the same
         # stream_path.  Only animated on TTY output; no-op elsewhere.
         self._pending_stream: tuple | None = None
@@ -395,6 +398,23 @@ class _PlainLineLog:
         # soft-wrap long streamed chunks so continuations stay aligned under
         # the block's indent instead of flushing to column zero.
         self._burst_col: dict[tuple, int] = {}
+        # Branch correlation — parallel() branches are tagged "[b1]", "[b2]",
+        # ... derived from the outermost stream_path element.  A small color
+        # palette cycles so each branch also gets a stable color.  Sequential
+        # (non-parallel) agent calls also get tags, which is harmless and
+        # preserves consistent alignment.
+        self._branch_index: dict[str, int] = {}
+        # Muted 256-colour backgrounds paired with white foreground.  The bg
+        # codes picked here are low-saturation / mid-luminance so the tag
+        # reads cleanly on both light and dark terminal themes and doesn't
+        # visually compete with the message text.
+        self._branch_bg_escapes = (
+            "\x1b[48;5;24m\x1b[97m",   # dark teal
+            "\x1b[48;5;53m\x1b[97m",   # dark wine
+            "\x1b[48;5;58m\x1b[97m",   # dark olive
+            "\x1b[48;5;23m\x1b[97m",   # dark slate
+            "\x1b[48;5;54m\x1b[97m",   # dark purple
+        )
 
     def start(self) -> None:
         pass
@@ -417,9 +437,44 @@ class _PlainLineLog:
             return text
         return f"{_ANSI.get(color, '')}{text}{_ANSI['reset']}"
 
-    def _emit(self, lines: list[str]) -> None:
+    # Visible width (characters) of the branch tag slot, including the
+    # trailing space separator.  "[b1] " … "[b99] " all fit in 6 columns;
+    # branches beyond b99 truncate rather than break alignment.
+    _BRANCH_SLOT_WIDTH = 6
+
+    def _branch_tag_raw(self, stream_path: tuple) -> str | None:
+        """Return ``"b<n>"`` for *stream_path* or ``None`` if unbranched."""
+        if not stream_path:
+            return None
+        root = stream_path[0]
+        idx = self._branch_index.get(root)
+        if idx is None:
+            idx = len(self._branch_index) + 1
+            self._branch_index[root] = idx
+        return f"b{idx}"
+
+    def _branch_prefix(self, stream_path: tuple) -> str:
+        """Return the coloured branch badge (or padded blanks) for a line.
+
+        Branched lines get a low-saturation background-tinted ``[bN]`` badge
+        so branches form a vertically scannable column of tints; unbranched
+        lines get a blank slot of the same width so alignment is preserved.
+        """
+        slot = self._BRANCH_SLOT_WIDTH
+        tag = self._branch_tag_raw(stream_path)
+        if tag is None:
+            return " " * slot
+        badge = f"[{tag}]"[: slot - 1]
+        pad = " " * (slot - len(badge))
+        if not self._use_color:
+            return f"{badge}{pad}"
+        esc = self._branch_bg_escapes[(self._branch_index[stream_path[0]] - 1) % len(self._branch_bg_escapes)]
+        return f"{esc}{badge}{_ANSI['reset']}{pad}"
+
+    def _emit(self, lines: list[str], stream_path: tuple = ()) -> None:
+        prefix = self._branch_prefix(tuple(stream_path or ()))
         for line in lines:
-            print(line, file=self._file, flush=True)
+            print(prefix + line, file=self._file, flush=True)
         if lines:
             self._emitted_any = True
 
@@ -456,7 +511,7 @@ class _PlainLineLog:
             pass
         self._spinner_active = True
 
-    def _append_chunk(self, cont: str, text: str, *, op: str, stream_path: tuple = ()) -> None:
+    def _append_chunk(self, cont: str, text: str, *, op: str, stream_path: tuple = (), _branch_prefix: str | None = None) -> None:
         """Write a streaming text chunk to the currently-open burst line.
 
         Embedded newlines are rewritten with the continuation indent so
@@ -467,7 +522,11 @@ class _PlainLineLog:
         """
         color = "dim" if op == "agent.thought" else None
         width = self._term_width()
-        col = self._burst_col.get(stream_path, len(cont))
+        prefix = self._branch_prefix(tuple(stream_path or ())) if _branch_prefix is None else _branch_prefix
+        # Wrap budget must account for the visible-width of the branch slot
+        # (always ``_BRANCH_SLOT_WIDTH`` regardless of ANSI codes).
+        line_start_width = self._BRANCH_SLOT_WIDTH + len(cont)
+        col = self._burst_col.get(stream_path, line_start_width)
         parts = text.split("\n")
 
         def _write(segment: str) -> None:
@@ -479,8 +538,8 @@ class _PlainLineLog:
 
         def _newline() -> None:
             nonlocal col
-            self._file.write("\n" + cont)
-            col = len(cont)
+            self._file.write("\n" + prefix + cont)
+            col = line_start_width
 
         for i, part in enumerate(parts):
             if i > 0:
@@ -548,16 +607,26 @@ class _PlainLineLog:
                 pass
             self._spinner_active = False
 
-    def _step_header(self, step_path: list | tuple) -> None:
+    def _step_header(self, step_path: list | tuple, stream_path: tuple = ()) -> None:
         sp = tuple(step_path or ())
-        if sp == self._last_step_path:
+        # Include stream_path in the dedup key so parallel branches of the
+        # same step each get their own header — without it, two concurrent
+        # invocations of ``ask_haiku`` would collapse under a single label.
+        # Use only the outermost stream_path element as the branch
+        # discriminator: agent.call and its nested run() emit events at
+        # increasing stream_path depths (e.g. [branch], [branch, launch],
+        # [branch, launch, run]), but they all belong to the same parallel
+        # branch and should live under a single header.
+        sp_root = tuple(stream_path or ())[:1]
+        key = (sp, sp_root)
+        if key in self._step_header_seen:
             return
-        self._last_step_path = sp
+        self._step_header_seen.add(key)
         if not sp:
             return
         indent = "  " * (len(sp) - 1)
         label = " / ".join(str(p) for p in sp)
-        self._emit([f"{indent}{self._c('cyan', '▸ ' + label)}"])
+        self._emit([f"{indent}{self._c('cyan', '▸ ' + label)}"], stream_path=stream_path)
 
     # ------------------------------------------------------------------
     # Main dispatch
@@ -628,13 +697,13 @@ class _PlainLineLog:
 
         # Group events by step for readability.
         if op not in ("rotate", "WORKFLOW_FINISHED"):
-            self._step_header(step_path)
+            self._step_header(step_path, stream_path)
 
         if op == "agent.prompt":
             prompt = event.get("prompt", "")
             model = event.get("model", "")
             header = pad + self._c("magenta", f"› prompt") + (f" {self._c('dim', '(' + model + ')')}" if model else "")
-            self._emit([header] + [cont + ln for ln in _wrap_multiline(prompt, indent="", width=max(self._term_width() - len(cont), 20))])
+            self._emit([header] + [cont + ln for ln in _wrap_multiline(prompt, indent="", width=max(self._term_width() - len(cont) - self._BRANCH_SLOT_WIDTH, 20))], stream_path=stream_path)
             # Arm the spinner for the forthcoming response.
             self._pending_stream = stream_path
             self._pending_depth = depth
@@ -643,11 +712,12 @@ class _PlainLineLog:
 
         if op == "agent.response":
             text = event.get("text", "")
-            self._emit([pad + self._c("green", "‹ response")])
-            self._file.write(cont)
-            self._burst_col[stream_path] = len(cont)
+            self._emit([pad + self._c("green", "‹ response")], stream_path=stream_path)
+            branch_prefix = self._branch_prefix(stream_path)
+            self._file.write(branch_prefix + cont)
+            self._burst_col[stream_path] = self._BRANCH_SLOT_WIDTH + len(cont)
             if text:
-                self._append_chunk(cont, text, op=op, stream_path=stream_path)
+                self._append_chunk(cont, text, op=op, stream_path=stream_path, _branch_prefix=branch_prefix)
             self._burst[stream_path] = (op, cont)
             accum = self._stream_accum.setdefault(stream_path, {})
             accum[op] = accum.get(op, "") + text
@@ -667,7 +737,7 @@ class _PlainLineLog:
                     rendered = repr(inp)
                 for ln in rendered.split("\n"):
                     body.append(cont + ln)
-            self._emit(body)
+            self._emit(body, stream_path=stream_path)
             return
 
         if op == "agent.tool_result":
@@ -688,14 +758,14 @@ class _PlainLineLog:
             body += [cont + ln for ln in shown]
             if more > 0:
                 body.append(cont + self._c("dim", f"… (+{more} more lines)"))
-            self._emit(body)
+            self._emit(body, stream_path=stream_path)
             return
 
         if op == "agent.raw":
             text = event.get("text", "")
             reason = event.get("reason", "")
             head = pad + self._c("red", "! raw") + (f" {self._c('dim', '(' + reason + ')')}" if reason else "")
-            self._emit([head] + [cont + ln for ln in _wrap_multiline(text, indent="", width=max(self._term_width() - len(cont), 20))])
+            self._emit([head] + [cont + ln for ln in _wrap_multiline(text, indent="", width=max(self._term_width() - len(cont) - self._BRANCH_SLOT_WIDTH, 20))], stream_path=stream_path)
             return
 
         if op == "run.start":
@@ -709,20 +779,22 @@ class _PlainLineLog:
             cmd = event.get("cmd", "")
             self._emit(
                 [pad + self._c("yellow", "$ ") + cmd.split("\n", 1)[0][:200]]
-                + ([cont + ln for ln in cmd.split("\n")[1:]] if "\n" in cmd else [])
+                + ([cont + ln for ln in cmd.split("\n")[1:]] if "\n" in cmd else []),
+                stream_path=stream_path,
             )
             return
 
         if op == "stdout":
             line = event.get("line", "")
-            self._emit([pad + self._c("dim", "│ ") + line])
+            self._emit([pad + self._c("dim", "│ ") + line], stream_path=stream_path)
             return
 
         if op == "print":
             text = event.get("text", "")
             self._emit(
                 [pad + self._c("bold", "» ") + (text.split("\n", 1)[0] if text else "")]
-                + [cont + ln for ln in text.split("\n")[1:]]
+                + [cont + ln for ln in text.split("\n")[1:]],
+                stream_path=stream_path,
             )
             return
 
@@ -730,7 +802,7 @@ class _PlainLineLog:
             self._end_burst()
             status = event.get("status", "FINISHED")
             color = "green" if status == "FINISHED" else "red"
-            self._emit([self._c(color, f"── workflow {status.lower()} ──")])
+            self._emit([self._c(color, f"── workflow {status.lower()} ──")], stream_path=stream_path)
             return
 
         # Fallback for any other / future op: compact key=val line.
@@ -742,7 +814,7 @@ class _PlainLineLog:
                     val = "/".join(str(v) for v in val)
                 extras.append(f"{key}={val!r}")
         suffix = ("  " + "  ".join(extras)) if extras else ""
-        self._emit([pad + self._c("dim", f"· {op}") + suffix])
+        self._emit([pad + self._c("dim", f"· {op}") + suffix], stream_path=stream_path)
 
 
 # ---------------------------------------------------------------------------
