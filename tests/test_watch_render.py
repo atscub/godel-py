@@ -483,30 +483,55 @@ class TestMissingRichDep:
 
 class TestKeyboardInterruptRestoresTerminal:
     def test_keyboard_interrupt_calls_stop(self):
-        """When _render_loop raises KeyboardInterrupt, app.stop() is invoked."""
-        stop_called = []
+        """KeyboardInterrupt propagating out of _render_loop causes WatchApp.__exit__
+        to call stop() — exactly as the production ``with app: _render_loop(...)``
+        pattern in run_watch does.
 
-        class _FakeApp:
-            def update(self, model):
-                raise KeyboardInterrupt()
+        The test uses the real WatchApp context manager so that __exit__ is the
+        mechanism that invokes stop(), not a manual except-block in the test.
+        This is the pattern used by run_watch::
 
-            def stop(self):
-                stop_called.append(True)
+            with app:
+                _render_loop(app, event_q, ...)
+            # __exit__ → stop() on any exception, including KeyboardInterrupt
+        """
+        console = Console(record=True, width=80, force_terminal=True)
+        app = WatchApp("ki-test-run", console=console)
+
+        stop_calls: list = []
+        original_stop = app.stop
+
+        def _tracked_stop():
+            stop_calls.append("stop")
+            original_stop()
+
+        app.stop = _tracked_stop
+
+        # Make app.update() raise KeyboardInterrupt so _render_loop propagates
+        # it out of the `with app:` block, letting __exit__ call stop().
+        def _ki_update(model):
+            raise KeyboardInterrupt()
+
+        app.update = _ki_update
 
         q: queue.Queue = queue.Queue()
+        # One real event + sentinel so _render_loop calls update() once.
         q.put({"op": "step.enter", "step_path": ["x"],
                "stream_path": [], "ts": "2026-04-14T00:00:00+00:00"})
         q.put(None)
 
-        app = _FakeApp()
+        # Mirror the run_watch production pattern: `with app:` wraps the render
+        # loop.  The KeyboardInterrupt exits the with block, triggering __exit__
+        # → stop().  We catch it *outside* the with block only to prevent the
+        # test from failing — we do NOT call app.stop() here.
+        with pytest.raises(KeyboardInterrupt):
+            with app:
+                _render_loop(app, q, timer_interval=0.001, burst_threshold=100)
 
-        # Simulate the run_watch main block
-        try:
-            _render_loop(app, q, timer_interval=0.001, burst_threshold=100)
-        except KeyboardInterrupt:
-            app.stop()
-
-        assert stop_called, "app.stop() should have been called on KeyboardInterrupt"
+        assert stop_calls, (
+            "WatchApp.__exit__ must call stop() when KeyboardInterrupt "
+            "propagates out of the render loop (terminal-restore contract)"
+        )
 
     def test_watch_app_context_manager_stops_on_exit(self):
         """WatchApp.__exit__ calls stop(), restoring terminal state."""
