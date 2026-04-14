@@ -155,7 +155,7 @@ class TranscriptWriter:
         step_path: list[str] | tuple[str, ...] | None = None,
         stream_path: list[str] | tuple[str, ...] | None = None,
         **extra: object,
-    ) -> int:
+    ) -> int | None:
         """Append one event line and return its seq number.
 
         Rotation (if needed) happens transparently before the event is written.
@@ -171,6 +171,12 @@ class TranscriptWriter:
             Defaults to ``[]``.
         **extra:
             Additional op-specific fields merged into the event dict.
+
+        Returns
+        -------
+        int | None
+            The seq of the written event, or ``None`` if a redactor dropped the
+            event (no line was written, no seq was consumed).
 
         Raises
         ------
@@ -208,9 +214,14 @@ class TranscriptWriter:
                 serialised_body, sentinel_extras=sentinel_extras
             )
             if redacted is None:
-                # A redactor dropped the event — roll back seq and return.
+                # A redactor dropped the event — roll back seq (the next real
+                # write will reuse this number to keep seq contiguous) and
+                # return None so callers can unambiguously distinguish a dropped
+                # event from a written one.  Returning the pre-rollback seq
+                # would collide with the next real event's seq, misleading any
+                # caller that tracks "last written seq" via the return value.
                 self._seq -= 1
-                return seq
+                return None
 
             # redacted is either the (possibly transformed) original body or a
             # sentinel JSON string injected by the error-substitution path.

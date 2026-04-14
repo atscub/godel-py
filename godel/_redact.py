@@ -51,6 +51,13 @@ from typing import Callable
 Redactor = Callable[[str], "str | None"]
 
 
+# The only keys callers may inject into the error-sentinel event body beyond
+# the three mandatory sentinel keys (op, redactor, error_class).  Unknown keys
+# are rejected at apply() time to prevent accidental leakage of caller-side
+# payload content into what is meant to be a minimal, secret-free sentinel.
+_ALLOWED_SENTINEL_EXTRA_KEYS = frozenset({"ts", "seq", "step_path", "stream_path"})
+
+
 class RedactorRegistry:
     """Ordered registry of event-redactor callables.
 
@@ -67,7 +74,18 @@ class RedactorRegistry:
     """
 
     def __init__(self, redactors: list[Redactor] | None = None) -> None:
-        self._redactors: list[Redactor] = list(redactors) if redactors else []
+        # Freeze to a tuple at construction time so the registered pipeline
+        # cannot be mutated post-init (no in-place append/pop leaking past
+        # the constructor's shape-validation).  Callers wanting a different
+        # pipeline must construct a new registry.
+        self._redactors: tuple[Redactor, ...] = (
+            tuple(redactors) if redactors else ()
+        )
+
+    @property
+    def redactors(self) -> tuple[Redactor, ...]:
+        """Read-only view of the registered redactors, in registration order."""
+        return self._redactors
 
     # ------------------------------------------------------------------
     # Public API
@@ -107,6 +125,18 @@ class RedactorRegistry:
           name).  No exception message, no original payload.
         * Subsequent redactors are NOT run after an error.
         """
+        # Guard: reject unknown sentinel_extras keys at the boundary rather
+        # than silently embedding them in the sentinel.  Keeps the error-path
+        # output shape strictly predictable and avoids accidental payload leak
+        # if a future caller passes through arbitrary event fields.
+        if sentinel_extras:
+            unknown = set(sentinel_extras) - _ALLOWED_SENTINEL_EXTRA_KEYS
+            if unknown:
+                raise ValueError(
+                    f"sentinel_extras contains unknown key(s): {sorted(unknown)!r}; "
+                    f"allowed: {sorted(_ALLOWED_SENTINEL_EXTRA_KEYS)!r}"
+                )
+
         if not self._redactors:
             return serialised
 

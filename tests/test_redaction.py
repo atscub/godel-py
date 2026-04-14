@@ -52,7 +52,31 @@ def _read_events(run_dir: Path) -> list[dict]:
 def test_empty_registry_has_no_redactors():
     """RedactorRegistry() with no args ships zero built-in patterns."""
     registry = RedactorRegistry()
-    assert registry._redactors == []
+    assert registry._redactors == ()
+    assert registry.redactors == ()
+    assert len(registry.redactors) == 0
+
+
+def test_registry_is_immutable_post_init():
+    """Registered redactors cannot be mutated after construction (NIT-2)."""
+    r = lambda s: s
+    registry = RedactorRegistry([r])
+    # Tuple has no append / mutating list methods.
+    assert isinstance(registry._redactors, tuple)
+    with pytest.raises(AttributeError):
+        registry._redactors.append(r)  # type: ignore[attr-defined]
+
+
+def test_registry_isolated_from_input_list():
+    """Mutating the caller's list after construction does not affect the registry."""
+    r1 = lambda s: s + "_1"
+    r2 = lambda s: s + "_2"
+    caller_list = [r1]
+    registry = RedactorRegistry(caller_list)
+    caller_list.append(r2)  # mutate AFTER construction
+    # Registry still sees only r1 — the tuple was frozen at construction time.
+    assert registry.redactors == (r1,)
+    assert registry.apply("x") == "x_1"
 
 
 def test_empty_registry_passthrough():
@@ -170,11 +194,48 @@ def test_none_return_no_transcript_line(tmp_path):
         return None
 
     with TranscriptWriter(tmp_path / "run", run_id="test", redactors=[drop_all]) as tw:
-        tw.write_event("step_start", step_path=["my_step"])
-        tw.write_event("step_end", step_path=["my_step"])
+        r1 = tw.write_event("step_start", step_path=["my_step"])
+        r2 = tw.write_event("step_end", step_path=["my_step"])
+        # WARN-1 fix: dropped events return None, not a (rolled-back) seq.
+        assert r1 is None
+        assert r2 is None
 
     events = _read_events(tmp_path / "run")
     assert events == []
+
+
+def test_dropped_event_returns_none_then_next_write_reuses_seq(tmp_path):
+    """WARN-1 regression: a dropped event returns None; the NEXT real write
+    gets a clean contiguous seq (no gap, no collision)."""
+    drop_next = {"flag": True}
+
+    def drop_when_flagged(payload: str) -> "str | None":
+        if drop_next["flag"]:
+            return None
+        return payload
+
+    with TranscriptWriter(tmp_path / "run", run_id="test", redactors=[drop_when_flagged]) as tw:
+        seq_dropped = tw.write_event("dropped_event")
+        assert seq_dropped is None, "Dropped event must return None, not a seq"
+
+        drop_next["flag"] = False
+        seq_written = tw.write_event("written_event")
+        assert seq_written == 1, "Next real write reuses seq 1 (contiguous, no gap)"
+
+        seq_second = tw.write_event("second_written")
+        assert seq_second == 2
+
+    events = _read_events(tmp_path / "run")
+    assert [e["op"] for e in events] == ["written_event", "second_written"]
+    assert [e["seq"] for e in events] == [1, 2]
+
+
+def test_written_event_returns_int_seq(tmp_path):
+    """Non-dropped events still return an int seq (no regression)."""
+    with TranscriptWriter(tmp_path / "run", run_id="test") as tw:
+        seq = tw.write_event("normal_event")
+        assert isinstance(seq, int)
+        assert seq == 1
 
 
 # ---------------------------------------------------------------------------
@@ -344,6 +405,52 @@ def test_sentinel_includes_standard_event_fields(tmp_path):
     assert "seq" in sentinel
     assert sentinel["step_path"] == ["parent", "child"]
     assert sentinel["op"] == "redactor.error"
+
+
+# ---------------------------------------------------------------------------
+# sentinel_extras guard (NIT-1)
+# ---------------------------------------------------------------------------
+
+
+def test_sentinel_extras_rejects_unknown_keys():
+    """NIT-1: apply() must reject sentinel_extras with keys outside the allowlist.
+
+    Prevents accidental payload content from leaking into a sentinel event via
+    caller-side extras.
+    """
+    registry = RedactorRegistry([lambda s: s])
+    with pytest.raises(ValueError, match="unknown key"):
+        registry.apply("x", sentinel_extras={"ts": "now", "payload": "SECRET"})
+
+
+def test_sentinel_extras_accepts_all_allowed_keys():
+    """All four allowlisted keys can be supplied together without error."""
+    def raises(payload: str) -> str:
+        raise ValueError()
+
+    raises.__name__ = "raises"
+    registry = RedactorRegistry([raises])
+    result = registry.apply(
+        '{"op":"x"}',
+        sentinel_extras={
+            "ts": "2026-01-01T00:00:00Z",
+            "seq": 42,
+            "step_path": ["a"],
+            "stream_path": ["b"],
+        },
+    )
+    sentinel = json.loads(result)
+    assert sentinel["seq"] == 42
+    assert sentinel["ts"] == "2026-01-01T00:00:00Z"
+    assert sentinel["step_path"] == ["a"]
+    assert sentinel["stream_path"] == ["b"]
+
+
+def test_sentinel_extras_empty_dict_is_fine():
+    """Passing an empty dict (or None) must not raise."""
+    registry = RedactorRegistry([lambda s: s])
+    assert registry.apply("x", sentinel_extras={}) == "x"
+    assert registry.apply("x", sentinel_extras=None) == "x"
 
 
 # ---------------------------------------------------------------------------
