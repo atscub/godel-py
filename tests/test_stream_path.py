@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import asynccontextmanager
 
 import pytest
 
@@ -33,6 +34,21 @@ def _run_events(events):
     return [e for e in events if e["op"] == "run" and e["status"] == "STARTED"]
 
 
+@asynccontextmanager
+async def stamped_stream_path(parent_id: str):
+    """Stamp _current_stream_path with [parent_id] for the duration of the block.
+
+    Replaces the inline ``token = _current_stream_path.set([parent_id]); try:
+    ... finally: _current_stream_path.reset(token)`` pattern so per-test
+    setup is a single ``async with stamped_stream_path(parent_id):`` line.
+    """
+    token = _current_stream_path.set([parent_id])
+    try:
+        yield
+    finally:
+        _current_stream_path.reset(token)
+
+
 # ---------------------------------------------------------------------------
 # AC1 — 4 parallel steps x 2 nested launches each -> 8 distinct stream_paths,
 #       all depth-2, parents match the parent step's stream_path.
@@ -54,12 +70,9 @@ def test_parallel_steps_nested_launches_depth2_with_parents(tmp_path, monkeypatc
         async def branch(n: int):
             # Stamp a parent stream_path for this branch (simulates the agent
             # launch wrapping the two nested run() calls).
-            token = _current_stream_path.set([parent_ids[n]])
-            try:
+            async with stamped_stream_path(parent_ids[n]):
                 await run(f"echo a{n}")
                 await run(f"echo b{n}")
-            finally:
-                _current_stream_path.reset(token)
             return n
 
         return await parallel(branch(0), branch(1), branch(2), branch(3))
@@ -145,8 +158,7 @@ def test_parallel_propagates_stream_path_to_branches(tmp_path, monkeypatch):
 
     @workflow
     async def wf():
-        token = _current_stream_path.set([parent_id])
-        try:
+        async with stamped_stream_path(parent_id):
             @step
             async def branch_a():
                 await run("echo a")
@@ -156,8 +168,6 @@ def test_parallel_propagates_stream_path_to_branches(tmp_path, monkeypatch):
                 await run("echo b")
 
             await parallel(branch_a(), branch_b())
-        finally:
-            _current_stream_path.reset(token)
 
     asyncio.run(wf())
 
@@ -197,8 +207,7 @@ def test_regression_guard_missing_propagation_produces_depth1(tmp_path, monkeypa
 
     @workflow
     async def wf():
-        token = _current_stream_path.set([parent_id])
-        try:
+        async with stamped_stream_path(parent_id):
             async def branch():
                 # Simulate "forgetting copy_context()": a broken dispatcher
                 # would drop _current_stream_path before the branch runs.
@@ -211,8 +220,6 @@ def test_regression_guard_missing_propagation_produces_depth1(tmp_path, monkeypa
                     _current_stream_path.reset(inner_token)
 
             await branch()
-        finally:
-            _current_stream_path.reset(token)
 
     asyncio.run(wf())
 
@@ -239,11 +246,8 @@ def test_sequential_nested_launch_produces_depth2_path(tmp_path, monkeypatch):
     async def wf():
         @step
         async def nested_launch():
-            token = _current_stream_path.set([parent_id])
-            try:
+            async with stamped_stream_path(parent_id):
                 await run("echo nested")
-            finally:
-                _current_stream_path.reset(token)
         await nested_launch()
 
     asyncio.run(wf())
