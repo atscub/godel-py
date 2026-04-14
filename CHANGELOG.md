@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.15.0 (2026-04-14)
+
+### Features
+
+- **watch**: Suppress nested run.start events in plain-log
+  ([`584bd2f`](https://github.com/atscub/godel-py/commit/584bd2f1a1c393336c7e2d7e52251e04faf13abc))
+
+
 ## v1.14.0 (2026-04-14)
 
 ### Features
