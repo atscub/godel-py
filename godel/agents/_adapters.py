@@ -56,11 +56,64 @@ class ClaudeAdapter:
     events in order.
     """
 
+    def __init__(self) -> None:
+        # Flips to True on the first ``stream_event`` we observe, indicating
+        # Claude CLI was launched with ``--include-partial-messages``.  When
+        # set, we ignore the redundant batched ``assistant`` events that
+        # otherwise echo the same content_block contents we've already
+        # streamed as deltas.
+        self._has_partials: bool = False
+
     def map(self, data: dict) -> _MapResult:
         etype = data.get("type")
 
+        if etype == "stream_event":
+            self._has_partials = True
+            ev = data.get("event") or {}
+            ev_type = ev.get("type")
+            if ev_type == "content_block_delta":
+                delta = ev.get("delta") or {}
+                dtype = delta.get("type")
+                if dtype == "thinking_delta":
+                    txt = delta.get("thinking", "")
+                    if txt:
+                        return [("agent.thought", {"text": txt})]
+                elif dtype == "text_delta":
+                    txt = delta.get("text", "")
+                    if txt:
+                        return [("agent.response", {"text": txt})]
+                # input_json_delta and signature_delta carry no user-visible
+                # content — skip.
+                return None
+            # content_block_start for tool_use lacks full input (that comes
+            # via input_json_delta); we rely on the batched assistant event
+            # below to surface the complete tool_call.  Ignore all other
+            # stream_event subtypes.
+            return None
+
         if etype == "assistant":
             content = data.get("message", {}).get("content", data.get("content", []))
+            # With partial-messages on, text and thinking blocks have
+            # already streamed as deltas.  Re-emitting them here would
+            # duplicate the content — but tool_use blocks have NOT been
+            # streamed yet (their input only materializes at content_block_stop)
+            # so we still need this event to surface tool calls.
+            if self._has_partials:
+                if not isinstance(content, list):
+                    return None
+                events: list[_MappedEvent] = []
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "tool_use":
+                        events.append(
+                            (
+                                "agent.tool_call",
+                                {
+                                    "tool": block.get("name", ""),
+                                    "input": block.get("input"),
+                                },
+                            )
+                        )
+                return events if events else None
             if not isinstance(content, list):
                 return None
             events: list[_MappedEvent] = []

@@ -49,6 +49,10 @@ class _ClaudeCodeAgent(_BaseAgent):
         cmd_parts = ["claude", "--output-format", output_format]
         if streaming:
             cmd_parts.append("--verbose")
+            # Emit content_block_delta events so thinking + response tokens
+            # stream in real time instead of arriving as one batched
+            # `assistant` event at the end of the turn.
+            cmd_parts.append("--include-partial-messages")
         if self._skip_permissions:
             cmd_parts.append("--dangerously-skip-permissions")
         if tools == []:

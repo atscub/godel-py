@@ -384,6 +384,14 @@ class _PlainLineLog:
         # The record lets us drop the trailing duplicate while printing the
         # streamed answer in real time.
         self._last_response: dict[tuple, str] = {}
+        # Active streaming burst per stream_path: op currently being appended
+        # and its continuation indent.  Consecutive agent.response /
+        # agent.thought chunks on the same stream render as one growing
+        # block instead of one header-per-chunk.
+        self._burst: dict[tuple, tuple[str, str]] = {}
+        # Running concatenation of streamed text per stream_path — used to
+        # dedupe the terminating full-text echo from ``_invoke``.
+        self._stream_accum: dict[tuple, dict[str, str]] = {}
 
     def start(self) -> None:
         pass
@@ -445,6 +453,44 @@ class _PlainLineLog:
             pass
         self._spinner_active = True
 
+    def _append_chunk(self, cont: str, text: str, *, op: str) -> None:
+        """Write a streaming text chunk to the currently-open burst line.
+
+        Embedded newlines are rewritten with the continuation indent so
+        multi-paragraph output stays aligned.  ``op`` picks the ANSI color
+        (dim for thoughts, default for responses).
+        """
+        color = "dim" if op == "agent.thought" else None
+        parts = text.split("\n")
+        for i, part in enumerate(parts):
+            if i > 0:
+                self._file.write("\n" + cont)
+            if part:
+                self._file.write(self._c(color, part) if color else part)
+        try:
+            self._file.flush()
+        except Exception:
+            pass
+        self._emitted_any = True
+
+    def _end_burst(self, stream_path: tuple | None = None) -> None:
+        """Close any active burst by emitting a trailing newline.
+
+        If *stream_path* is given, only closes the burst for that stream;
+        otherwise closes all bursts (used when the workflow ends).
+        """
+        if stream_path is None:
+            if not self._burst:
+                return
+            self._file.write("\n")
+            self._file.flush()
+            self._burst.clear()
+            return
+        if stream_path in self._burst:
+            self._file.write("\n")
+            self._file.flush()
+            del self._burst[stream_path]
+
     def _clear_spinner(self) -> None:
         if self._spinner_active:
             try:
@@ -473,11 +519,18 @@ class _PlainLineLog:
         op = event.get("op", "?")
         stream_path = tuple(event.get("stream_path") or [])
 
+        # Dedupe the final full-text echo from ``_invoke``.  When streaming
+        # is on we've already rendered the answer as chunks; the accumulated
+        # text lives in ``_stream_accum``.  The post-call agent.response
+        # event carries the same full text — drop it.
         if op == "agent.response":
-            prev_text = self._last_response.get(stream_path)
-            text = (event.get("text") or "").strip()
-            if prev_text is not None and prev_text.strip() == text:
-                # Trailing result event echoing the already-streamed answer.
+            accum = (self._stream_accum.get(stream_path) or {}).get("agent.response", "")
+            text = event.get("text") or ""
+            if accum and text.strip() == accum.strip():
+                # The streamed burst is complete — close it so the next
+                # event starts with a proper separator, not glued to the
+                # trailing chunk.
+                self._end_burst(stream_path)
                 return
 
         # When thinking is hidden, swallow agent.thought entirely — don't let
@@ -488,10 +541,9 @@ class _PlainLineLog:
 
         self._render(event)
 
-        if op == "agent.response":
-            self._last_response[stream_path] = event.get("text") or ""
-        elif op == "agent.prompt":
+        if op == "agent.prompt":
             self._last_response.pop(stream_path, None)
+            self._stream_accum.pop(stream_path, None)
 
     def _render(self, event: dict) -> None:
         op = event.get("op", "?")
@@ -501,7 +553,22 @@ class _PlainLineLog:
         pad = "  " * max(depth, 1)
         cont = pad + "    "  # continuation indent for multi-line text
 
-        # Any visible output must first wipe any in-progress spinner line.
+        # If this event continues the currently-active burst on this stream
+        # (e.g. another agent.response chunk right after the previous one),
+        # append directly to the in-progress line instead of re-emitting a
+        # header or a blank separator.
+        cur_burst = self._burst.get(stream_path)
+        if cur_burst is not None and cur_burst[0] == op and op in ("agent.response", "agent.thought"):
+            text = event.get("text", "")
+            if text:
+                self._append_chunk(cur_burst[1], text, op=op)
+                accum = self._stream_accum.setdefault(stream_path, {})
+                accum[op] = accum.get(op, "") + text
+            return
+
+        # Any visible output must first wipe any in-progress spinner line
+        # and terminate any open burst.
+        self._end_burst(stream_path)
         self._clear_spinner()
 
         # An event on the pending agent's stream means the response (or a
@@ -528,10 +595,13 @@ class _PlainLineLog:
 
         if op == "agent.response":
             text = event.get("text", "")
-            self._emit(
-                [pad + self._c("green", "‹ response")]
-                + [cont + ln for ln in _wrap_multiline(text, indent="")]
-            )
+            self._emit([pad + self._c("green", "‹ response")])
+            self._file.write(cont)
+            if text:
+                self._append_chunk(cont, text, op=op)
+            self._burst[stream_path] = (op, cont)
+            accum = self._stream_accum.setdefault(stream_path, {})
+            accum[op] = accum.get(op, "") + text
             return
 
         if op == "agent.thought":
@@ -539,10 +609,13 @@ class _PlainLineLog:
                 # Suppressed — spinner animation conveys "thinking" instead.
                 return
             text = event.get("text", "")
-            self._emit(
-                [pad + self._c("dim", "• thinking")]
-                + [cont + self._c("dim", ln) for ln in _wrap_multiline(text, indent="")]
-            )
+            self._emit([pad + self._c("dim", "• thinking")])
+            self._file.write(cont)
+            if text:
+                self._append_chunk(cont, text, op=op)
+            self._burst[stream_path] = (op, cont)
+            accum = self._stream_accum.setdefault(stream_path, {})
+            accum[op] = accum.get(op, "") + text
             return
 
         if op == "agent.tool_call":
@@ -618,6 +691,7 @@ class _PlainLineLog:
             return
 
         if op == "WORKFLOW_FINISHED":
+            self._end_burst()
             status = event.get("status", "FINISHED")
             color = "green" if status == "FINISHED" else "red"
             self._emit([self._c(color, f"── workflow {status.lower()} ──")])
