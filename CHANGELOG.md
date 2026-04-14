@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.6.0 (2026-04-14)
+
+### Bug Fixes
+
+- **watch**: Harden WatchModel against caller mutation + schema drift
+  ([`7d083e4`](https://github.com/atscub/godel-py/commit/7d083e44f4f52628e2e1bff1f98fe6b871341bf9))
+
+### Features
+
+- **watch**: Add WatchModel + event-to-model reducer (godel-py-5pl.10)
+  ([`041587c`](https://github.com/atscub/godel-py/commit/041587cf45e16312e1751bbf5a7387ad708c1146))
+
+
 ## v1.5.3 (2026-04-14)
 
 ### Bug Fixes
