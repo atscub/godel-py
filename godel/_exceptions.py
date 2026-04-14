@@ -211,8 +211,9 @@ class SourceEditedError(ResumeError):
         *,
         step_name: str = "",
         event_id: str = "",
+        **kwargs: Unpack[_GodelErrorKwargs],
     ):
-        super().__init__(message)
+        super().__init__(message, **kwargs)
         self.step_name = step_name
         self.event_id = event_id
 
@@ -235,11 +236,24 @@ class UnsafeResumeError(ResumeError):
     The command may have partially executed with irreversible side effects.
     Cannot safely re-execute without explicit idempotent=True.
     """
-    def __init__(self, message: str, *, event_id: str = "", cmd: str = "", step_path: tuple = ()):
-        super().__init__(message)
+    def __init__(
+        self,
+        message: str,
+        *,
+        event_id: str = "",
+        cmd: str = "",
+        step_path: tuple[str, ...] = (),
+        source_location: str = "",
+        remediation_hint: str = "",
+    ):
+        super().__init__(
+            message,
+            step_path=step_path,
+            source_location=source_location,
+            remediation_hint=remediation_hint,
+        )
         self.event_id = event_id
         self.cmd = cmd
-        self.step_path = step_path
 
     def _context_marker(self) -> str:
         # UnsafeResumeError renders step/command context in its own __str__
