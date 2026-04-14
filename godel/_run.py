@@ -7,9 +7,67 @@ import signal
 import sys
 from dataclasses import dataclass
 
-from godel._context import _privileged, _current_stream_path
+from godel._context import _privileged, _current_stream_path, _line_observer
 from godel._decorators import WorkflowFail
 from godel._exceptions import _render_context_marker
+
+# Read limit for asyncio.StreamReader.readuntil() — 4 MB so lines up to that
+# size are handled natively.  LimitOverrunError is caught and handled below
+# for lines that exceed this.
+_READUNTIL_LIMIT = 4 * 1024 * 1024
+
+
+async def _drain_stream(
+    stream: asyncio.StreamReader,
+    on_line=None,
+) -> bytes:
+    """Read *stream* line-by-line, calling *on_line(line_bytes)* per line.
+
+    Returns the concatenated bytes of all lines (byte-identical to what
+    ``proc.communicate()`` would have returned for the same stream).
+
+    Lines longer than ``_READUNTIL_LIMIT`` bytes are handled by falling back
+    to a manual chunked read until the next newline (or EOF).  This avoids
+    ``asyncio.LimitOverrunError`` while keeping the contract that every
+    contiguous block up to a newline is passed to *on_line* as one call.
+    """
+    buf = bytearray()
+    while True:
+        try:
+            line = await stream.readuntil(b"\n")
+        except asyncio.IncompleteReadError as exc:
+            # EOF in the middle of a (possibly empty) partial line.
+            line = exc.partial
+            if line:
+                buf += line
+                if on_line is not None:
+                    on_line(bytes(line))
+            break
+        except asyncio.LimitOverrunError as exc:
+            # Line exceeds the internal StreamReader buffer limit.
+            # Consume what's available, then keep reading until we find \n.
+            oversized = bytearray(await stream.read(exc.consumed))
+            while True:
+                try:
+                    tail = await stream.readuntil(b"\n")
+                    oversized += tail
+                    break
+                except asyncio.IncompleteReadError as inner_exc:
+                    oversized += inner_exc.partial
+                    break
+                except asyncio.LimitOverrunError as inner_exc:
+                    oversized += await stream.read(inner_exc.consumed)
+            line = bytes(oversized)
+            buf += line
+            if on_line is not None:
+                on_line(line)
+            continue
+
+        buf += line
+        if on_line is not None:
+            on_line(bytes(line))
+
+    return bytes(buf)
 
 
 async def _kill_process_group(proc: asyncio.subprocess.Process, grace: float = 2.0) -> None:
@@ -205,31 +263,55 @@ async def run(cmd: str, *, cwd: str | None = None, timeout: float | None = None,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
+                limit=_READUNTIL_LIMIT,
                 **_popen_kwargs,
             )
+            # Determine per-line callback for stdout.
+            observer = _line_observer.get()
+            streaming_ctx = ctx and ctx.stream_agents and ctx.transcript
+
+            if observer is not None:
+                # Observer owns each line — suppress raw stdout events.
+                stdout_on_line = observer
+            elif streaming_ctx:
+                # No observer but streaming is active: emit a raw stdout event
+                # per line to the transcript (the watch model handles op=stdout).
+                step_path_for_stream = tuple(ctx.step_stack) if ctx else ()
+
+                def stdout_on_line(line: bytes) -> None:
+                    ctx.transcript.write_event(
+                        "stdout",
+                        step_path=step_path_for_stream,
+                        stream_path=new_stream_path,
+                        line=line.decode("utf-8", errors="replace").rstrip("\n"),
+                    )
+            else:
+                stdout_on_line = None
+
             try:
                 stdout_b, stderr_b = await asyncio.wait_for(
-                    proc.communicate(), timeout=timeout
+                    asyncio.gather(
+                        _drain_stream(proc.stdout, on_line=stdout_on_line),
+                        _drain_stream(proc.stderr),
+                    ),
+                    timeout=timeout,
                 )
+                await asyncio.wait_for(proc.wait(), timeout=5.0)
             except asyncio.CancelledError:
-                # Shield the cleanup coroutine so that a second cancel
-                # request arriving mid-kill (e.g., from asyncio.gather
-                # propagating cancellation among parallel run() calls) cannot
-                # skip the SIGKILL escalation path inside _kill_process_group.
-                # No emit_failed(): cancellation is not a workflow failure,
-                # so the STARTED event intentionally has no FAILED pair.
-                # Replay will see STARTED-only and either re-execute (if
-                # idempotent) or raise UnsafeResumeError.
                 await asyncio.shield(_kill_process_group(proc))
                 raise
             except asyncio.TimeoutError:
                 await asyncio.shield(_kill_process_group(proc))
-                # Bound the post-kill drain: if SIGKILL somehow failed to
-                # reap the process (kernel D-state, cgroup freeze), don't
-                # turn a handled timeout into a permanent hang.
                 try:
-                    await asyncio.wait_for(proc.communicate(), timeout=5.0)
-                except (asyncio.TimeoutError, Exception):
+                    await asyncio.wait_for(
+                        asyncio.gather(
+                            _drain_stream(proc.stdout),
+                            _drain_stream(proc.stderr),
+                        ),
+                        timeout=5,
+                    )
+                    await asyncio.wait_for(proc.wait(), timeout=5.0)
+                except Exception:
                     pass
                 step_path = tuple(ctx.step_stack) if ctx else ()
                 error_msg = f"command timed out after {timeout}s: {cmd}"
@@ -245,8 +327,8 @@ async def run(cmd: str, *, cwd: str | None = None, timeout: float | None = None,
                     step_path=step_path,
                     remediation_hint=f"Increase the timeout parameter or optimize the command to complete faster.",
                 )
-            stdout = stdout_b.decode()
-            stderr = stderr_b.decode()
+            stdout = stdout_b.decode("utf-8", errors="replace")
+            stderr = stderr_b.decode("utf-8", errors="replace")
             if proc.returncode != 0:
                 step_path = tuple(ctx.step_stack) if ctx else ()
                 error_msg = f"command failed (exit {proc.returncode}): {cmd}"

@@ -91,6 +91,78 @@ def stream_into_transcript(
             )
 
 
+class AdapterStreamSink:
+    """Bridges the run() line observer to a vendor adapter and transcript.
+
+    Holds a partial-line buffer (for mid-line flushes, though rare in JSONL)
+    and a :class:`~godel.agents._stream_parser.StreamingParser` that classifies
+    each line via *adapter*.map().  Classified results are written to
+    *transcript* as canonical agent events (``agent.thought``, ``agent.tool_call``,
+    ``agent.tool_result``, ``agent.raw``).
+
+    Usage::
+
+        sink = AdapterStreamSink(adapter, transcript, step_path, stream_path)
+        token = _line_observer.set(sink.feed)
+        try:
+            result = await run(cmd)
+        finally:
+            _line_observer.reset(token)
+            sink.close()   # flushes any trailing partial line
+    """
+
+    def __init__(
+        self,
+        adapter: "ClaudeAdapter | CopilotAdapter",
+        transcript: "TranscriptWriter",
+        step_path: tuple,
+        stream_path: list,
+    ) -> None:
+        from godel.agents._stream_parser import StreamingParser
+
+        self._adapter = adapter
+        self._transcript = transcript
+        self._step_path = step_path
+        self._stream_path = stream_path
+        self._parser = StreamingParser()
+
+    def feed(self, line: bytes) -> None:
+        """Receive one raw line (bytes, including trailing newline) from run()."""
+        from godel.agents._stream_parser import Parsed, Raw
+
+        for item in self._parser.feed(line):
+            self._emit(item)
+
+    def close(self) -> None:
+        """Flush any remaining partial line from the internal buffer."""
+        from godel.agents._stream_parser import Parsed, Raw
+
+        for item in self._parser.close():
+            self._emit(item)
+
+    def _emit(self, item: "Parsed | Raw") -> None:
+        from godel.agents._stream_parser import Parsed, Raw
+
+        if isinstance(item, Parsed):
+            result = self._adapter.map(item.data)
+            if result is not None:
+                for op, extra in result:
+                    self._transcript.write_event(
+                        op,
+                        step_path=self._step_path,
+                        stream_path=self._stream_path,
+                        **extra,
+                    )
+        elif isinstance(item, Raw):
+            self._transcript.write_event(
+                "agent.raw",
+                step_path=self._step_path,
+                stream_path=self._stream_path,
+                text=item.text,
+                reason=item.reason,
+            )
+
+
 class SchemaValidationFailure(WorkflowFail):
     """Raised when an agent response cannot be coerced to the requested schema."""
 
@@ -276,12 +348,13 @@ class _BaseAgent:
 
         When ``persist_session`` is True, the session id from the response
         (if any) is stored on the instance so the next call can resume it.
-        When the active workflow has ``stream_agents=True``, the raw stdout
-        bytes are fed through the tolerant parser and the vendor adapter so
+        When the active workflow has ``stream_agents=True``, an
+        :class:`AdapterStreamSink` is installed as the ``_line_observer`` so
         that ``agent.thought`` / ``agent.tool_call`` / ``agent.tool_result``
-        events are written to the workflow transcript before returning.
+        events are written to the workflow transcript in real-time, one line
+        at a time, rather than post-hoc from the full stdout buffer.
         """
-        from godel._context import _current_workflow, _current_stream_path
+        from godel._context import _current_workflow, _current_stream_path, _line_observer
 
         ctx = _current_workflow.get()
         streaming = ctx is not None and ctx.stream_agents and ctx.transcript is not None
@@ -291,18 +364,26 @@ class _BaseAgent:
             prompt, model_id, tools=tools, session_id=session_id,
             streaming=streaming,
         )
-        result = await run(cmd, cwd=self._cwd)
 
+        sink = None
+        observer_token = None
         if streaming:
             step_path = tuple(ctx.step_stack) if ctx else ()
-            stream_path = _current_stream_path.get()
-            stream_into_transcript(
-                result.stdout.encode("utf-8", errors="replace"),
+            stream_path = list(_current_stream_path.get())
+            sink = AdapterStreamSink(
+                self._make_adapter(),
                 ctx.transcript,
                 step_path=step_path,
-                stream_path=list(stream_path),
-                adapter=self._make_adapter(),
+                stream_path=stream_path,
             )
+            observer_token = _line_observer.set(sink.feed)
+
+        try:
+            result = await run(cmd, cwd=self._cwd)
+        finally:
+            if sink is not None and observer_token is not None:
+                _line_observer.reset(observer_token)
+                sink.close()
 
         text, new_session_id = self._parse_output(result.stdout)
         if persist_session and new_session_id:

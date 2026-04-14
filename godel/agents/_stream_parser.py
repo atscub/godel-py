@@ -180,6 +180,81 @@ def _oversized_raw(truncated_bytes: bytes) -> Raw:
     return Raw(text=text, reason="oversized", _truncated=True)
 
 
+class StreamingParser:
+    """Push-mode parser for incremental byte feeds.
+
+    Unlike :func:`iter_parsed`, which requires a complete binary IO object,
+    ``StreamingParser`` accepts arbitrary byte chunks via :meth:`feed` and
+    yields :class:`Parsed` / :class:`Raw` items as complete lines become
+    available.  Partial lines are buffered internally until the next newline
+    arrives or :meth:`close` is called.
+
+    The event sequence produced is identical to :func:`iter_parsed` for the
+    same byte stream regardless of how the bytes are chunked — the semantics
+    at chunk boundaries are identical.
+
+    Usage::
+
+        parser = StreamingParser()
+        for chunk in stream:
+            for item in parser.feed(chunk):
+                handle(item)
+        for item in parser.close():
+            handle(item)
+    """
+
+    def __init__(self) -> None:
+        self._buf: bytes = b""
+        self._dropping_oversized: bool = False
+
+    def feed(self, chunk: bytes) -> Iterator[ParseResult]:
+        """Push *chunk* into the parser; yield complete-line results."""
+        if not chunk:
+            return
+
+        if self._dropping_oversized:
+            nl_pos = chunk.find(b"\n")
+            if nl_pos == -1:
+                return  # still draining oversized line
+            self._dropping_oversized = False
+            self._buf = chunk[nl_pos + 1:]
+        else:
+            self._buf += chunk
+
+        # Drain all complete lines from the buffer.
+        while True:
+            nl_pos = self._buf.find(b"\n")
+            if nl_pos == -1:
+                # No complete line yet — check oversized accumulation.
+                if len(self._buf) > _1MB:
+                    yield _oversized_raw(self._buf[:_64KB])
+                    self._buf = b""
+                    self._dropping_oversized = True
+                break
+
+            line_bytes = self._buf[:nl_pos]
+            self._buf = self._buf[nl_pos + 1:]
+
+            if len(line_bytes) > _1MB:
+                yield _oversized_raw(line_bytes[:_64KB])
+            else:
+                yield from _process_line(line_bytes)
+
+    def close(self) -> Iterator[ParseResult]:
+        """Flush any buffered partial line and yield the final result (if any)."""
+        if self._dropping_oversized:
+            # Oversized line with no trailing newline — already emitted Raw.
+            self._buf = b""
+            return
+        if self._buf:
+            remaining = self._buf
+            self._buf = b""
+            if len(remaining) > _1MB:
+                yield _oversized_raw(remaining[:_64KB])
+            else:
+                yield from _process_line(remaining)
+
+
 def _process_line(line_bytes: bytes) -> Iterator[ParseResult]:
     """Decode and parse a single line, yielding exactly one result."""
     try:

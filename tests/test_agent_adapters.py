@@ -382,13 +382,21 @@ def test_stream_agents_true_emits_transcript_events(tmp_path, monkeypatch):
     """With stream_agents=True, agent events appear in transcript.jsonl."""
     monkeypatch.chdir(tmp_path)
 
+    from godel._context import _line_observer
     from godel.agents._copilot import copilot
+
+    async def fake_run_with_observer(cmd, *, cwd=None, **kwargs):
+        """Simulate run() — feed stdout lines through the active observer."""
+        observer = _line_observer.get()
+        if observer is not None:
+            for raw_line in COPILOT_JSONL_STREAM.encode().splitlines(keepends=True):
+                observer(raw_line)
+        return _make_mock_run(COPILOT_JSONL_STREAM)
 
     @workflow(stream_agents=True)
     async def wf():
         agent = copilot(model="default")
-        with patch("godel.agents._common.run", new_callable=AsyncMock) as mock_run:
-            mock_run.return_value = _make_mock_run(COPILOT_JSONL_STREAM)
+        with patch("godel.agents._common.run", side_effect=fake_run_with_observer):
             return await agent("do stuff")
 
     asyncio.run(wf())

@@ -124,6 +124,15 @@ _current_transcript: ContextVar = ContextVar(
     "godel_transcript", default=None
 )
 
+# _line_observer is set by agent wrappers to intercept subprocess stdout
+# line-by-line for real-time stream classification.  When set, the observer
+# callable receives each raw line (bytes, including the trailing newline) as
+# it arrives from the subprocess pipe.  The observer owns the line — run()
+# suppresses the default raw "stdout" transcript event when an observer is
+# active.  Same contextvar pattern as _privileged and _current_stream_path:
+# set/reset around the run() call site using ContextVar.set() + .reset().
+_line_observer: ContextVar = ContextVar("godel_line_observer", default=None)
+
 
 def get_event_log():
     """Retrieve the EventLog from the current workflow context."""
