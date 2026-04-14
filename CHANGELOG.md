@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.18.0 (2026-04-14)
+
+### Features
+
+- **watch**: --show-thinking flag; dim thinking blocks
+  ([`f8795cf`](https://github.com/atscub/godel-py/commit/f8795cfff6b5275af1328dfe1cf240d4f0fa0811))
+
+
 ## v1.17.1 (2026-04-14)
 
 ### Bug Fixes
