@@ -66,8 +66,8 @@ class TestClaudeAdapter:
             },
         }
         result = adapter.map(data)
-        assert result is not None
-        op, extra = result
+        assert result is not None and len(result) == 1
+        op, extra = result[0]
         assert op == "agent.thought"
         assert extra["text"] == "Thinking about it..."
 
@@ -86,8 +86,8 @@ class TestClaudeAdapter:
             },
         }
         result = adapter.map(data)
-        assert result is not None
-        op, extra = result
+        assert result is not None and len(result) == 1
+        op, extra = result[0]
         assert op == "agent.tool_call"
         assert extra["tool"] == "bash"
         assert extra["input"] == {"command": "ls"}
@@ -100,8 +100,8 @@ class TestClaudeAdapter:
             "content": [{"type": "text", "text": "file.txt\nother.txt"}],
         }
         result = adapter.map(data)
-        assert result is not None
-        op, extra = result
+        assert result is not None and len(result) == 1
+        op, extra = result[0]
         assert op == "agent.tool_result"
         assert extra["tool"] == "tu_abc"
         assert "file.txt" in extra["output"]
@@ -121,8 +121,8 @@ class TestClaudeAdapter:
             },
         }
         result = adapter.map(data)
-        assert result is not None
-        op, extra = result
+        assert result is not None and len(result) == 1
+        op, extra = result[0]
         assert op == "agent.tool_result"
         assert extra["tool"] == "tu_xyz"
         assert extra["output"] == "ok"
@@ -146,8 +146,8 @@ class TestClaudeAdapter:
             "content": [{"type": "text", "text": "hello"}],
         }
         result = adapter.map(data)
-        assert result is not None
-        op, extra = result
+        assert result is not None and len(result) == 1
+        op, extra = result[0]
         assert op == "agent.thought"
         assert extra["text"] == "hello"
 
@@ -180,8 +180,8 @@ class TestCopilotAdapter:
             "data": {"content": "Here is my answer."},
         }
         result = adapter.map(data)
-        assert result is not None
-        op, extra = result
+        assert result is not None and len(result) == 1
+        op, extra = result[0]
         assert op == "agent.thought"
         assert extra["text"] == "Here is my answer."
 
@@ -201,8 +201,8 @@ class TestCopilotAdapter:
             "data": {"name": "read_file", "arguments": {"path": "foo.py"}},
         }
         result = adapter.map(data)
-        assert result is not None
-        op, extra = result
+        assert result is not None and len(result) == 1
+        op, extra = result[0]
         assert op == "agent.tool_call"
         assert extra["tool"] == "read_file"
         assert extra["input"] == {"path": "foo.py"}
@@ -214,8 +214,8 @@ class TestCopilotAdapter:
             "data": {"name": "search", "arguments": {"query": "godel"}},
         }
         result = adapter.map(data)
-        assert result is not None
-        op, extra = result
+        assert result is not None and len(result) == 1
+        op, extra = result[0]
         assert op == "agent.tool_call"
 
     def test_tool_result_event_yields_tool_result(self):
@@ -225,8 +225,8 @@ class TestCopilotAdapter:
             "data": {"tool_call_id": "tc_1", "output": "success"},
         }
         result = adapter.map(data)
-        assert result is not None
-        op, extra = result
+        assert result is not None and len(result) == 1
+        op, extra = result[0]
         assert op == "agent.tool_result"
         assert extra["tool"] == "tc_1"
         assert extra["output"] == "success"
@@ -497,8 +497,158 @@ def test_copilot_discard_branch_removed():
         data = json.loads(line)
         results.append(adapter.map(data))
 
-    # The first line should map to agent.thought
-    assert results[0] is not None
-    assert results[0][0] == "agent.thought"
+    # The first line should map to agent.thought (list with one entry)
+    assert results[0] is not None and len(results[0]) == 1
+    assert results[0][0][0] == "agent.thought"
     # The result line should return None (metadata)
     assert results[1] is None
+
+
+# ---------------------------------------------------------------------------
+# C1: Multi-block assistant events — all blocks must be emitted
+# ---------------------------------------------------------------------------
+
+
+class TestClaudeAdapterMultiBlock:
+    """C1: A Claude assistant event with multiple content blocks (text + tool_use)
+    must yield one event per block — none dropped."""
+
+    def test_text_then_tool_use_yields_two_events(self):
+        adapter = ClaudeAdapter()
+        data = {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {"type": "text", "text": "I'll run ls for you."},
+                    {"type": "tool_use", "name": "bash", "input": {"command": "ls"}},
+                ]
+            },
+        }
+        result = adapter.map(data)
+        assert result is not None and len(result) == 2
+        ops = [op for op, _ in result]
+        assert ops[0] == "agent.thought"
+        assert ops[1] == "agent.tool_call"
+        assert result[0][1]["text"] == "I'll run ls for you."
+        assert result[1][1]["tool"] == "bash"
+
+    def test_multiple_text_blocks_all_emitted(self):
+        adapter = ClaudeAdapter()
+        data = {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {"type": "text", "text": "First thought."},
+                    {"type": "text", "text": "Second thought."},
+                ]
+            },
+        }
+        result = adapter.map(data)
+        assert result is not None and len(result) == 2
+        texts = [extra["text"] for _, extra in result]
+        assert "First thought." in texts
+        assert "Second thought." in texts
+
+    def test_multi_block_stream_into_transcript_emits_all(self, tmp_path):
+        """stream_into_transcript writes one event per content block."""
+        payload = {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {"type": "text", "text": "Here is my plan."},
+                    {"type": "tool_use", "name": "read_file", "input": {"path": "x.py"}},
+                ]
+            },
+        }
+        jsonl = (json.dumps(payload) + "\n").encode("utf-8")
+        with _tw(tmp_path) as tw:
+            stream_into_transcript(
+                jsonl,
+                tw,
+                step_path=("step1",),
+                stream_path=[],
+                adapter=ClaudeAdapter(),
+            )
+        events = _read_transcript_events(tmp_path)
+        thought_events = [e for e in events if e["op"] == "agent.thought"]
+        tool_call_events = [e for e in events if e["op"] == "agent.tool_call"]
+        assert len(thought_events) == 1
+        assert thought_events[0]["text"] == "Here is my plan."
+        assert len(tool_call_events) == 1
+        assert tool_call_events[0]["tool"] == "read_file"
+
+
+# ---------------------------------------------------------------------------
+# W1: UTF-8 round-trip — multi-byte strings survive adapter + transcript
+# ---------------------------------------------------------------------------
+
+
+class TestUtf8RoundTrip:
+    """W1: Multi-byte (emoji, non-ASCII) strings must reach the transcript
+    byte-identically through both ClaudeAdapter and CopilotAdapter."""
+
+    MULTI_BYTE_TEXT = "こんにちは 🌍 café résumé"
+
+    def test_claude_adapter_utf8_round_trip(self, tmp_path):
+        payload = {
+            "type": "assistant",
+            "message": {
+                "content": [{"type": "text", "text": self.MULTI_BYTE_TEXT}]
+            },
+        }
+        jsonl = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
+        with _tw(tmp_path) as tw:
+            stream_into_transcript(
+                jsonl,
+                tw,
+                step_path=(),
+                stream_path=[],
+                adapter=ClaudeAdapter(),
+            )
+        events = _read_transcript_events(tmp_path)
+        thought_events = [e for e in events if e["op"] == "agent.thought"]
+        assert len(thought_events) == 1
+        assert thought_events[0]["text"] == self.MULTI_BYTE_TEXT
+
+    def test_copilot_adapter_utf8_round_trip(self, tmp_path):
+        payload = {
+            "type": "assistant.message",
+            "data": {"content": self.MULTI_BYTE_TEXT},
+        }
+        jsonl = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
+        with _tw(tmp_path) as tw:
+            stream_into_transcript(
+                jsonl,
+                tw,
+                step_path=(),
+                stream_path=[],
+                adapter=CopilotAdapter(),
+            )
+        events = _read_transcript_events(tmp_path)
+        thought_events = [e for e in events if e["op"] == "agent.thought"]
+        assert len(thought_events) == 1
+        assert thought_events[0]["text"] == self.MULTI_BYTE_TEXT
+
+    def test_claude_adapter_map_preserves_utf8(self):
+        """ClaudeAdapter.map() returns the exact multi-byte string."""
+        adapter = ClaudeAdapter()
+        data = {
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": self.MULTI_BYTE_TEXT}]},
+        }
+        result = adapter.map(data)
+        assert result is not None and len(result) == 1
+        _, extra = result[0]
+        assert extra["text"] == self.MULTI_BYTE_TEXT
+
+    def test_copilot_adapter_map_preserves_utf8(self):
+        """CopilotAdapter.map() returns the exact multi-byte string."""
+        adapter = CopilotAdapter()
+        data = {
+            "type": "assistant.message",
+            "data": {"content": self.MULTI_BYTE_TEXT},
+        }
+        result = adapter.map(data)
+        assert result is not None and len(result) == 1
+        _, extra = result[0]
+        assert extra["text"] == self.MULTI_BYTE_TEXT

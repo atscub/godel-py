@@ -3,10 +3,12 @@
 Each adapter's ``map`` method receives a ``dict`` (the parsed payload from
 :func:`~godel.agents._stream_parser.iter_parsed`) and returns either:
 
-* A ``(op, extra)`` tuple where ``op`` is one of the canonical event ops
-  (``"agent.thought"``, ``"agent.tool_call"``, ``"agent.tool_result"``) and
-  ``extra`` is a dict of additional fields to merge into the transcript event, or
-* ``None`` if the payload is metadata-only and should not produce an event.
+* A list of ``(op, extra)`` tuples where ``op`` is one of the canonical event
+  ops (``"agent.thought"``, ``"agent.tool_call"``, ``"agent.tool_result"``) and
+  ``extra`` is a dict of additional fields to merge into the transcript event.
+  The list may contain zero, one, or multiple entries — all are emitted.
+* ``None`` (or an empty list) if the payload is metadata-only and should not
+  produce any events.
 
 ``Raw`` items (malformed / oversized / non-object lines) are handled by the
 caller and emitted as ``"agent.raw"`` events; adapters only receive dicts.
@@ -27,11 +29,13 @@ Canonical event ops
 """
 from __future__ import annotations
 
-from typing import Tuple
+from typing import List, Tuple
 
 
 # (op: str, extra: dict)
 _MappedEvent = Tuple[str, dict]
+# Adapters return a list of events (possibly empty) or None
+_MapResult = List[_MappedEvent] | None
 
 
 class ClaudeAdapter:
@@ -46,9 +50,13 @@ class ClaudeAdapter:
     * ``"tool_result"`` (or ``"user"`` with ``tool_result`` content)
       → ``agent.tool_result``
     * Everything else → ``None`` (ignored)
+
+    When an ``"assistant"`` event carries multiple content blocks (e.g. a text
+    block followed by a tool_use block), **all** blocks are emitted as separate
+    events in order.
     """
 
-    def map(self, data: dict) -> _MappedEvent | None:
+    def map(self, data: dict) -> _MapResult:
         etype = data.get("type")
 
         if etype == "assistant":
@@ -72,11 +80,7 @@ class ClaudeAdapter:
                             "input": block.get("input"),
                         },
                     ))
-            # Return the first event; caller iterates adapter per Parsed item.
-            # For multi-block messages, only the first event is returned here;
-            # the remainder are dropped.  In practice Claude streams one block
-            # per event line, so multi-block batches are rare.
-            return events[0] if events else None
+            return events if events else None
 
         if etype == "tool_result":
             content = data.get("content", "")
@@ -87,17 +91,20 @@ class ClaudeAdapter:
                     if isinstance(b, dict) and b.get("type") == "text"
                 ]
                 content = "\n".join(t for t in texts if t)
-            return (
-                "agent.tool_result",
-                {
-                    "tool": data.get("tool_use_id", ""),
-                    "output": content,
-                },
-            )
+            return [
+                (
+                    "agent.tool_result",
+                    {
+                        "tool": data.get("tool_use_id", ""),
+                        "output": content,
+                    },
+                )
+            ]
 
         if etype == "user":
             # Some Claude CLI versions wrap tool results in a "user" message.
             content = data.get("message", {}).get("content", data.get("content", []))
+            events: list[_MappedEvent] = []
             if isinstance(content, list):
                 for block in content:
                     if isinstance(block, dict) and block.get("type") == "tool_result":
@@ -108,14 +115,16 @@ class ClaudeAdapter:
                                 if isinstance(b, dict) and b.get("type") == "text"
                             ]
                             inner = "\n".join(t for t in texts if t)
-                        return (
-                            "agent.tool_result",
-                            {
-                                "tool": block.get("tool_use_id", ""),
-                                "output": inner,
-                            },
+                        events.append(
+                            (
+                                "agent.tool_result",
+                                {
+                                    "tool": block.get("tool_use_id", ""),
+                                    "output": inner,
+                                },
+                            )
                         )
-            return None
+            return events if events else None
 
         # All other types (init, system, result, etc.) are metadata — ignore.
         return None
@@ -132,7 +141,7 @@ class CopilotAdapter:
     * ``"result"``, ``"progress"``, ephemeral messages, etc. → ``None``
     """
 
-    def map(self, data: dict) -> _MappedEvent | None:
+    def map(self, data: dict) -> _MapResult:
         etype = data.get("type")
 
         if etype == "assistant.message":
@@ -140,28 +149,32 @@ class CopilotAdapter:
                 return None
             content = (data.get("data") or {}).get("content", "")
             if content:
-                return ("agent.thought", {"text": content})
+                return [("agent.thought", {"text": content})]
             return None
 
         if etype in ("tool_call", "function_call"):
             d = data.get("data") or data
-            return (
-                "agent.tool_call",
-                {
-                    "tool": d.get("name", d.get("function", {}).get("name", "")),
-                    "input": d.get("arguments") or d.get("input"),
-                },
-            )
+            return [
+                (
+                    "agent.tool_call",
+                    {
+                        "tool": d.get("name", d.get("function", {}).get("name", "")),
+                        "input": d.get("arguments") or d.get("input"),
+                    },
+                )
+            ]
 
         if etype in ("tool_result", "function_result"):
             d = data.get("data") or data
-            return (
-                "agent.tool_result",
-                {
-                    "tool": d.get("tool_call_id", d.get("name", "")),
-                    "output": d.get("output", d.get("content", "")),
-                },
-            )
+            return [
+                (
+                    "agent.tool_result",
+                    {
+                        "tool": d.get("tool_call_id", d.get("name", "")),
+                        "output": d.get("output", d.get("content", "")),
+                    },
+                )
+            ]
 
         # Metadata events: "result", "progress", "error", etc.
         return None
