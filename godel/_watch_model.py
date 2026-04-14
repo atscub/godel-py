@@ -34,9 +34,13 @@ Burst coalescing is NOT done here; that is ticket godel-py-5pl.11's concern.
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Mapping
+
+# Maximum display-line length stored in the ring buffer.
+_MAX_LINE_LEN = 120
 
 
 # An empty read-only mapping — used as the default for frozen fields.
@@ -260,26 +264,104 @@ def _handle_stream_line(model: WatchModel, event: dict) -> WatchModel:
     return replace(model, panels=_freeze_mapping(new_panels))
 
 
+def _first_nonblank_line(text: str) -> str:
+    """Return the first non-blank line from *text*, or an empty string."""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return ""
+
+
+def _truncate(s: str, max_len: int = _MAX_LINE_LEN) -> str:
+    """Truncate *s* to *max_len* characters, appending '…' if cut."""
+    if len(s) <= max_len:
+        return s
+    return s[:max_len - 1] + "…"
+
+
+def _summarize_tool_call(tool: str, inp) -> str:
+    """Return a concise, human-readable one-liner for a tool_call event.
+
+    The result is always capped at ``_MAX_LINE_LEN`` characters.  Well-known
+    tools get a structured format; everything else falls back to a generic
+    JSON snippet.
+    """
+    if isinstance(inp, dict):
+        if tool == "Read":
+            line = f"Read: {inp.get('file_path', '?')}"
+        elif tool == "Bash":
+            cmd = _first_nonblank_line(inp.get("command", "")) or inp.get("command", "")
+            line = f"Bash: {cmd[:80]}"
+        elif tool == "Edit":
+            line = f"Edit: {inp.get('file_path', '?')}"
+        elif tool == "Write":
+            line = f"Write: {inp.get('file_path', '?')}"
+        elif tool == "Grep":
+            pattern = str(inp.get("pattern", "?"))[:60]
+            path = inp.get("path", ".")
+            line = f"Grep: {pattern} in {path}"
+        elif tool == "Glob":
+            line = f"Glob: {inp.get('pattern', '?')}"
+        else:
+            snippet = json.dumps(inp, default=str)[:80]
+            line = f"[tool_call] {tool}: {snippet}"
+    else:
+        # inp is a string or some other scalar
+        snippet = str(inp)[:80]
+        if tool in ("Read", "Bash", "Edit", "Write", "Grep", "Glob"):
+            line = f"[tool_call] {tool}: {snippet}"
+        else:
+            line = f"[tool_call] {tool}: {snippet}"
+    return _truncate(line)
+
+
+def _summarize_tool_result(tool: str, output) -> str:
+    """Return a concise one-liner for a tool_result event.
+
+    Always includes the first non-blank line of the output, plus a
+    ``… (+N lines)`` suffix when the output spans multiple lines.
+    The result is capped at ``_MAX_LINE_LEN`` characters.
+    """
+    text = str(output)
+    lines = [l for l in text.splitlines() if l.strip()]
+    first = _first_nonblank_line(text) if lines else text.strip()
+    extra = len(lines) - 1 if lines else 0
+
+    prefix = f"[tool_result] {tool}: "
+    available = _MAX_LINE_LEN - len(prefix) - (len(f" … (+{extra} lines)") if extra > 0 else 0)
+    if available < 1:
+        available = 1
+    snippet = first[:available]
+
+    if extra > 0:
+        return _truncate(f"{prefix}{snippet} … (+{extra} lines)")
+    return _truncate(f"{prefix}{snippet}")
+
+
 def _event_to_line(event: dict) -> str:
     """Convert an event dict to a single display line for the ring buffer.
 
     The mapping is intentionally simple — rendering concerns (colours, layout)
     belong to the TUI renderer, not here.
+
+    All lines are capped at ``_MAX_LINE_LEN`` characters to prevent large
+    payloads (e.g. a 2 MB file read) from bloating the ring buffer.
     """
     op = event.get("op", "")
     if op == "agent.thought":
-        return event.get("text", "")
+        return _truncate(event.get("text", ""))
     if op == "agent.tool_call":
         tool = event.get("tool", "")
         inp = event.get("input", "")
-        return f"[tool_call] {tool}: {inp}"
+        return _summarize_tool_call(tool, inp)
     if op == "agent.tool_result":
         tool = event.get("tool", "")
         out = event.get("output", "")
-        return f"[tool_result] {tool}: {out}"
+        return _summarize_tool_result(tool, out)
     if op == "agent.raw":
-        return event.get("text", event.get("line", ""))
+        return _truncate(event.get("text", event.get("line", "")))
     if op == "stdout":
-        return event.get("line", event.get("text", ""))
+        return _truncate(event.get("line", event.get("text", "")))
     # Fallback: stringify the whole event (should not happen for handled ops).
-    return str(event)
+    return _truncate(str(event))

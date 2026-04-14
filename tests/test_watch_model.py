@@ -21,6 +21,9 @@ from godel._watch_model import (
     StreamPanel,
     StepNode,
     WatchModel,
+    _MAX_LINE_LEN,
+    _summarize_tool_call,
+    _summarize_tool_result,
     reduce,
     reduce_header,
 )
@@ -232,8 +235,9 @@ def test_agent_tool_call_line():
     e = _make_event("agent.tool_call", stream_path=["agent"], tool="search", input="query")
     m = reduce(m, e)
     line = m.panels[("agent",)].ring[0]
-    assert "[tool_call]" in line
+    # Unknown tool falls back to generic format; line must be ≤120 chars.
     assert "search" in line
+    assert len(line) <= _MAX_LINE_LEN
 
 
 def test_agent_tool_result_line():
@@ -243,6 +247,7 @@ def test_agent_tool_result_line():
     line = m.panels[("agent",)].ring[0]
     assert "[tool_result]" in line
     assert "search" in line
+    assert len(line) <= _MAX_LINE_LEN
 
 
 def test_agent_raw_line():
@@ -575,3 +580,145 @@ def test_step_event_missing_step_path_still_skipped():
     m2 = reduce(m, e)
     assert m2 is m
     assert () not in m2.steps
+
+
+# ---------------------------------------------------------------------------
+# _summarize_tool_call — well-known tools
+# ---------------------------------------------------------------------------
+
+def test_summarize_tool_call_read():
+    line = _summarize_tool_call("Read", {"file_path": "godel/_watch_model.py"})
+    assert line == "Read: godel/_watch_model.py"
+    assert len(line) <= _MAX_LINE_LEN
+
+
+def test_summarize_tool_call_bash():
+    line = _summarize_tool_call("Bash", {"command": "pytest tests/"})
+    assert line == "Bash: pytest tests/"
+    assert len(line) <= _MAX_LINE_LEN
+
+
+def test_summarize_tool_call_bash_multiline_command():
+    cmd = "cd /some/dir\npytest tests/ -v --tb=short"
+    line = _summarize_tool_call("Bash", {"command": cmd})
+    # Must use the first non-blank line
+    assert "cd /some/dir" in line
+    assert len(line) <= _MAX_LINE_LEN
+
+
+def test_summarize_tool_call_edit():
+    line = _summarize_tool_call("Edit", {"file_path": "src/main.py"})
+    assert line == "Edit: src/main.py"
+    assert len(line) <= _MAX_LINE_LEN
+
+
+def test_summarize_tool_call_write():
+    line = _summarize_tool_call("Write", {"file_path": "output/result.json"})
+    assert line == "Write: output/result.json"
+    assert len(line) <= _MAX_LINE_LEN
+
+
+def test_summarize_tool_call_grep():
+    line = _summarize_tool_call("Grep", {"pattern": "_event_to_line", "path": "godel/"})
+    assert "Grep:" in line
+    assert "_event_to_line" in line
+    assert "godel/" in line
+    assert len(line) <= _MAX_LINE_LEN
+
+
+def test_summarize_tool_call_glob():
+    line = _summarize_tool_call("Glob", {"pattern": "**/*.py"})
+    assert line == "Glob: **/*.py"
+    assert len(line) <= _MAX_LINE_LEN
+
+
+def test_summarize_tool_call_unknown_tool_fallback():
+    line = _summarize_tool_call("http_get", {"url": "https://api.example.com/data"})
+    assert "http_get" in line
+    assert len(line) <= _MAX_LINE_LEN
+
+
+def test_summarize_tool_call_unknown_tool_large_input():
+    """Unknown tool with huge input dict must still be capped at _MAX_LINE_LEN."""
+    large_input = {"data": "x" * 5000}
+    line = _summarize_tool_call("SomeTool", large_input)
+    assert len(line) <= _MAX_LINE_LEN
+
+
+def test_summarize_tool_call_read_large_path():
+    """Read with a very long file path must be capped at _MAX_LINE_LEN."""
+    long_path = "a/b/c/" + "d" * 200 + ".py"
+    line = _summarize_tool_call("Read", {"file_path": long_path})
+    assert len(line) <= _MAX_LINE_LEN
+    assert line.endswith("…")
+
+
+# ---------------------------------------------------------------------------
+# _summarize_tool_result
+# ---------------------------------------------------------------------------
+
+def test_summarize_tool_result_single_line():
+    line = _summarize_tool_result("Read", "file contents here")
+    assert "[tool_result]" in line
+    assert "Read" in line
+    assert "file contents here" in line
+    assert len(line) <= _MAX_LINE_LEN
+
+
+def test_summarize_tool_result_multiline_shows_first_line_and_count():
+    output = "line one\nline two\nline three"
+    line = _summarize_tool_result("Bash", output)
+    assert "line one" in line
+    assert "(+2 lines)" in line
+    assert len(line) <= _MAX_LINE_LEN
+
+
+def test_summarize_tool_result_large_output_capped():
+    """Multi-line output with megabytes of data must produce a line ≤120 chars."""
+    big_output = "first line\n" + ("x" * 2_000_000 + "\n") * 3
+    line = _summarize_tool_result("Read", big_output)
+    assert len(line) <= _MAX_LINE_LEN
+    assert "first line" in line
+
+
+def test_summarize_tool_result_blank_lines_skipped():
+    """Leading blank lines must be skipped to find the first non-blank line."""
+    output = "\n\n  \nactual content\nmore content"
+    line = _summarize_tool_result("Grep", output)
+    assert "actual content" in line
+    assert len(line) <= _MAX_LINE_LEN
+
+
+# ---------------------------------------------------------------------------
+# Integration: reduce() + _event_to_line — line length guarantee
+# ---------------------------------------------------------------------------
+
+def test_tool_call_read_line_capped_in_ring():
+    """A Read tool_call with a huge file path produces a ring entry ≤120 chars."""
+    m = WatchModel.empty()
+    e = _make_event(
+        "agent.tool_call",
+        stream_path=["agent"],
+        tool="Read",
+        input={"file_path": "/very/long/" + "dir/" * 50 + "bigfile.py"},
+    )
+    m = reduce(m, e)
+    line = m.panels[("agent",)].ring[0]
+    assert len(line) <= _MAX_LINE_LEN
+    assert "Read:" in line
+
+
+def test_tool_result_large_output_capped_in_ring():
+    """A tool_result with 2 MB of output produces a ring entry ≤120 chars."""
+    m = WatchModel.empty()
+    big_output = "first line\n" + "x" * 2_000_000
+    e = _make_event(
+        "agent.tool_result",
+        stream_path=["agent"],
+        tool="Read",
+        output=big_output,
+    )
+    m = reduce(m, e)
+    line = m.panels[("agent",)].ring[0]
+    assert len(line) <= _MAX_LINE_LEN
+    assert "[tool_result]" in line
