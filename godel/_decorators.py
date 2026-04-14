@@ -9,7 +9,13 @@ import traceback
 import uuid
 from typing import Awaitable, Callable, TypeVar
 
-from godel._context import WorkflowContext, _current_workflow, _on_run_start
+from godel._context import (
+    WorkflowContext,
+    _current_workflow,
+    _on_run_start,
+    _current_stream_path,
+    _current_transcript,
+)
 from godel._exceptions import PauseSignal, RewindSignal
 
 T = TypeVar("T")
@@ -166,6 +172,29 @@ def workflow(
 
             replay_walker = _pending_replay.get()
 
+            # Workflow-level capture: create a TranscriptWriter for the whole run
+            # and install it in _current_transcript so nested @step decorators with
+            # capture_stdout=True can share it.  Also wrap the entire workflow body
+            # in the fd-level capture context so that code directly inside @workflow
+            # (outside any @step) is also captured.
+            _wf_transcript = None
+            _wf_transcript_token = None
+            _wf_owns_transcript = False  # True only when WE created the TranscriptWriter
+            if capture_stdout:
+                from godel._stdout_capture import capture as _wf_capture
+                # Reuse an already-injected transcript (e.g. from tests or a
+                # parent workflow); only create a new one if none is active.
+                _existing_transcript = _current_transcript.get()
+                if _existing_transcript is not None:
+                    _wf_transcript = _existing_transcript
+                else:
+                    import tempfile
+                    from godel._transcript import TranscriptWriter
+                    _wf_tmpdir = tempfile.mkdtemp(prefix="godel-wf-capture-")
+                    _wf_transcript = TranscriptWriter(_wf_tmpdir)
+                    _wf_transcript_token = _current_transcript.set(_wf_transcript)
+                    _wf_owns_transcript = True
+
             if replay_walker:
                 # Resume: reuse existing run_id, append to same log
                 run_id = replay_walker._log._run_id
@@ -243,7 +272,13 @@ def workflow(
                             ctx.push_event_scope(start_event.event_id)
 
                     try:
-                        result = await fn(*args, **kwargs)
+                        if capture_stdout and _wf_transcript is not None:
+                            from godel._stdout_capture import capture as _wf_cap
+                            _wf_stream_path = list(_current_stream_path.get() or [])
+                            with _wf_cap(step_path=[], stream_path=_wf_stream_path, transcript=_wf_transcript):
+                                result = await fn(*args, **kwargs)
+                        else:
+                            result = await fn(*args, **kwargs)
                         if start_event is not None:
                             event_log.emit_finished(start_event.event_id, response={"result": repr(result)})
                         break  # Success — exit the rewind loop
@@ -314,6 +349,13 @@ def workflow(
                     clear_pause_request(run_id)
                 except OSError:
                     pass
+                if _wf_owns_transcript and _wf_transcript is not None:
+                    try:
+                        _wf_transcript.close()
+                    except Exception:
+                        pass
+                if _wf_transcript_token is not None:
+                    _current_transcript.reset(_wf_transcript_token)
 
         wrapper._is_workflow = True
         wrapper._workflow_options = {
@@ -488,7 +530,31 @@ def step(fn=None, *, name=None, idempotent=False, capture_stdout: bool = False):
                 ctx.push_event_scope(event.event_id)
 
             try:
-                result = await fn(*args, **kwargs)
+                # When capture_stdout=True, wrap the step body in the fd-level
+                # stdout capture context manager so that print() output and child
+                # process stdout are routed to the transcript as "stdout" events.
+                # The transcript writer is taken from the _current_transcript
+                # contextvar (set by the enclosing @workflow when it also opts in,
+                # or created lazily here for step-level capture).
+                if capture_stdout:
+                    import tempfile
+                    from godel._stdout_capture import capture as _capture
+                    from godel._transcript import TranscriptWriter
+                    tw = _current_transcript.get()
+                    if tw is None:
+                        # No workflow-level transcript: create a temp one for this step.
+                        _tmpdir = tempfile.mkdtemp(prefix="godel-capture-")
+                        tw = TranscriptWriter(_tmpdir, run_id=str(step_path))
+                        _owns_transcript = True
+                    else:
+                        _owns_transcript = False
+                    _stream_path = list(_current_stream_path.get() or [])
+                    with _capture(step_path=list(step_path), stream_path=_stream_path, transcript=tw):
+                        result = await fn(*args, **kwargs)
+                    if _owns_transcript:
+                        tw.close()
+                else:
+                    result = await fn(*args, **kwargs)
                 if event:
                     ctx.event_log.emit_finished(event.event_id, response={"result": repr(result)})
                     # WARN-1 fix: during replay, event.event_id is a fresh ephemeral
