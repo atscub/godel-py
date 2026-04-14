@@ -463,12 +463,25 @@ def test_c_late_attach_catches_up_from_file(tmp_path):
 
 
 def test_c_godel_watch_cli_late_attaches_to_completed_run(tmp_path):
-    """Exercise the ``godel watch <run_id>`` CLI resolution path.
+    """Exercise the ``godel watch <run_id>`` CLI resolution + archive replay.
 
-    AC(c) calls out ``godel watch <run_id>`` specifically.  This test drives a
-    subprocess invocation against a completed run and asserts the CLI exits
-    cleanly (exit 0) after late-attaching, reading archives + live file, and
-    encountering a ``WORKFLOW_FINISHED`` sentinel.
+    AC(c) calls out ``godel watch <run_id>`` specifically.  Asserting only on
+    returncode == 0 is insufficient: a bug that skipped ``_start_files`` (wrong
+    inode list, wrong sort order, empty archive scan) would also produce
+    exit 0 via the WORKFLOW_FINISHED sentinel in the live file.
+
+    Stronger assertion: run the CLI in plain-log mode (``TERM=dumb``), which
+    prints exactly one prefixed line per event (see ``_PlainLineLog``).  Then:
+
+      * Every event written to every archive file has a unique ``step_path``
+        (``step_0``, ``step_1``, …).
+      * Parse the subprocess's stdout and extract distinct ``step_path`` values.
+      * Assert that the set equals the complete expected set.  A bug that
+        drops archives would produce strictly fewer distinct step_paths and
+        this assertion would fail.
+      * As an additional guard, verify ``step_0`` lives in the oldest archive
+        (highest ``.N``) and is present in the CLI output — specifically
+        catches bugs where ``_start_files`` sort order is reversed.
 
     Skipped if ``rich`` (required by ``godel[watch]``) is not importable.
     """
@@ -480,8 +493,11 @@ def test_c_godel_watch_cli_late_attaches_to_completed_run(tmp_path):
 
     # Build a multi-file transcript that represents a completed run (rotations
     # happened, then a terminal WORKFLOW_FINISHED sentinel was written).
+    # Each step.enter carries a unique, parseable step_path so we can verify
+    # per-event delivery from the CLI's plain-mode output.
+    n_events = 150
     with TranscriptWriter(run_dir, run_id=run_id, max_bytes=2048) as tw:
-        for i in range(150):
+        for i in range(n_events):
             tw.write_event(
                 "step.enter",
                 step_path=[f"step_{i}"],
@@ -489,8 +505,19 @@ def test_c_godel_watch_cli_late_attaches_to_completed_run(tmp_path):
             )
         tw.write_workflow_finished(status="FINISHED")
 
-    assert _count_rotations(run_dir) >= 1, (
-        "Expected at least one rotation for a meaningful multi-file CLI test"
+    rotations = _count_rotations(run_dir)
+    assert rotations >= 2, (
+        f"Test needs >= 2 rotations to meaningfully verify archive replay; "
+        f"got {rotations}.  Lower max_bytes or add more events."
+    )
+
+    # Sanity: confirm step_0 lives in the oldest archive (highest .N suffix).
+    # If _start_files sort order ever regresses, step_0 will be missed by a
+    # reverse-order bug but not by a simple drop-last-archive bug.
+    oldest_archive = run_dir / f"{_FILENAME}.{rotations}"
+    oldest_contents = oldest_archive.read_text(encoding="utf-8")
+    assert "step_0" in oldest_contents, (
+        f"Test setup error: step_0 not in oldest archive {oldest_archive.name}"
     )
 
     # Invoke the CLI from a cwd where godel is importable (the repo root).
@@ -498,16 +525,54 @@ def test_c_godel_watch_cli_late_attaches_to_completed_run(tmp_path):
     # package and needs to resolve via the repo's pyproject.toml.
     repo_root = Path(__file__).resolve().parent.parent
 
+    # TERM=dumb forces _PlainLineLog: one "[godel-watch] ... step_path='step_N'"
+    # line per event on stdout.
+    env = {**os.environ, "TERM": "dumb"}
+
     result = subprocess.run(
         [PYTHON, "-m", "godel", "watch", run_id, "--runs-dir", str(runs_dir)],
         capture_output=True,
         text=True,
         cwd=str(repo_root),
+        env=env,
         timeout=20,
     )
     assert result.returncode == 0, (
         f"`godel watch {run_id}` failed.\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+    # Parse the plain-log output: lines for step.enter events embed
+    # step_path='step_N'.  Match them all and collect the indices.
+    import re
+    step_path_re = re.compile(r"step_path='step_(\d+)'")
+    seen_indices: set[int] = set()
+    for line in result.stdout.splitlines():
+        m = step_path_re.search(line)
+        if m:
+            seen_indices.add(int(m.group(1)))
+
+    # Every unique step_i (0..n_events-1) must appear in stdout.  A bug that
+    # drops any archive file would leave a contiguous range of indices missing.
+    expected = set(range(n_events))
+    missing = expected - seen_indices
+    extra = seen_indices - expected
+    assert not missing, (
+        f"`godel watch` missed {len(missing)} events (archive replay broken?). "
+        f"First 10 missing step indices: {sorted(missing)[:10]}.  "
+        f"Rotations in transcript: {rotations}.  "
+        f"stdout line count: {len(result.stdout.splitlines())}.  "
+        f"stderr tail: {result.stderr[-400:]!r}"
+    )
+    assert not extra, f"Unexpected step indices in CLI stdout: {sorted(extra)[:10]}"
+
+    # Oldest-archive guard: step_0 lives in the oldest archive.  This is
+    # redundant with the set-equality check above, but makes the failure mode
+    # ("archive sort order reversed") immediately obvious in the assertion
+    # message if it ever regresses.
+    assert 0 in seen_indices, (
+        "step_0 (oldest archive's first event) missing from `godel watch` "
+        "output — archive-replay ordering is likely broken."
     )
 
 
