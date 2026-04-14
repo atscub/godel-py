@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.5.0 (2026-04-14)
+
+### Bug Fixes
+
+- **capture**: Pass-1 review fixes for stdout capture (godel-py-5pl.7)
+  ([`ea01aa6`](https://github.com/atscub/godel-py/commit/ea01aa66e74d530b77d140f2303e171b670be637))
+
+### Features
+
+- **capture**: Implement stdout capture pipe-per-step with transcript wiring (godel-py-5pl.7)
+  ([`a413bb6`](https://github.com/atscub/godel-py/commit/a413bb656147b9d08d4337c60bf40dba966d3e60))
+
+
 ## v1.4.0 (2026-04-14)
 
 ### Features
