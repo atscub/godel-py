@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v3.0.1 (2026-04-14)
+
+### Bug Fixes
+
+- **agents**: Map Copilot CLI 1.0.25+ tool.execution_{start,complete} events
+  ([`3329bb7`](https://github.com/atscub/godel-py/commit/3329bb7e49ac7b8bb10386f34365f6f1f53db005))
+
+- **watch**: Order status lines after watcher and wrap long streamed lines
+  ([`ded35e3`](https://github.com/atscub/godel-py/commit/ded35e3e6bf05eea3d6810002b1cbe5f91b0ceff))
+
+
 ## v3.0.0 (2026-04-14)
 
 ### Features
