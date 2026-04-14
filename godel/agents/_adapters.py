@@ -69,7 +69,14 @@ class ClaudeAdapter:
                     continue
                 btype = block.get("type")
                 if btype == "text":
+                    # Assistant "text" content is the visible reply — treat it
+                    # as a response chunk, not thinking.  Real reasoning lives
+                    # in "thinking" blocks (Claude's extended-thinking output).
                     text = block.get("text", "")
+                    if text:
+                        events.append(("agent.response", {"text": text}))
+                elif btype == "thinking":
+                    text = block.get("thinking", block.get("text", ""))
                     if text:
                         events.append(("agent.thought", {"text": text}))
                 elif btype == "tool_use":

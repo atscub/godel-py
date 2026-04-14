@@ -57,7 +57,7 @@ def _tw(tmp_path) -> TranscriptWriter:
 
 
 class TestClaudeAdapter:
-    def test_assistant_text_block_yields_thought(self):
+    def test_assistant_text_block_yields_response(self):
         adapter = ClaudeAdapter()
         data = {
             "type": "assistant",
@@ -68,8 +68,22 @@ class TestClaudeAdapter:
         result = adapter.map(data)
         assert result is not None and len(result) == 1
         op, extra = result[0]
-        assert op == "agent.thought"
+        assert op == "agent.response"
         assert extra["text"] == "Thinking about it..."
+
+    def test_assistant_thinking_block_yields_thought(self):
+        adapter = ClaudeAdapter()
+        data = {
+            "type": "assistant",
+            "message": {
+                "content": [{"type": "thinking", "thinking": "Hmm, let me see."}]
+            },
+        }
+        result = adapter.map(data)
+        assert result is not None and len(result) == 1
+        op, extra = result[0]
+        assert op == "agent.thought"
+        assert extra["text"] == "Hmm, let me see."
 
     def test_assistant_tool_use_block_yields_tool_call(self):
         adapter = ClaudeAdapter()
@@ -148,7 +162,7 @@ class TestClaudeAdapter:
         result = adapter.map(data)
         assert result is not None and len(result) == 1
         op, extra = result[0]
-        assert op == "agent.thought"
+        assert op == "agent.response"
         assert extra["text"] == "hello"
 
     def test_vendor_drift_renamed_field_returns_none_not_crash(self):
@@ -535,7 +549,7 @@ class TestClaudeAdapterMultiBlock:
         result = adapter.map(data)
         assert result is not None and len(result) == 2
         ops = [op for op, _ in result]
-        assert ops[0] == "agent.thought"
+        assert ops[0] == "agent.response"
         assert ops[1] == "agent.tool_call"
         assert result[0][1]["text"] == "I'll run ls for you."
         assert result[1][1]["tool"] == "bash"
@@ -578,7 +592,7 @@ class TestClaudeAdapterMultiBlock:
                 adapter=ClaudeAdapter(),
             )
         events = _read_transcript_events(tmp_path)
-        thought_events = [e for e in events if e["op"] == "agent.thought"]
+        thought_events = [e for e in events if e["op"] == "agent.response"]
         tool_call_events = [e for e in events if e["op"] == "agent.tool_call"]
         assert len(thought_events) == 1
         assert thought_events[0]["text"] == "Here is my plan."
@@ -614,7 +628,7 @@ class TestUtf8RoundTrip:
                 adapter=ClaudeAdapter(),
             )
         events = _read_transcript_events(tmp_path)
-        thought_events = [e for e in events if e["op"] == "agent.thought"]
+        thought_events = [e for e in events if e["op"] == "agent.response"]
         assert len(thought_events) == 1
         assert thought_events[0]["text"] == self.MULTI_BYTE_TEXT
 

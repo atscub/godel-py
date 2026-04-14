@@ -3,7 +3,7 @@
 Covers acceptance criteria:
 - AdapterStreamSink.feed() classifies lines and writes events to transcript.
 - AdapterStreamSink.close() flushes trailing partial lines.
-- agent.thought / agent.tool_call / agent.tool_result events appear in
+- agent.response / agent.tool_call / agent.tool_result events appear in
   transcript while the subprocess is still running (live, not post-hoc).
 - Mock proc that drips stream-json lines causes transcript events before
   _invoke() returns.
@@ -79,7 +79,7 @@ class TestAdapterStreamSink:
         sink.feed(line)
 
         events = _read_events(tw, tmp_path / "run")
-        thought_events = [e for e in events if e["op"] == "agent.thought"]
+        thought_events = [e for e in events if e["op"] == "agent.response"]
         assert len(thought_events) == 1
         assert thought_events[0]["text"] == "Hello"
 
@@ -147,7 +147,7 @@ class TestAdapterStreamSink:
         # Actually just close the sink and check that the partial was emitted.
         sink.close()
         events = _read_events(tw, tmp_path / "run")
-        thought_events = [e for e in events if e["op"] == "agent.thought"]
+        thought_events = [e for e in events if e["op"] == "agent.response"]
         assert len(thought_events) == 1
         assert thought_events[0]["text"] == "Partial"
 
@@ -177,7 +177,7 @@ class TestAdapterStreamSink:
 
         events = _read_events(tw, tmp_path / "run")
         ops = {e["op"] for e in events}
-        assert "agent.thought" in ops
+        assert "agent.response" in ops
         assert "agent.tool_call" in ops
         assert "agent.tool_result" in ops
 
@@ -207,7 +207,7 @@ class TestAdapterStreamSink:
         sink.close()
 
         events = _read_events(tw, tmp_path / "run")
-        thought = next(e for e in events if e["op"] == "agent.thought")
+        thought = next(e for e in events if e["op"] == "agent.response")
         assert thought["step_path"] == ["my_step"]
         assert thought["stream_path"] == ["stream-abc"]
 
@@ -263,7 +263,7 @@ class TestAgentInvokeStreaming:
                 if "event" in obj:
                     events.append(obj["event"])
         ops = {e["op"] for e in events}
-        assert "agent.thought" in ops
+        assert "agent.response" in ops
         assert "agent.tool_call" in ops
         assert "agent.tool_result" in ops
 

@@ -377,13 +377,12 @@ class _PlainLineLog:
         # Whether any block has been emitted yet — used to gate the
         # separator blank line.
         self._emitted_any: bool = False
-        # Most recently rendered thought per stream_path.  Claude's
-        # stream-json emits the final answer as both a content-text block
-        # (→ agent.thought) and the terminating result event (→ agent.response);
-        # when they match verbatim we drop the response to avoid duplicating
-        # the reply.  We print thoughts immediately (no buffering delay) and
-        # use this record only to veto the subsequent response.
-        self._last_thought: dict[tuple, str] = {}
+        # Most recently rendered response per stream_path.  Claude's
+        # stream-json emits the final answer as both an assistant text block
+        # and the terminating result event — both map to agent.response.
+        # The record lets us drop the trailing duplicate while printing the
+        # streamed answer in real time.
+        self._last_response: dict[tuple, str] = {}
 
     def start(self) -> None:
         pass
@@ -474,21 +473,18 @@ class _PlainLineLog:
         stream_path = tuple(event.get("stream_path") or [])
 
         if op == "agent.response":
-            prev_text = self._last_thought.get(stream_path)
-            if prev_text is not None and prev_text.strip() == (event.get("text") or "").strip():
-                # The response is the result wrapper repeating the assistant's
-                # text block — already shown as a thought.  Drop it.
-                self._last_thought.pop(stream_path, None)
+            prev_text = self._last_response.get(stream_path)
+            text = (event.get("text") or "").strip()
+            if prev_text is not None and prev_text.strip() == text:
+                # Trailing result event echoing the already-streamed answer.
                 return
 
         self._render(event)
 
-        if op == "agent.thought":
-            self._last_thought[stream_path] = event.get("text") or ""
+        if op == "agent.response":
+            self._last_response[stream_path] = event.get("text") or ""
         elif op == "agent.prompt":
-            # New turn on this stream — clear any stale thought record so a
-            # later echo from a *different* call doesn't accidentally dedupe.
-            self._last_thought.pop(stream_path, None)
+            self._last_response.pop(stream_path, None)
 
     def _render(self, event: dict) -> None:
         op = event.get("op", "?")
