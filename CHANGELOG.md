@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v1.7.0 (2026-04-14)
+
+### Bug Fixes
+
+- **watch**: Guarantee final-flush render and make signal handler async-safe
+  ([`85b60ad`](https://github.com/atscub/godel-py/commit/85b60adedf3bfe32fa476cb2b208dce0a686c99c))
+
+- **watch**: Surface lost sentinel + handle signal in EOS tail window
+  ([`3700538`](https://github.com/atscub/godel-py/commit/37005385b71b67f3f31b74195f58ec0ba839b368))
+
+### Features
+
+- **watch**: Implement Rich TUI renderer with burst coalescing and plain fallback
+  ([`66dd28c`](https://github.com/atscub/godel-py/commit/66dd28c498d708d5a259c8401244b137814d6c51))
+
+
 ## v1.6.0 (2026-04-14)
 
 ### Bug Fixes
