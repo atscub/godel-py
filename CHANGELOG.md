@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.5.3 (2026-04-14)
+
+### Bug Fixes
+
+- **tail**: Eliminate rotation-race gap in TranscriptTail._fill_gaps
+  ([`d5afb48`](https://github.com/atscub/godel-py/commit/d5afb48fbd2ceecfc7dab67a1ca8ccc3eca48e68))
+
+### Refactoring
+
+- **tail**: Address review — bounded retries, streaming merge, sentinel hardening
+  ([`cd7179a`](https://github.com/atscub/godel-py/commit/cd7179a23f9a31a75c036aafe69597102636a4e7))
+
+
 ## v1.5.2 (2026-04-14)
 
 ### Bug Fixes
