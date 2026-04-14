@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.19.0 (2026-04-14)
+
+### Features
+
+- **watch**: Stream thinking + response in real time
+  ([`3f32614`](https://github.com/atscub/godel-py/commit/3f326147b2bb476ea132d165767a10db19c57996))
+
+
 ## v1.18.0 (2026-04-14)
 
 ### Features
