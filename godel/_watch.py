@@ -543,7 +543,19 @@ def _producer_thread(
                 q.get_nowait()
                 q.put_nowait(None)
             except (queue.Empty, queue.Full):
-                pass
+                # Currently unreachable under the single-producer invariant
+                # (this finally block is the only code path that puts the
+                # sentinel, and the consumer drains strictly faster than this
+                # tight drop-oldest + put_nowait pair).  Log loudly rather
+                # than swallowing silently so any future regression — e.g.
+                # adding a second producer, or a consumer stall during
+                # teardown — surfaces as a visible error instead of a hang.
+                logger_.error(
+                    "watch producer: failed to enqueue end-of-stream sentinel "
+                    "after drop-oldest retry (queue maxsize=%s). Render loop "
+                    "may hang waiting for EOS.",
+                    q.maxsize,
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -616,6 +628,20 @@ def _render_loop(
             any_update_since_last_render = False
 
         if end_of_stream:
+            # Re-check the signal flag before we commit to the EOS exit path.
+            # A SIGTSTP/SIGHUP that lands in the tail window (between the
+            # top-of-loop check and here) would otherwise be silently
+            # consumed, leaving the user's Ctrl+Z / terminal-drop ignored.
+            # Handle it via the same stop → SIG_DFL → re-raise dance.
+            if pending_signal is not None and pending_signal[0] is not None:
+                signum = pending_signal[0]
+                try:
+                    renderer.stop()
+                finally:
+                    signal.signal(signum, signal.SIG_DFL)
+                    os.kill(os.getpid(), signum)
+                return
+
             # Guarantee a final flush render if any events were applied since
             # the last paint.  Fixes the "0 renders on fast run" bug.
             if any_update_since_last_render:
