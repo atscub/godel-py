@@ -476,18 +476,8 @@ _STATUS_COLOR = {
 
 def _fmt_event(event) -> str:
     """Format a single Event as a one-line human-readable string."""
-    duration = ""
-    if event.ts_end and event.ts_start:
-        from datetime import datetime
-        try:
-            t0 = datetime.fromisoformat(event.ts_start)
-            t1 = datetime.fromisoformat(event.ts_end)
-            dur = (t1 - t0).total_seconds()
-            duration = f"  ({dur:.3f}s)"
-        except ValueError:
-            pass
-    step_str = "/".join(event.step_path) if event.step_path else "(root)"
-    return f"[{event.event_id[:8]}] {event.op:<20} {step_str:<30} {event.status.value}{duration}"
+    from godel._formatters import FORMATTERS, _default_formatter
+    return FORMATTERS.get(event.op, _default_formatter)(event)
 
 
 def _show_list(events, show_all):
