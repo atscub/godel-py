@@ -1283,6 +1283,97 @@ def workflows_which_cmd(name):
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# `godel runs` — enumerate past runs
+# ---------------------------------------------------------------------------
+
+
+@main.group("runs", invoke_without_command=True)
+@click.pass_context
+def runs_group(ctx):
+    """Manage and inspect past workflow runs."""
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
+
+
+def _format_duration(seconds: float | None) -> str:
+    if seconds is None:
+        return "—"
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"{seconds}s"
+    m, s = divmod(seconds, 60)
+    if m < 60:
+        return f"{m}m {s:02d}s"
+    h, m = divmod(m, 60)
+    return f"{h}h {m:02d}m"
+
+
+def _format_ts(ts: str) -> str:
+    if not ts:
+        return "—"
+    try:
+        from datetime import datetime
+        dt = datetime.fromisoformat(ts)
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return ts
+
+
+@runs_group.command("list")
+@click.option("--status", default=None, help="Filter by status (running/finished/failed/paused)")
+@click.option("--limit", default=None, type=int, help="Max number of rows to show")
+@click.option("--runs-dir", "runs_dir_override", default=None, help="Override runs directory")
+def runs_list_cmd(status, limit, runs_dir_override):
+    """List past workflow runs with status and duration."""
+    from godel._run_summary import summarize_run
+
+    runs_dir = _resolve_runs_dir(runs_dir_override)
+    if not runs_dir.exists():
+        click.echo(f"Runs directory not found: {runs_dir}", err=True)
+        sys.exit(1)
+
+    jsonl_files = sorted(runs_dir.glob("*.jsonl"))
+    summaries = []
+    for f in jsonl_files:
+        summaries.append(summarize_run(f))
+
+    # Sort by ts_start descending (most recent first); empty ts_start goes last
+    summaries.sort(key=lambda s: s.ts_start or "", reverse=True)
+
+    if status is not None:
+        status_upper = status.upper()
+        summaries = [s for s in summaries if s.status.upper() == status_upper]
+
+    if limit is not None:
+        summaries = summaries[:limit]
+
+    # Print table
+    col_id = 28
+    col_wf = 20
+    col_st = 10
+    col_ts = 20
+    col_du = 10
+    header = (
+        f"{'RUN ID':<{col_id}}  "
+        f"{'WORKFLOW':<{col_wf}}  "
+        f"{'STATUS':<{col_st}}  "
+        f"{'STARTED':<{col_ts}}  "
+        f"DURATION"
+    )
+    click.echo(header)
+    click.echo("-" * len(header))
+    for s in summaries:
+        rid = s.run_id[:col_id]
+        wf = s.workflow_name[:col_wf]
+        st = s.status[:col_st]
+        ts = _format_ts(s.ts_start)[:col_ts]
+        dur = _format_duration(s.duration_s)
+        click.echo(
+            f"{rid:<{col_id}}  {wf:<{col_wf}}  {st:<{col_st}}  {ts:<{col_ts}}  {dur}"
+        )
+
+
 @main.command("guide")
 @click.argument("name", required=False)
 def guide_cmd(name):
