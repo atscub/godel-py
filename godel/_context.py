@@ -111,6 +111,14 @@ _current_stream_path: ContextVar[list[str]] = ContextVar(
     "godel_stream_path", default=[]
 )
 
+# _current_transcript holds the active TranscriptWriter for the current workflow
+# run, or None when no transcript is open.  Set by the @workflow / @step
+# decorators when capture_stdout=True is active.  @step decorators that opt
+# into capture_stdout read this to find the shared per-run writer.
+_current_transcript: ContextVar = ContextVar(
+    "godel_transcript", default=None
+)
+
 
 def get_event_log():
     """Retrieve the EventLog from the current workflow context."""
