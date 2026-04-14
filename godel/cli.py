@@ -1262,3 +1262,41 @@ def workflows_which_cmd(name):
         click.echo(str(exc), err=True)
         sys.exit(1)
     click.echo(str(path))
+
+
+# ---------------------------------------------------------------------------
+# `godel guide` — bundled on-demand docs for agents
+# ---------------------------------------------------------------------------
+
+
+@main.command("guide")
+@click.argument("name", required=False)
+def guide_cmd(name):
+    """Print a bundled guide, or list available guides with no argument.
+
+    Intended for agents to pull just-in-time onboarding content without the
+    godel repo being available locally.
+    """
+    from importlib import resources
+    from godel._guides import GUIDES, GODEL_BLURB
+
+    if name is None:
+        click.echo(GODEL_BLURB)
+        click.echo("Available guides (use `godel guide <name>` to read one):\n")
+        width = max(len(slug) for slug, _ in GUIDES)
+        for slug, hook in GUIDES:
+            click.echo(f"  {slug:<{width}}  {hook}")
+        return
+
+    slugs = {slug for slug, _ in GUIDES}
+    if name not in slugs:
+        click.echo(f"unknown guide: {name!r}", err=True)
+        click.echo(f"available: {', '.join(sorted(slugs))}", err=True)
+        sys.exit(1)
+
+    try:
+        text = resources.files("godel._guides").joinpath(f"{name}.md").read_text()
+    except FileNotFoundError as exc:
+        click.echo(f"guide {name!r} is registered but not bundled: {exc}", err=True)
+        sys.exit(1)
+    click.echo(text)

@@ -1,0 +1,137 @@
+# API Reference
+
+All symbols are importable directly from `godel` unless noted.
+
+## Decorators
+
+### `@workflow`
+Marks an `async def` as the workflow entry point. At most one per file. The decorated
+function, when called, sets up a `WorkflowContext`, opens an `EventLog`, and records
+`workflow.start` / `workflow.end` events. Positional and keyword arguments passed to the
+decorated function are forwarded to the original coroutine and recorded in the
+`WORKFLOW_STARTED` event (JSON-serialisable args are stored structurally; other values
+fall back to `repr()` and disable programmatic-only `godel resume`). From the CLI, args
+are supplied after `--`: `godel run file.py -- arg1 key=value` (see `docs/cli.md`).
+
+### `@step`
+Marks an `async def` as a cacheable, replayable checkpoint. On replay, a completed step
+returns its recorded result without executing. Arguments must be JSON-serializable
+(Pydantic models, dicts, lists, primitives) — they're hashed into `request_hash`.
+
+## Agent factories
+
+### `godel.agents.claude_code(*, model="opus", cwd=None, tools=None, skip_permissions=False)`
+Returns an async callable wrapping the `claude` CLI.
+
+- `model` — `"opus"`, `"sonnet"`, `"haiku"`, or a full model ID.
+- `cwd` — working directory for the subprocess (default: workflow CWD).
+- `tools` — list of tool names to allow (default: claude's defaults).
+- `skip_permissions` — pass `--dangerously-skip-permissions`.
+
+Call signature:
+```python
+await agent(prompt: str) -> str
+await agent(prompt: str, *, schema: Type[BaseModel]) -> BaseModel
+```
+
+Raises `SchemaValidationFailure` if `schema=` is set and the reply cannot be parsed.
+
+### `godel.agents.copilot(*, model="default", cwd=None, tools=None, skip_permissions=False)`
+Returns an async callable wrapping the `copilot` CLI (from the `@github/copilot-cli` npm
+package, v0.0.337+).
+
+- `model` — `"default"` (→ `gpt-5`), `"gpt-5"`, `"sonnet"` (→ `claude-sonnet-4.5`),
+  `"sonnet-4"` (→ `claude-sonnet-4`), or a full Copilot model ID.
+- `cwd`, `tools`, `skip_permissions` — same semantics as `claude_code`.
+
+Call signature and `SchemaValidationFailure` behavior are identical to `claude_code`, so
+the two agents are interchangeable in workflows.
+
+### `godel.agents.codex(...)`
+Stub — not yet implemented.
+
+## Primitives
+
+### `run(cmd, *, cwd=None, env=None, timeout=None, stdin=None)`
+Audited async subprocess. Returns `CommandResult(returncode, stdout, stderr)`. Raises
+`CommandFailure` on non-zero exit. All arguments and output are recorded.
+
+### `parallel(awaitables) -> list`
+Awaits a list of coroutines concurrently. Emits one `parallel.fork` and one
+`parallel.join` event bracketing the group.
+
+### `retry(n)(fn)` or `@retry(n)`
+Decorator that retries on `WorkflowFail` up to `n` times. Each attempt is recorded; only
+the successful attempt contributes to the effective DAG, but `godel show --all` displays
+the failures.
+
+### `godel.print(*args, sep=" ", end="\n")`
+Async shadow of `print`. Records a `print` event and writes to stdout.
+
+### `godel.input(prompt="") -> str`
+Async shadow of `input`. Blocks for human input, writes a `SUSPENDED` → `FINISHED`
+`input` event pair. Durable: on resume, returns the recorded answer without re-prompting.
+
+## Determinism escape hatches (`godel.det`)
+
+- `godel.det.now() -> datetime` — wall-clock time, recorded.
+- `godel.det.uuid4() -> str` — random UUID, recorded.
+- `godel.det.random() -> float` — `[0.0, 1.0)`, recorded.
+- `godel.det.randint(a, b) -> int` — inclusive, recorded.
+- `godel.det.choice(seq)` — recorded.
+
+On replay these return the recorded value.
+
+## Exceptions
+
+| Exception                     | Raised when                                                  |
+|-------------------------------|--------------------------------------------------------------|
+| `WorkflowFail`                | User-raised failure; triggers retry if wrapped.              |
+| `GodelStrictError`            | Strict-mode violation detected before/during execution.      |
+| `StrictViolation`             | Individual violation record inside `GodelStrictError`.       |
+| `NonDeterministicEscape`      | A banned operation reached the audit hook.                   |
+| `SchemaValidationFailure`     | `agent(..., schema=M)` reply failed to parse as `M`.         |
+| `AgentRefusal`                | Agent refused the request.                                   |
+| `HumanTimeout`                | `input()` timeout exceeded.                                  |
+| `PauseSignal`                 | Pause sentinel seen at a `@step` boundary (internal).        |
+| `RewindSignal`                | Raised during rewind (internal; exposed for `isinstance`).   |
+| `ResumeError`, `UnsafeResumeError`, `SourceEditedError`, `RewindUnsafe` | Replay / rewind safety violations. |
+
+## Event log
+
+### `Event`
+Dataclass with fields: `event_id`, `op`, `status`, `step_path`, `ts_start`, `ts_end`,
+`request`, `response`, `request_hash`, `parent_id`, `error`, `error_type`.
+
+### `EventStatus`
+Enum: `STARTED`, `FINISHED`, `FAILED`, `INVALIDATED`, `SUSPENDED`, `PAUSED`.
+
+### `EventLog`
+- `EventLog.load(run_id) -> EventLog` — load from `./runs/<run_id>.jsonl`.
+- `.all_events() -> list[Event]`
+- `.get_event(event_id) -> Event | None`
+- `.emit_started(op, step_path, request) -> Event`
+- `.emit_finished(event, response)` / `.emit_failed(event, error)`
+- `.close()` — flush and close the file handle.
+
+### `get_event_log() -> EventLog | None`
+Returns the current workflow's event log (only non-`None` inside a running workflow).
+
+## Live introspection
+
+### `godel.tail(run_id, *, runs_dir="./runs", follow=True) -> AsyncIterator[Event]`
+Async iterator that yields events as they're written. Respects `follow=False` to stop at
+EOF. Powers `godel tail`.
+
+### Pause API
+- `godel.pause(run_id, *, reason="") -> str` — write sentinel, return full run ID.
+- `godel.check_pause_request(run_id) -> PauseRequest | None`
+- `godel.clear_pause_request(run_id)` / `godel.write_pause_request(...)`
+
+### `godel.rewind(event_log, event_ids, reason="") -> dict`
+Programmatic counterpart to `godel rewind`. Returns `{invalidated_count, invalidated_ids}`.
+
+## Testing utilities (`godel.testing`)
+
+Helpers for mocking `run()` and agents in unit tests. See `godel/testing.py` for the
+current surface (stability: experimental).

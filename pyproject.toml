@@ -27,6 +27,9 @@ godel = "godel.cli:main"
 Homepage = "https://github.com/atscub/godel-py"
 Spec = "https://github.com/atscub/godel-lang"
 
+[tool.hatch.build.targets.wheel]
+packages = ["godel"]
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
