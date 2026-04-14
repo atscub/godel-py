@@ -520,7 +520,7 @@ def test_run_plain_implies_watch(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     with mock.patch("subprocess.Popen", side_effect=_fake_popen):
         runner = CliRunner()
-        result = runner.invoke(main, ["run", str(wf), "--plain"])
+        result = runner.invoke(main, ["run", "--no-strict", str(wf), "--plain"])
 
     assert result.exit_code == 0, f"run failed: {result.output}\n{result.exception}"
     assert captured_cmds, "Watcher subprocess was not spawned (--plain did not imply --watch)"
