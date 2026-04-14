@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v1.5.2 (2026-04-14)
+
+### Bug Fixes
+
+- **bench**: Pass-1 review fixes for observability harness
+  ([`1e94c67`](https://github.com/atscub/godel-py/commit/1e94c67c6b7ab177a892d5cb056708b83032642f))
+
+### Chores
+
+- **bench**: Add observability benchmark harness and baseline result
+  ([`f2e3b5c`](https://github.com/atscub/godel-py/commit/f2e3b5cc2385da298d10220e2249ea29ca5a8b85))
+
+### Refactoring
+
+- **exceptions**: Forward context kwargs through ResumeError subclasses
+  ([`ce7fb23`](https://github.com/atscub/godel-py/commit/ce7fb236a3843119c4ecafb946a5d16b5bffab6c))
+
+- **exceptions**: Make ConfigError and ResumeError GodelError subclasses
+  ([`e035317`](https://github.com/atscub/godel-py/commit/e0353172855b059d81f054c030af32d4e4b90b60))
+
+
 ## v1.5.1 (2026-04-14)
 
 ### Bug Fixes
