@@ -91,6 +91,83 @@ def _spawn_watch_subprocess(run_id: str, runs_dir: str = "./runs") -> "subproces
         _privileged.reset(token)
 
 
+def _run_workflow_with_sigint(fn, wf_args: list, wf_kwargs: dict):
+    """Execute *fn* in a new event loop with proper SIGINT → cancellation handling.
+
+    The first SIGINT cancels the running workflow task so that ``run()``
+    primitives can clean up their process groups before exiting.  A second
+    SIGINT arriving within one second of the first triggers an immediate
+    ``os._exit(130)`` in case cleanup is hung.
+
+    On Windows, SIGINT is delivered by Python as a KeyboardInterrupt on the
+    main thread rather than as an OS signal, so we fall back to the default
+    ``asyncio.run`` behaviour there (the KeyboardInterrupt propagates normally
+    and ``run()``'s ``CancelledError`` handler still fires via
+    ``loop.run_until_complete`` unwinding).
+    """
+    import signal as _signal
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    task: list = [None]  # mutable cell: [asyncio.Task | None]
+    _sigint_count = [0]
+    _first_sigint_time = [0.0]
+
+    def _sigint_handler(signum, frame):
+        import time as _time
+        now = _time.monotonic()
+        _sigint_count[0] += 1
+        if _sigint_count[0] == 1:
+            _first_sigint_time[0] = now
+            # Cancel the workflow task — CancelledError will propagate into
+            # run(), which will kill its process group before re-raising.
+            t = task[0]
+            if t is not None and not t.done():
+                loop.call_soon_threadsafe(t.cancel)
+        else:
+            # Second SIGINT within 1 s of first → panic exit.
+            if now - _first_sigint_time[0] < 1.0:
+                os._exit(130)
+            else:
+                # > 1 s later — treat as a fresh first signal.
+                _sigint_count[0] = 1
+                _first_sigint_time[0] = now
+                t = task[0]
+                if t is not None and not t.done():
+                    loop.call_soon_threadsafe(t.cancel)
+
+    try:
+        if sys.platform != "win32":
+            old_handler = _signal.signal(_signal.SIGINT, _sigint_handler)
+        else:
+            old_handler = None
+
+        async def _run():
+            task[0] = asyncio.current_task()
+            return await fn(*wf_args, **wf_kwargs)
+
+        try:
+            loop.run_until_complete(_run())
+        except asyncio.CancelledError:
+            # Surface as KeyboardInterrupt so the caller's except-branch fires.
+            raise KeyboardInterrupt
+        finally:
+            if old_handler is not None:
+                _signal.signal(_signal.SIGINT, old_handler)
+    finally:
+        try:
+            # Cancel all remaining tasks before closing the loop.
+            pending = asyncio.all_tasks(loop)
+            if pending:
+                for t in pending:
+                    t.cancel()
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+
+
 @click.group()
 def main():
     """Godel — deterministic orchestrator for AI agent workflows."""
@@ -238,7 +315,7 @@ def run_cmd(file, extra, no_strict, no_lint, watch):
     start_token = _on_run_start.set(_print_start)
     start = time.monotonic()
     try:
-        asyncio.run(fn(*wf_args, **wf_kwargs))
+        _run_workflow_with_sigint(fn, wf_args, wf_kwargs)
         elapsed = time.monotonic() - start
         click.echo(f"[godel] completed in {elapsed:.1f}s", err=True)
         sys.exit(0)

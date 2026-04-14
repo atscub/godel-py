@@ -2,11 +2,61 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import signal
+import sys
 from dataclasses import dataclass
 
 from godel._context import _privileged, _current_stream_path
 from godel._decorators import WorkflowFail
 from godel._exceptions import _render_context_marker
+
+
+async def _kill_process_group(proc: asyncio.subprocess.Process, grace: float = 2.0) -> None:
+    """Terminate a process and its entire process group.
+
+    On POSIX, sends SIGTERM to the process group (``-pgid``), waits *grace*
+    seconds, then sends SIGKILL to any survivors.  On Windows, kills the
+    process directly (no process-group signalling API in asyncio on Windows).
+    """
+    if proc.returncode is not None:
+        return  # already finished
+
+    if sys.platform == "win32":
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=grace)
+        except (asyncio.TimeoutError, ProcessLookupError):
+            pass
+        return
+
+    # POSIX path — signal the entire process group.
+    try:
+        pgid = os.getpgid(proc.pid)
+    except ProcessLookupError:
+        # Process already gone.
+        return
+
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=grace)
+    except asyncio.TimeoutError:
+        # Grace period exhausted — force-kill survivors.
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=2.0)
+        except (asyncio.TimeoutError, ProcessLookupError):
+            pass
 
 
 @dataclass
@@ -133,19 +183,39 @@ async def run(cmd: str, *, cwd: str | None = None, timeout: float | None = None,
 
         token = _privileged.set(True)
         try:
+            # Isolate each child in its own process group so that a SIGTERM /
+            # SIGKILL sent to the workflow process does not leak into agent
+            # subprocesses.  We signal the process *group* explicitly in the
+            # cancel / timeout paths below.
+            _popen_kwargs: dict = {}
+            if sys.platform == "win32":
+                import subprocess as _subprocess
+                _popen_kwargs["creationflags"] = getattr(
+                    _subprocess, "CREATE_NEW_PROCESS_GROUP", 0
+                )
+            else:
+                _popen_kwargs["start_new_session"] = True
+
             proc = await asyncio.create_subprocess_shell(
                 cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
+                **_popen_kwargs,
             )
             try:
                 stdout_b, stderr_b = await asyncio.wait_for(
                     proc.communicate(), timeout=timeout
                 )
+            except asyncio.CancelledError:
+                await _kill_process_group(proc)
+                raise
             except asyncio.TimeoutError:
-                proc.kill()
-                await proc.communicate()
+                await _kill_process_group(proc)
+                try:
+                    await proc.communicate()
+                except Exception:
+                    pass
                 step_path = tuple(ctx.step_stack) if ctx else ()
                 error_msg = f"command timed out after {timeout}s: {cmd}"
                 if event:

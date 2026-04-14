@@ -61,6 +61,17 @@ godel run my_workflow.py -- alice model=opus
 - `0` — Workflow completed or paused successfully.
 - `1` — `WorkflowFail` raised inside the workflow.
 - `2` — Argument error, no `@workflow` found, or unexpected exception.
+- `130` — Interrupted by Ctrl+C (SIGINT).
+
+**Ctrl+C / SIGINT behaviour:**
+
+Pressing `Ctrl+C` once cancels the running workflow task.  Each subprocess
+started by `run()` is isolated in its own process group; on cancellation,
+Godel sends `SIGTERM` to the process group and waits up to 2 seconds before
+escalating to `SIGKILL`.  No orphan agent processes survive.
+
+A second `Ctrl+C` arriving within 1 second of the first triggers an immediate
+`os._exit(130)` — a panic exit that bypasses any hung cleanup.
 
 ---
 
