@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v2.0.0 (2026-04-14)
+
+### Refactoring
+
+- **watch**: Drop --show-thinking; always suppress thought blocks
+  ([`6662901`](https://github.com/atscub/godel-py/commit/6662901c33a18eb7e43d6aa5d80311c0f38c1122))
+
+- **workflow**: Drop stream_agents kwarg; default on + --no-stream
+  ([`d593fd0`](https://github.com/atscub/godel-py/commit/d593fd09f44fe8db50f44a98dad8aab4d018195a))
+
+
 ## v1.19.0 (2026-04-14)
 
 ### Features
