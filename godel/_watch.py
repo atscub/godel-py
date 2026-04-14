@@ -65,6 +65,13 @@ from godel._watch_model import WatchModel, StreamPanel, StepNode, reduce, reduce
 _BURST_THRESHOLD = 25   # trigger render if >= this many events queued
 _TIMER_INTERVAL = 0.1   # seconds between timer-triggered renders
 
+# Internal sentinel op pushed by _producer_thread when the TranscriptTail
+# iterator errors out (disk error, transcript disappeared, etc.).  Distinct
+# from a clean EOS (None sentinel) so the consumer can surface an error banner
+# instead of exiting silently.  Double-underscored to avoid colliding with any
+# legitimate transcript op.
+WATCH_ERROR_OP = "__watch_error__"
+
 
 # ---------------------------------------------------------------------------
 # Fallback detection
@@ -442,6 +449,10 @@ def _drain_queue(
         * ``did_update`` — ``True`` if at least one state-changing event was
           applied.
         * ``end_of_stream`` — ``True`` if the ``None`` sentinel was found.
+
+    Note: if a ``WATCH_ERROR_OP`` sentinel is drained, the error dict is
+    captured in module-level ``_last_producer_error`` so the render loop can
+    surface it after the loop exits.
     """
     did_update = False
     end_of_stream = False
@@ -457,6 +468,16 @@ def _drain_queue(
             end_of_stream = True
             break
 
+        # Capture producer-side error sentinels so the render loop can surface
+        # them.  The error dict is not applied to the model (reduce treats
+        # unknown ops as a no-op) but we stash it globally for the main thread
+        # to print after EOS.
+        if isinstance(item, dict) and item.get("op") == WATCH_ERROR_OP:
+            global _last_producer_error
+            _last_producer_error = item
+            drained += 1
+            continue
+
         old_model = model
         # TranscriptTail yields unwrapped inner event dicts (already stripped of
         # the {"event": ...} wrapper by _parse_lines).  Header lines are skipped
@@ -469,6 +490,13 @@ def _drain_queue(
         drained += 1
 
     return model, did_update, end_of_stream
+
+
+# Module-level cell for producer error; consulted by _render_loop / run_watch
+# after EOS to surface a banner.  It is reset at the start of each run_watch
+# invocation and is read/written only from the main thread inside _drain_queue
+# plus run_watch itself, so no lock is needed.
+_last_producer_error: dict | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -523,15 +551,39 @@ def _producer_thread(
                 # will likely succeed.
                 pass
 
+    error_event: dict | None = None
     try:
         reader = TranscriptTail.from_run(run_id, runs_dir)
         for event in reader:
             _put_with_drop_oldest(event)
+            # WORKFLOW_FINISHED is the terminal sentinel emitted by TranscriptWriter
+            # just before close().  When we see it the run is complete — push EOS
+            # immediately so the render loop exits cleanly without waiting for the
+            # next polling interval.
+            if event.get("op") == "WORKFLOW_FINISHED":
+                return  # finally block below pushes None sentinel
     except TranscriptTailError as exc:
         logger_.warning("TranscriptTail error: %s", exc)
+        error_event = {
+            "op": WATCH_ERROR_OP,
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+        }
     except Exception as exc:
         logger_.warning("Producer thread error: %s", exc)
+        error_event = {
+            "op": WATCH_ERROR_OP,
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+        }
     finally:
+        if error_event is not None:
+            # Push the error sentinel BEFORE the EOS None so the consumer can
+            # distinguish clean EOS from error EOS and surface an error banner.
+            try:
+                _put_with_drop_oldest(error_event)
+            except Exception:
+                pass
         # Sentinel must always get through — use blocking put so we never
         # strand the main loop waiting for EOS.
         try:
@@ -677,6 +729,11 @@ def _plain_loop(
             break
 
         if isinstance(item, dict):
+            if item.get("op") == WATCH_ERROR_OP:
+                # Capture the producer error for the outer printer; skip rendering.
+                global _last_producer_error
+                _last_producer_error = item
+                continue
             plain_log.print_event(item)
 
 
@@ -715,6 +772,11 @@ def run_watch(
     """
     plain = _use_plain_fallback(stdout)
 
+    # Reset the producer-error cell at the start of every invocation so that
+    # stale errors from a prior run do not leak into this one.
+    global _last_producer_error
+    _last_producer_error = None
+
     event_q: queue.Queue[dict | None] = queue.Queue(maxsize=_queue_maxsize)
 
     # Start producer thread
@@ -750,3 +812,88 @@ def run_watch(
             _restore_signals(previous_signals)
 
     t.join(timeout=2.0)
+
+    # If the producer thread errored mid-run, surface a banner on stderr so
+    # the user sees the failure (instead of the TUI silently closing).  This
+    # runs AFTER the live display has stopped so it is not overdrawn.
+    if _last_producer_error is not None:
+        err_type = _last_producer_error.get("error_type", "Error")
+        err_msg = _last_producer_error.get("error", "unknown")
+        print(
+            f"[godel-watch] transcript error ({err_type}): {err_msg}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Subprocess entry point
+# ---------------------------------------------------------------------------
+
+_STREAM_AGENTS_HINT = (
+    "agent streaming disabled for this workflow; "
+    "enable with @workflow(stream_agents=True). "
+    "See docs/transcript-format.md"
+)
+
+
+def _transcript_dir_exists(run_id: str, runs_dir: str) -> bool:
+    """Return True if the transcript directory for *run_id* exists.
+
+    A transcript directory is created only when ``stream_agents=True`` is set
+    on the ``@workflow`` decorator.  Its absence indicates streaming is disabled.
+    """
+    from pathlib import Path
+    return (Path(runs_dir) / run_id).exists()
+
+
+if __name__ == "__main__":
+    """Subprocess entry point: ``python -m godel._watch <run_id> [--runs-dir DIR]``
+
+    This is the isolation boundary between the renderer and the workflow
+    process.  A renderer crash (e.g. Rich internal error, SIGKILL) cannot
+    propagate to the underlying run.
+
+    Exit codes
+    ----------
+    0  — normal exit (EOS received or Ctrl+C)
+    1  — missing / ambiguous run_id
+    2  — watch not installed (rich missing)
+    """
+    import argparse
+
+    ap = argparse.ArgumentParser(prog="python -m godel._watch", add_help=False)
+    ap.add_argument("run_id")
+    ap.add_argument("--runs-dir", default="./runs")
+    ap.add_argument(
+        "--hint-timeout",
+        type=float,
+        default=5.0,
+        help="Seconds to wait before showing the streaming-disabled hint",
+    )
+    ns = ap.parse_args()
+
+    # Discoverability hint: if the transcript directory does not exist within
+    # --hint-timeout seconds, streaming is likely disabled.  Show the hint on
+    # stderr and exit so we don't hang indefinitely.
+    import time as _time
+    _deadline = _time.monotonic() + ns.hint_timeout
+    while not _transcript_dir_exists(ns.run_id, ns.runs_dir):
+        if _time.monotonic() >= _deadline:
+            print(
+                f"[godel-watch] hint: {_STREAM_AGENTS_HINT}",
+                file=sys.stderr,
+                flush=True,
+            )
+            sys.exit(0)
+        _time.sleep(0.1)
+
+    try:
+        run_watch(ns.run_id, runs_dir=ns.runs_dir)
+    except KeyboardInterrupt:
+        sys.exit(0)
+    except SystemExit:
+        raise
+    except Exception as exc:
+        print(f"[godel-watch] error: {exc}", file=sys.stderr)
+        sys.exit(2)

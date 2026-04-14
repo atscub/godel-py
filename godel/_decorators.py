@@ -362,6 +362,32 @@ def workflow(
                 event_log._replay_suppress = False
                 event_log.close()
                 if transcript is not None:
+                    # Emit the terminal sentinel before closing so live watchers
+                    # know the run is done and can exit their follow loop.
+                    # Inspect sys.exc_info() to report the correct terminal
+                    # status: FAILED if an exception is propagating through
+                    # this finally block, otherwise FINISHED.
+                    #
+                    # IMPORTANT: skip the sentinel entirely when the propagating
+                    # exception is PauseSignal.  A paused run is not terminal —
+                    # it will be resumed later, at which point the resumed run
+                    # appends to the same transcript.jsonl.  Writing a
+                    # WORKFLOW_FINISHED here would (a) mislabel a pause as a
+                    # failure and (b) cause the watcher's producer thread to
+                    # exit on the stale sentinel, missing all post-resume
+                    # events.
+                    import sys as _sys
+                    from godel._exceptions import PauseSignal as _PauseSignal
+                    _exc_type = _sys.exc_info()[0]
+                    _is_pause = _exc_type is not None and issubclass(
+                        _exc_type, _PauseSignal
+                    )
+                    if not _is_pause:
+                        _status = "FINISHED" if _exc_type is None else "FAILED"
+                        try:
+                            transcript.write_workflow_finished(status=_status)
+                        except Exception:
+                            pass
                     transcript.close()
                 try:
                     from godel._pause import clear_pause_request

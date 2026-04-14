@@ -3,6 +3,7 @@ import asyncio
 import importlib.util
 import inspect
 import os
+import subprocess
 import sys
 import time
 import traceback
@@ -47,6 +48,40 @@ def parse_workflow_args(extra: tuple[str, ...]) -> tuple[list[str], dict[str, st
         args.append(token)
 
     return args, kwargs
+
+
+def _spawn_watch_subprocess(run_id: str, runs_dir: str = "./runs") -> "subprocess.Popen":
+    """Spawn ``python -m godel._watch <run_id>`` as an isolated subprocess.
+
+    The subprocess is started in a **new process group** (``start_new_session``
+    on POSIX) so that a renderer crash cannot propagate signals to the parent
+    run process.  The caller owns the returned Popen handle and is responsible
+    for joining or terminating it.
+
+    Parameters
+    ----------
+    run_id:
+        Workflow run identifier passed to the watcher.
+    runs_dir:
+        Path to the ``runs/`` directory (forwarded as ``--runs-dir``).
+
+    Returns
+    -------
+    subprocess.Popen
+    """
+    cmd = [sys.executable, "-m", "godel._watch", run_id, "--runs-dir", runs_dir]
+    # Isolate the watcher from the parent's console-control signals so a
+    # terminal Ctrl+C (or a crashing renderer) cannot affect the underlying
+    # run.  On POSIX ``start_new_session=True`` starts the child in a new
+    # session/process group; on Windows the equivalent is the
+    # CREATE_NEW_PROCESS_GROUP creation flag (Ctrl+C handling is inherited by
+    # default on Windows, so the POSIX-only guard used previously was wrong).
+    kwargs: dict = {}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    else:
+        kwargs["start_new_session"] = True
+    return subprocess.Popen(cmd, **kwargs)
 
 
 @click.group()
@@ -179,9 +214,19 @@ def run_cmd(file, extra, no_strict, no_lint, watch):
     # 5. Execute
     from godel._context import _on_run_start
 
+    # Watcher subprocess handle (populated by _on_run_start when --watch is set).
+    _watch_proc: list = [None]  # mutable cell: [subprocess.Popen | None]
+
     def _print_start(rid, log_path):
         click.echo(f"[godel] run {rid}", err=True)
         click.echo(f"[godel] audit log: {log_path}", err=True)
+        if watch:
+            # Derive the runs directory from the actual audit-log path so the
+            # watcher subprocess looks in the correct transcript location even
+            # when CWD != event-log root.
+            from pathlib import Path as _Path
+            _runs_dir = str(_Path(log_path).parent)
+            _watch_proc[0] = _spawn_watch_subprocess(rid, runs_dir=_runs_dir)
 
     start_token = _on_run_start.set(_print_start)
     start = time.monotonic()
@@ -220,6 +265,19 @@ def run_cmd(file, extra, no_strict, no_lint, watch):
         sys.exit(2)
     finally:
         _on_run_start.reset(start_token)
+        # Wait for the watcher subprocess to exit gracefully (it should have
+        # received EOS from the transcript once the run closed the writer).
+        # If still running, terminate it — a renderer crash must not strand here.
+        proc = _watch_proc[0]
+        if proc is not None:
+            try:
+                proc.wait(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=2.0)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
 
 
 @main.command("resume")
@@ -828,3 +886,114 @@ def tail_cmd(run_id, output_format, no_follow, no_wait):
         asyncio.run(_go())
     except KeyboardInterrupt:
         sys.exit(130)
+
+
+# ---------------------------------------------------------------------------
+# Discoverability hint helper
+# ---------------------------------------------------------------------------
+
+_STREAM_AGENTS_HINT = (
+    "agent streaming disabled for this workflow; "
+    "enable with @workflow(stream_agents=True). "
+    "See docs/transcript-format.md"
+)
+
+_HINT_PROBE_TIMEOUT = 5.0  # seconds to wait before showing the hint
+
+
+def _check_stream_agents_disabled(run_id: str, runs_dir: str) -> bool:
+    """Return True if streaming is disabled for *run_id*.
+
+    Streaming is enabled (stream_agents=True) when a transcript directory
+    exists under ``<runs_dir>/<run_id>/``.  When that directory is absent,
+    the workflow was run with stream_agents=False and the discoverability
+    hint should be shown.
+
+    Returns True (hint should show) when no transcript directory is found.
+    Returns False (hint should NOT show) when the directory exists — safe default.
+    """
+    from pathlib import Path
+    run_dir = Path(runs_dir) / run_id
+    # If the transcript directory exists, streaming was enabled.
+    return not run_dir.exists()
+
+
+# ---------------------------------------------------------------------------
+# `godel watch` subcommand
+# ---------------------------------------------------------------------------
+
+
+@main.command("watch")
+@click.argument("run_id")
+@click.option(
+    "--runs-dir",
+    default="./runs",
+    show_default=True,
+    help="Directory containing per-run transcript directories",
+)
+def watch_cmd(run_id, runs_dir):
+    """Attach a live TUI renderer to a running or completed workflow.
+
+    Replays history from archived transcript files then follows the live
+    transcript until the run finishes or Ctrl+C is pressed.
+
+    Can be used while a run is in progress (late-attach) or after it has
+    completed (replay viewer — exits automatically after the final event).
+
+    Requires godel[watch] (pip install 'godel[watch]').
+    """
+    from pathlib import Path
+
+    # Guard: require rich
+    try:
+        from godel._watch import run_watch  # noqa: F401
+    except Exception as exc:
+        from godel._exceptions import GodelWatchNotInstalledError
+        if isinstance(exc, GodelWatchNotInstalledError):
+            click.echo(str(exc), err=True)
+            sys.exit(1)
+        raise
+
+    # Resolve run_id: a run is uniquely identified by either an audit-log stem
+    # (runs/<id>.jsonl) or a transcript directory (runs/<id>/).  We merge both
+    # sources so a prefix match always resolves to the same full id regardless
+    # of which artifact is present.
+    runs_path = Path(runs_dir)
+    if not runs_path.exists():
+        click.echo(f'No runs directory found at "{runs_dir}"', err=True)
+        sys.exit(1)
+
+    candidates: set[str] = set()
+    for f in runs_path.glob("*.jsonl"):
+        if f.stem.startswith(run_id):
+            candidates.add(f.stem)
+    for d in runs_path.iterdir():
+        if d.is_dir() and d.name.startswith(run_id):
+            candidates.add(d.name)
+
+    if not candidates:
+        click.echo(f'No run matching "{run_id}"', err=True)
+        sys.exit(1)
+    if len(candidates) > 1:
+        stems = sorted(candidates)
+        click.echo(f'Ambiguous prefix "{run_id}" — matches: {stems}', err=True)
+        sys.exit(1)
+    run_id = next(iter(candidates))
+
+    # Discoverability hint: show banner if stream_agents=False (no transcript dir).
+    # We detect this synchronously: if the runs/<run_id>/ directory is absent,
+    # the workflow was not configured with stream_agents=True.
+    # The hint is emitted on stderr within 6 s as required by the AC.
+    streaming_disabled = _check_stream_agents_disabled(run_id, runs_dir)
+    if streaming_disabled:
+        click.echo(
+            click.style(f"[godel-watch] hint: {_STREAM_AGENTS_HINT}", fg="yellow"),
+            err=True,
+        )
+        # No transcript to follow — exit immediately rather than hanging.
+        sys.exit(0)
+
+    try:
+        run_watch(run_id, runs_dir=runs_dir)
+    except KeyboardInterrupt:
+        sys.exit(0)
