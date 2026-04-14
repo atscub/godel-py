@@ -47,9 +47,29 @@ unless debugging — they are very chatty in any non-trivial workflow.
 
 ## Monitor recipe (event-driven)
 
-A pure-python tail beats `tail -f | python` because pipe buffering can
-delay events for minutes. Use the harness `Monitor` primitive with this
-script (or equivalent):
+**Preferred: `godel tail`.** It is a native Python CLI that follows
+`runs/<id>.jsonl` without shell pipe buffering, waits for new events,
+and exits at run completion.
+
+```
+godel tail <id> --format=json   # one JSON object per line, stable schema
+godel tail <id> --format=pretty # human-readable table (step_path + status + duration)
+godel tail <id> --no-follow     # drain once and exit
+godel tail <id> --no-wait       # fail if log file doesn't exist yet
+```
+
+Pipe `--format=json` into a filter and wire into the harness `Monitor`:
+
+```bash
+Monitor(persistent=true,
+        command="godel tail <id> --format=json | python -u /tmp/godel_filter.py")
+```
+
+Where the filter is just the per-line logic below (no seek/tell bookkeeping).
+
+**Fallback: pure-python file seek.** If for some reason `godel tail` isn't
+available, read the file directly — do *not* use `tail -F | python`,
+shell pipe buffering can delay events by minutes.
 
 ```python
 # /tmp/godel_monitor.py
@@ -144,8 +164,19 @@ string repr of the pydantic model. To get the full structured output:
 - **Terminal died, run cancelled (`CancelledError`)**: try
   `python -m godel resume <id>` first. If it aborts with
   `UnsafeResumeError`, the dead step had a non-idempotent in-flight
-  side-effect call. Today the only options are fresh run or
-  `godel repair <id>`. (`godel-py-ddt` proposes opt-in idempotency.)
+  side-effect call. Three options, in order of preference:
+  1. **Rewind then resume.** Identify the last `step.enter FINISHED`
+     (or `agent.call FINISHED`) in `runs/<id>.jsonl`, then
+     `godel rewind <id> --to <event_id>` followed by
+     `godel resume <id>`. The rewind trims the log past that point so
+     resume has a clean tail to replay from. Useful when the failed
+     call was unrecoverable but the step above it can be re-executed.
+  2. `godel repair <id>` — drops an intervention agent into the
+     crashed run to unstick manually.
+  3. Fresh run (last resort — loses all prior agent tokens).
+
+  (`godel-py-ddt` proposes opt-in idempotency to make option 1 less
+  necessary.)
 - **Run looks stuck**: check whether last event is `input STARTED` (waiting
   on stdin) before assuming a hang. `input()` is `sys.stdin.readline()` —
   pipe stdin or press enter in the controlling terminal.
