@@ -2,6 +2,24 @@
 
 <!-- version list -->
 
+## v3.1.0 (2026-04-14)
+
+### Bug Fixes
+
+- **decorators**: Inherit stream_agents + transcript in parallel() branches
+  ([`4070e5d`](https://github.com/atscub/godel-py/commit/4070e5db873e6dc583adac1470327dcc8015cba7))
+
+### Documentation
+
+- Audit and refresh against 3.0.0 CLI + config surface
+  ([`962dae1`](https://github.com/atscub/godel-py/commit/962dae189fee8ffd34a578048db9119a58c48af9))
+
+### Features
+
+- **watch**: Tag parallel branches with [bN] in plain line-log
+  ([`6f532e0`](https://github.com/atscub/godel-py/commit/6f532e001c5fa43291abc09197f87a3fb4340b32))
+
+
 ## v3.0.1 (2026-04-14)
 
 ### Bug Fixes
