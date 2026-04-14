@@ -363,11 +363,10 @@ class _PlainLineLog:
     :func:`run_watch` so the main loop can treat both uniformly.
     """
 
-    def __init__(self, *, file: IO | None = None, show_thinking: bool = False) -> None:
+    def __init__(self, *, file: IO | None = None) -> None:
         self._file = file or sys.stdout
         self._model = WatchModel.empty()
         self._use_color = bool(getattr(self._file, "isatty", lambda: False)())
-        self._show_thinking = show_thinking
         self._last_step_path: tuple[str, ...] | None = None
         # Spinner state: pending agent call awaiting a response on the same
         # stream_path.  Only animated on TTY output; no-op elsewhere.
@@ -533,10 +532,10 @@ class _PlainLineLog:
                 self._end_burst(stream_path)
                 return
 
-        # When thinking is hidden, swallow agent.thought entirely — don't let
-        # it clear the spinner or insert a separator — so the "thinking…"
-        # animation continues until the real response arrives.
-        if op == "agent.thought" and not self._show_thinking:
+        # Thinking blocks are never rendered — the spinner animation conveys
+        # "thinking" instead.  Swallowing here (before _render) keeps the
+        # spinner running and avoids inserting a separator for a no-op event.
+        if op == "agent.thought":
             return
 
         self._render(event)
@@ -604,19 +603,6 @@ class _PlainLineLog:
             accum[op] = accum.get(op, "") + text
             return
 
-        if op == "agent.thought":
-            if not self._show_thinking:
-                # Suppressed — spinner animation conveys "thinking" instead.
-                return
-            text = event.get("text", "")
-            self._emit([pad + self._c("dim", "• thinking")])
-            self._file.write(cont)
-            if text:
-                self._append_chunk(cont, text, op=op)
-            self._burst[stream_path] = (op, cont)
-            accum = self._stream_accum.setdefault(stream_path, {})
-            accum[op] = accum.get(op, "") + text
-            return
 
         if op == "agent.tool_call":
             tool = event.get("tool", "?")
@@ -1106,7 +1092,6 @@ def run_watch(
     *,
     runs_dir: str = "./runs",
     plain: bool = False,
-    show_thinking: bool = False,
     stdout: IO | None = None,
     _burst_threshold: int = _BURST_THRESHOLD,
     _timer_interval: float = _TIMER_INTERVAL,
@@ -1147,7 +1132,7 @@ def run_watch(
 
     if plain:
         fh = stdout or sys.stdout
-        plain_log = _PlainLineLog(file=fh, show_thinking=show_thinking)
+        plain_log = _PlainLineLog(file=fh)
         with plain_log:
             _plain_loop(plain_log, event_q, timer_interval=_timer_interval)
     else:
@@ -1235,12 +1220,6 @@ if __name__ == "__main__":
         default=False,
         help="Force plain line-log output instead of the Rich TUI.",
     )
-    ap.add_argument(
-        "--show-thinking",
-        action="store_true",
-        default=False,
-        help="Render agent thinking blocks inline instead of the spinner animation.",
-    )
     ns = ap.parse_args()
 
     # Discoverability hint: if the transcript directory does not exist within
@@ -1259,7 +1238,7 @@ if __name__ == "__main__":
         _time.sleep(0.1)
 
     try:
-        run_watch(ns.run_id, runs_dir=ns.runs_dir, plain=ns.plain, show_thinking=ns.show_thinking)
+        run_watch(ns.run_id, runs_dir=ns.runs_dir, plain=ns.plain)
     except KeyboardInterrupt:
         sys.exit(0)
     except SystemExit:

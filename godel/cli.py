@@ -50,7 +50,7 @@ def parse_workflow_args(extra: tuple[str, ...]) -> tuple[list[str], dict[str, st
     return args, kwargs
 
 
-def _spawn_watch_subprocess(run_id: str, runs_dir: str = "./runs", plain: bool = False, show_thinking: bool = False) -> "subprocess.Popen":
+def _spawn_watch_subprocess(run_id: str, runs_dir: str = "./runs", plain: bool = False) -> "subprocess.Popen":
     """Spawn ``python -m godel._watch <run_id>`` as an isolated subprocess.
 
     The subprocess is started in a **new process group** (``start_new_session``
@@ -75,8 +75,6 @@ def _spawn_watch_subprocess(run_id: str, runs_dir: str = "./runs", plain: bool =
     cmd = [sys.executable, "-m", "godel._watch", run_id, "--runs-dir", runs_dir]
     if plain:
         cmd.append("--plain")
-    if show_thinking:
-        cmd.append("--show-thinking")
     # Isolate the watcher from the parent's console-control signals so a
     # terminal Ctrl+C (or a crashing renderer) cannot affect the underlying
     # run.  On POSIX ``start_new_session=True`` starts the child in a new
@@ -197,13 +195,7 @@ def main():
     default=False,
     help="Force plain line-log output in the watcher subprocess (implies --watch; also: GODEL_WATCH_PLAIN=1).",
 )
-@click.option(
-    "--show-thinking",
-    is_flag=True,
-    default=False,
-    help="Print agent thinking (reasoning) inline in gray instead of the default spinner animation.",
-)
-def run_cmd(file, extra, no_strict, no_lint, watch, plain, show_thinking):
+def run_cmd(file, extra, no_strict, no_lint, watch, plain):
     """Execute a @workflow-decorated function from FILE.
 
     Pass arguments to the workflow after a '--' separator:
@@ -336,7 +328,7 @@ def run_cmd(file, extra, no_strict, no_lint, watch, plain, show_thinking):
             from pathlib import Path as _Path
             _runs_dir = str(_Path(log_path).parent)
             _watch_proc[0] = _spawn_watch_subprocess(
-                rid, runs_dir=_runs_dir, plain=plain, show_thinking=show_thinking,
+                rid, runs_dir=_runs_dir, plain=plain,
             )
 
     start_token = _on_run_start.set(_print_start)
@@ -1049,13 +1041,7 @@ def _check_stream_agents_disabled(run_id: str, runs_dir: str) -> bool:
     default=False,
     help="Force plain line-log output instead of the Rich TUI (also: GODEL_WATCH_PLAIN=1).",
 )
-@click.option(
-    "--show-thinking",
-    is_flag=True,
-    default=False,
-    help="Render agent thinking blocks inline instead of the spinner animation.",
-)
-def watch_cmd(run_id, runs_dir, plain, show_thinking):
+def watch_cmd(run_id, runs_dir, plain):
     """Attach a live TUI renderer to a running or completed workflow.
 
     Replays history from archived transcript files then follows the live
@@ -1118,6 +1104,6 @@ def watch_cmd(run_id, runs_dir, plain, show_thinking):
         sys.exit(0)
 
     try:
-        run_watch(run_id, runs_dir=runs_dir, plain=plain, show_thinking=show_thinking)
+        run_watch(run_id, runs_dir=runs_dir, plain=plain)
     except KeyboardInterrupt:
         sys.exit(0)

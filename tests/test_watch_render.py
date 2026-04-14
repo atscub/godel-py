@@ -668,10 +668,11 @@ class TestPlainLineLog:
     def test_print_event_no_ts(self):
         """Events without ts don't crash the formatter."""
         buf = io.StringIO()
-        log = _PlainLineLog(file=buf, show_thinking=True)
+        log = _PlainLineLog(file=buf)
+        # agent.thought is intentionally suppressed in the renderer
+        # (the spinner animation conveys "thinking"); just assert the call
+        # does not raise on events without a timestamp.
         log.print_event({"op": "agent.thought", "text": "thinking..."})
-        out = buf.getvalue()
-        assert "thinking..." in out
 
     def test_plain_loop_processes_all_events(self):
         """_plain_loop processes every event from the queue and stops on sentinel."""
