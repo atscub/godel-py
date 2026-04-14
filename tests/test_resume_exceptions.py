@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from godel._exceptions import ResumeError, UnsafeResumeError
+from godel._exceptions import GodelError, ResumeError, UnsafeResumeError
 
 
 class TestResumeError:
@@ -96,3 +96,28 @@ class TestUnsafeResumeError:
     def test_catchable_as_exception(self):
         with pytest.raises(Exception):
             raise UnsafeResumeError("boom")
+
+    def test_catchable_as_godel_error(self):
+        with pytest.raises(GodelError):
+            raise UnsafeResumeError("boom")
+
+
+class TestResumeErrorGodelErrorHierarchy:
+    """ResumeError is a GodelError subclass — verify catch-all compatibility."""
+
+    def test_resume_error_is_godel_error(self):
+        err = ResumeError("bad log")
+        assert isinstance(err, GodelError)
+
+    def test_resume_error_catchable_as_godel_error(self):
+        with pytest.raises(GodelError):
+            raise ResumeError("corrupted")
+
+    def test_unsafe_resume_error_is_godel_error(self):
+        err = UnsafeResumeError("unsafe")
+        assert isinstance(err, GodelError)
+
+    def test_resume_error_str_unchanged(self):
+        """GodelError base __str__ must not add noise when context fields are unset."""
+        err = ResumeError("corrupted log")
+        assert str(err) == "corrupted log"
