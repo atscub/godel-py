@@ -410,3 +410,182 @@ def test_spawn_watch_subprocess_isolated(tmp_path):
     proc.wait()
     # Parent is alive and no exception propagated
     assert True
+
+
+# ---------------------------------------------------------------------------
+# W-2: WORKFLOW_FINISHED status reflects actual outcome
+# ---------------------------------------------------------------------------
+
+
+def test_workflow_finished_status_failed_on_exception(tmp_path, monkeypatch):
+    """A failing workflow writes WORKFLOW_FINISHED with status='FAILED'.
+
+    The terminal sentinel must reflect the actual outcome so live watchers
+    render the correct final state (failed vs done).  Prior bug: status was
+    hardcoded to 'FINISHED' so failed runs displayed as successful.
+    """
+    monkeypatch.chdir(tmp_path)
+    wf = tmp_path / "wf_fail.py"
+    wf.write_text(
+        "import asyncio\n"
+        "from godel import workflow\n"
+        "from godel._decorators import WorkflowFail\n"
+        "\n"
+        "@workflow(stream_agents=True)\n"
+        "async def my_workflow():\n"
+        "    raise WorkflowFail('boom')\n"
+    )
+
+    result = subprocess.run(
+        [PYTHON, "-m", "godel", "run", "--no-strict", str(wf)],
+        capture_output=True,
+        text=True,
+        cwd=str(tmp_path),
+        timeout=20,
+    )
+    # WorkflowFail → exit code 1
+    assert result.returncode == 1, f"stderr: {result.stderr}"
+
+    # Find the transcript file
+    runs_dir = tmp_path / "runs"
+    run_dirs = [d for d in runs_dir.iterdir() if d.is_dir()]
+    assert len(run_dirs) == 1, f"Expected one run dir, got {run_dirs}"
+    transcript = run_dirs[0] / "transcript.jsonl"
+    assert transcript.exists(), f"Transcript not found: {transcript}"
+
+    finished = None
+    for line in transcript.read_text().splitlines():
+        if not line.strip():
+            continue
+        obj = json.loads(line)
+        if "event" in obj and obj["event"].get("op") == "WORKFLOW_FINISHED":
+            finished = obj["event"]
+            break
+    assert finished is not None, (
+        f"WORKFLOW_FINISHED event not found in transcript:\n{transcript.read_text()}"
+    )
+    assert finished.get("status") == "FAILED", (
+        f"Expected status='FAILED' on failing run, got {finished!r}"
+    )
+
+
+def test_workflow_finished_status_finished_on_success(tmp_path, monkeypatch):
+    """A successful workflow writes WORKFLOW_FINISHED with status='FINISHED'."""
+    monkeypatch.chdir(tmp_path)
+    wf = tmp_path / "wf_ok.py"
+    wf.write_text(
+        "import asyncio\n"
+        "from godel import workflow\n"
+        "\n"
+        "@workflow(stream_agents=True)\n"
+        "async def my_workflow():\n"
+        "    return 'ok'\n"
+    )
+
+    result = subprocess.run(
+        [PYTHON, "-m", "godel", "run", "--no-strict", str(wf)],
+        capture_output=True,
+        text=True,
+        cwd=str(tmp_path),
+        timeout=20,
+    )
+    assert result.returncode == 0, f"stderr: {result.stderr}"
+
+    runs_dir = tmp_path / "runs"
+    run_dirs = [d for d in runs_dir.iterdir() if d.is_dir()]
+    assert len(run_dirs) == 1
+    transcript = run_dirs[0] / "transcript.jsonl"
+
+    finished = None
+    for line in transcript.read_text().splitlines():
+        if not line.strip():
+            continue
+        obj = json.loads(line)
+        if "event" in obj and obj["event"].get("op") == "WORKFLOW_FINISHED":
+            finished = obj["event"]
+            break
+    assert finished is not None
+    assert finished.get("status") == "FINISHED"
+
+
+# ---------------------------------------------------------------------------
+# W-1: `godel watch` prefix resolution unifies transcript-dir + audit-log
+# ---------------------------------------------------------------------------
+
+
+def test_watch_cmd_prefix_resolution_dir_only(tmp_path):
+    """Prefix matching a transcript dir (no audit log) resolves correctly."""
+    run_id = "dironly-abcdef"
+    runs_dir = tmp_path / "runs"
+    _write_transcript_dir(runs_dir, run_id)  # creates dir with transcript
+    # Note: no .jsonl audit log — only the dir
+
+    result = subprocess.run(
+        [PYTHON, "-m", "godel", "watch", "dironly", "--runs-dir", str(runs_dir)],
+        capture_output=True,
+        text=True,
+        cwd=str(tmp_path),
+        timeout=15,
+    )
+    # Transcript has WORKFLOW_FINISHED sentinel → clean exit
+    assert result.returncode == 0, f"stderr: {result.stderr}\nstdout: {result.stdout}"
+
+
+def test_watch_cmd_prefix_resolution_ambiguous_mixed(tmp_path):
+    """Ambiguous prefix across audit log + transcript dir exits 1."""
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    # Audit log match
+    (runs_dir / "mixed-111.jsonl").write_text("")
+    # Transcript dir match (different id)
+    (runs_dir / "mixed-222").mkdir()
+
+    result = subprocess.run(
+        [PYTHON, "-m", "godel", "watch", "mixed", "--runs-dir", str(runs_dir)],
+        capture_output=True,
+        text=True,
+        cwd=str(tmp_path),
+        timeout=10,
+    )
+    assert result.returncode == 1
+    assert "Ambiguous" in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# W-3: Producer error surfaces an error banner (not silent EOS)
+# ---------------------------------------------------------------------------
+
+
+def test_producer_error_surfaces_banner(tmp_path, monkeypatch):
+    """A TranscriptTailError during follow surfaces an error banner on stderr."""
+    import queue as _queue
+    import threading as _threading
+    from unittest.mock import patch
+
+    from godel import _watch as watch_mod
+
+    run_id = "producer-error-run"
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+
+    # Force TranscriptTail.from_run to raise the error we want to surface.
+    from godel._tail import TranscriptTailError
+
+    def _fake_from_run(*args, **kwargs):
+        raise TranscriptTailError("simulated transcript disappearance", path=None)
+
+    # Use stringio capture via stdout redirect
+    import io as _io
+    captured_stderr = _io.StringIO()
+
+    with patch("godel._tail.TranscriptTail.from_run", side_effect=_fake_from_run):
+        with patch.object(sys, "stderr", captured_stderr):
+            # Non-TTY stdout triggers plain fallback → deterministic behavior
+            fake_stdout = _io.StringIO()
+            watch_mod.run_watch(run_id, runs_dir=str(runs_dir), stdout=fake_stdout)
+
+    err_output = captured_stderr.getvalue()
+    assert "transcript error" in err_output, (
+        f"Expected error banner in stderr, got:\n{err_output}"
+    )
+    assert "simulated transcript disappearance" in err_output

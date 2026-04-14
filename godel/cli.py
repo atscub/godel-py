@@ -217,7 +217,12 @@ def run_cmd(file, extra, no_strict, no_lint, watch):
         click.echo(f"[godel] run {rid}", err=True)
         click.echo(f"[godel] audit log: {log_path}", err=True)
         if watch:
-            _watch_proc[0] = _spawn_watch_subprocess(rid, runs_dir="./runs")
+            # Derive the runs directory from the actual audit-log path so the
+            # watcher subprocess looks in the correct transcript location even
+            # when CWD != event-log root.
+            from pathlib import Path as _Path
+            _runs_dir = str(_Path(log_path).parent)
+            _watch_proc[0] = _spawn_watch_subprocess(rid, runs_dir=_runs_dir)
 
     start_token = _on_run_start.set(_print_start)
     start = time.monotonic()
@@ -945,24 +950,31 @@ def watch_cmd(run_id, runs_dir):
             sys.exit(1)
         raise
 
-    # Resolve run_id prefix → full id (transcript dir is runs/<run_id>/)
+    # Resolve run_id: a run is uniquely identified by either an audit-log stem
+    # (runs/<id>.jsonl) or a transcript directory (runs/<id>/).  We merge both
+    # sources so a prefix match always resolves to the same full id regardless
+    # of which artifact is present.
     runs_path = Path(runs_dir)
-    run_dir = runs_path / run_id
-    if not run_dir.exists():
-        # Try prefix match against audit log stems
-        if runs_path.exists():
-            matches = [f for f in runs_path.glob("*.jsonl") if f.stem.startswith(run_id)]
-            if len(matches) == 0:
-                click.echo(f'No run matching "{run_id}"', err=True)
-                sys.exit(1)
-            if len(matches) > 1:
-                stems = [f.stem for f in matches]
-                click.echo(f'Ambiguous prefix "{run_id}" — matches: {stems}', err=True)
-                sys.exit(1)
-            run_id = matches[0].stem
-        else:
-            click.echo(f'No runs directory found at "{runs_dir}"', err=True)
-            sys.exit(1)
+    if not runs_path.exists():
+        click.echo(f'No runs directory found at "{runs_dir}"', err=True)
+        sys.exit(1)
+
+    candidates: set[str] = set()
+    for f in runs_path.glob("*.jsonl"):
+        if f.stem.startswith(run_id):
+            candidates.add(f.stem)
+    for d in runs_path.iterdir():
+        if d.is_dir() and d.name.startswith(run_id):
+            candidates.add(d.name)
+
+    if not candidates:
+        click.echo(f'No run matching "{run_id}"', err=True)
+        sys.exit(1)
+    if len(candidates) > 1:
+        stems = sorted(candidates)
+        click.echo(f'Ambiguous prefix "{run_id}" — matches: {stems}', err=True)
+        sys.exit(1)
+    run_id = next(iter(candidates))
 
     # Discoverability hint: show banner if stream_agents=False (no transcript dir).
     # We detect this synchronously: if the runs/<run_id>/ directory is absent,
