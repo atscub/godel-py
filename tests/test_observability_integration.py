@@ -12,14 +12,16 @@ Four scenarios:
     distinct stream_paths (regression for the non-parallel path).
 
 (c) late-attach
-    Start a run writing to transcript; sleep 500 ms; attach
-    TranscriptTail.from_run(run_id); assert all pre-attach events are
-    replayed, then live events arrive.
+    Start a run writing to transcript; attach TranscriptTail.from_run(run_id)
+    after pre-attach events are durable; assert all pre-attach events are
+    replayed, then live events arrive.  Also invokes ``godel watch <run_id>``
+    via subprocess on a completed run to exercise the CLI resolution path.
 
 (d) replay-with-watch
-    Run a workflow to completion; replay the finished transcript through the
-    WatchModel reducer; assert the final WatchModel equals the one built from
-    the live run.
+    Run a workflow to completion (with enough events to force many
+    rotations); replay the finished transcript through the WatchModel
+    reducer; assert the final WatchModel (steps, panels, run_meta) equals the
+    one built from the live tail.
 
 Wall-clock budget: the whole file must run in under 30 s.
 """
@@ -27,6 +29,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -41,15 +46,21 @@ from godel._transcript import TranscriptWriter, _FILENAME
 from godel._watch_model import WatchModel, reduce, reduce_header
 
 
+PYTHON = sys.executable
+
+
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
 
 
-def _read_real_events(run_dir: Path) -> list[dict]:
-    """Return all non-sentinel, non-header event dicts from a completed transcript."""
-    events: list[dict] = []
-    # Walk from oldest archive to current file.
+def _ordered_transcript_files(run_dir: Path) -> list[Path]:
+    """Return transcript files in write order (oldest archive → current).
+
+    Walks ``transcript.jsonl.N`` from highest N down to ``.1``, then appends
+    ``transcript.jsonl`` (the live/current file).  Only paths that exist are
+    returned.
+    """
     archives: list[Path] = []
     i = 1
     while True:
@@ -60,45 +71,18 @@ def _read_real_events(run_dir: Path) -> list[dict]:
         else:
             break
     archives.reverse()  # oldest-first
-    archives.append(run_dir / _FILENAME)
-
-    for path in archives:
-        if not path.exists():
-            continue
-        with open(path, encoding="utf-8") as fh:
-            for raw in fh:
-                raw = raw.strip()
-                if not raw:
-                    continue
-                try:
-                    obj = json.loads(raw)
-                except json.JSONDecodeError:
-                    continue
-                if "event" in obj:
-                    evt = obj["event"]
-                    if evt.get("op") != "rotate":
-                        events.append(evt)
-    return events
+    live = run_dir / _FILENAME
+    if live.exists():
+        archives.append(live)
+    return archives
 
 
-def _replay_transcript_to_model(run_dir: Path) -> WatchModel:
-    """Replay every line of a completed transcript through the WatchModel reducer."""
-    model = WatchModel.empty()
-    archives: list[Path] = []
-    i = 1
-    while True:
-        p = run_dir / f"{_FILENAME}.{i}"
-        if p.exists():
-            archives.append(p)
-            i += 1
-        else:
-            break
-    archives.reverse()  # oldest-first
-    archives.append(run_dir / _FILENAME)
+def _iter_lines(run_dir: Path):
+    """Yield (kind, obj) tuples across all transcript files in write order.
 
-    for path in archives:
-        if not path.exists():
-            continue
+    ``kind`` is ``"header"`` or ``"event"``; ``obj`` is the parsed inner dict.
+    """
+    for path in _ordered_transcript_files(run_dir):
         with open(path, encoding="utf-8") as fh:
             for raw in fh:
                 raw = raw.strip()
@@ -109,10 +93,36 @@ def _replay_transcript_to_model(run_dir: Path) -> WatchModel:
                 except json.JSONDecodeError:
                     continue
                 if "header" in obj:
-                    model = reduce_header(model, obj["header"])
+                    yield "header", obj["header"]
                 elif "event" in obj:
-                    model = reduce(model, obj["event"])
+                    yield "event", obj["event"]
+
+
+def _read_real_events(run_dir: Path) -> list[dict]:
+    """Return all non-sentinel event dicts from a completed transcript."""
+    return [
+        evt
+        for kind, evt in _iter_lines(run_dir)
+        if kind == "event" and evt.get("op") != "rotate"
+    ]
+
+
+def _replay_transcript_to_model(run_dir: Path) -> WatchModel:
+    """Replay every line of a completed transcript through the WatchModel reducer."""
+    model = WatchModel.empty()
+    for kind, obj in _iter_lines(run_dir):
+        if kind == "header":
+            model = reduce_header(model, obj)
+        else:
+            model = reduce(model, obj)
     return model
+
+
+def _count_rotations(run_dir: Path) -> int:
+    n = 0
+    while (run_dir / f"{_FILENAME}.{n + 1}").exists():
+        n += 1
+    return n
 
 
 # ---------------------------------------------------------------------------
@@ -163,9 +173,6 @@ def test_a_rotation_during_read_no_gaps_no_dups(tmp_path):
     reader_thread = threading.Thread(target=_reader, daemon=True)
     reader_thread.start()
 
-    # Give reader a head-start before the writer opens the file.
-    time.sleep(0.02)
-
     writer_errors: list[Exception] = []
 
     def _writer():
@@ -196,19 +203,21 @@ def test_a_rotation_during_read_no_gaps_no_dups(tmp_path):
 
     seqs = [e["seq"] for e in results]
 
-    # Check ordering.
     assert seqs == sorted(seqs), (
         "Events not in ascending seq order. "
-        f"First out-of-order pair: "
-        + str(next((f"{seqs[i-1]}→{seqs[i]}" for i in range(1, len(seqs)) if seqs[i] < seqs[i-1]), "none"))
+        "First out-of-order pair: "
+        + str(
+            next(
+                (f"{seqs[i-1]}→{seqs[i]}" for i in range(1, len(seqs)) if seqs[i] < seqs[i - 1]),
+                "none",
+            )
+        )
     )
 
-    # Check for duplicates.
     seen: set[int] = set()
     dups = [s for s in seqs if s in seen or seen.add(s)]  # type: ignore[func-returns-value]
     assert not dups, f"Duplicate seq numbers found: {dups[:10]}"
 
-    # Check for gaps.
     for i in range(1, len(seqs)):
         assert seqs[i] == seqs[i - 1] + 1, (
             f"Gap in seq at index {i}: {seqs[i-1]} → {seqs[i]}"
@@ -246,8 +255,16 @@ def test_b_capture_stdout_in_parallel_raises_config_error():
 def test_b_sequential_capturing_steps_independent_stream_paths(tmp_path):
     """Two sequential capturing steps produce distinct stream_paths — no cross-contamination.
 
-    This is the regression guard for the non-parallel (sequential) path: each
-    capturing step must land its stdout events under its own stream_path.
+    Ordering contract (important — do not reorder):
+      1. Both ``capture()`` contexts must fully exit before reading the
+         transcript on disk.  capture() restores fd 1 in its __exit__, then
+         joins the reader thread (up to 1 s) to drain the pipe into the
+         TranscriptWriter.
+      2. TranscriptWriter.__exit__ runs AFTER both captures have returned,
+         closing the file and flushing any buffered state.
+      3. Only then do we call ``_read_real_events`` — this guarantees every
+         ``os.write(1, ...)`` issued inside a capture() context is durable on
+         disk before we assert on it.
     """
     run_dir = tmp_path / "run_b_seq"
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -261,23 +278,23 @@ def test_b_sequential_capturing_steps_independent_stream_paths(tmp_path):
             stream_path=["step_one", "stdout"],
             transcript=tw,
         ):
-            # Write directly to fd 1 so it bypasses pytest's sys.stdout capture.
-            import os as _os
-            _os.write(1, b"hello from step one\n")
+            # Write directly to fd 1 to bypass pytest's sys.stdout capture.
+            os.write(1, b"hello from step one\n")
+        # capture() __exit__ has returned here → reader thread joined, events
+        # for step_one are durable in the transcript file.
 
         with capture(
             step_path=("step_two",),
             stream_path=["step_two", "stdout"],
             transcript=tw,
         ):
-            import os as _os
-            _os.write(1, b"hello from step two\n")
+            os.write(1, b"hello from step two\n")
+        # Same ordering guarantee for step_two.
+    # TranscriptWriter closed → file flushed before we open it for reading.
 
-    # Read all events.
     all_events = _read_real_events(run_dir)
     stdout_events = [e for e in all_events if e.get("op") == "stdout"]
 
-    # Partition by stream_path.
     for evt in stdout_events:
         sp = tuple(evt.get("stream_path", []))
         if sp == ("step_one", "stdout"):
@@ -285,7 +302,6 @@ def test_b_sequential_capturing_steps_independent_stream_paths(tmp_path):
         elif sp == ("step_two", "stdout"):
             step2_lines.append(evt.get("chunk", ""))
 
-    # Each step's output must appear in its own stream, not the other's.
     assert any("step one" in line for line in step1_lines), (
         f"step_one output not found in step_one stream. step1_lines={step1_lines}"
     )
@@ -307,10 +323,14 @@ def test_b_sequential_capturing_steps_independent_stream_paths(tmp_path):
 
 
 def test_c_late_attach_catches_up_from_file(tmp_path):
-    """Attach TranscriptTail.from_run 500 ms after run starts; verify full replay.
+    """Attach TranscriptTail.from_run after a run is underway; verify full replay.
 
-    Pre-attach events must be replayed in order; post-attach events arrive live.
-    No events missed, no duplicates, no gaps.
+    Deterministic synchronisation (no timing-based sleeps on the hot path):
+      * writer_paused:  writer signals pre-attach events are durable.
+      * reader_started: reader signals the first live event has been consumed
+                        (proves replay of archives is complete and the reader
+                        has attached to the live file).
+      * writer_resume:  test signals writer to emit the live events.
 
     Diagnostic: failure reports event count diff and first gap/dup location.
     """
@@ -322,7 +342,7 @@ def test_c_late_attach_catches_up_from_file(tmp_path):
     n_post = 30   # events written after attach
     n_total = n_pre + n_post
 
-    # Use small max_bytes so we get multiple rotations in the pre-attach phase.
+    # Small max_bytes so we get multiple rotations in the pre-attach phase.
     max_bytes = 2048
 
     writer_paused = threading.Event()
@@ -334,15 +354,11 @@ def test_c_late_attach_catches_up_from_file(tmp_path):
         try:
             with TranscriptWriter(run_dir, run_id=run_id, max_bytes=max_bytes) as tw:
                 for i in range(n_pre):
-                    seq = tw.write_event("pre", idx=i)
-                    if seq is not None:
-                        writer_seqs.append(seq)
+                    writer_seqs.append(tw.write_event("pre", idx=i))
                 writer_paused.set()
                 writer_resume.wait(timeout=10.0)
                 for i in range(n_post):
-                    seq = tw.write_event("post", idx=i)
-                    if seq is not None:
-                        writer_seqs.append(seq)
+                    writer_seqs.append(tw.write_event("post", idx=i))
         except Exception as exc:
             writer_errors.append(exc)
             writer_paused.set()
@@ -350,20 +366,18 @@ def test_c_late_attach_catches_up_from_file(tmp_path):
     writer_thread = threading.Thread(target=_writer, daemon=True)
     writer_thread.start()
 
-    # Wait for pre-attach events to be written (replaces fixed sleep with a
-    # deterministic signal + 500 ms pause to simulate real late-attach).
+    # Wait for pre-attach events to be durable on disk.
     writer_paused.wait(timeout=15.0)
     assert not writer_errors, f"Writer errors before attach: {writer_errors}"
 
-    # Simulate the real-world "late attach" delay.
-    time.sleep(0.5)
-
+    # Attach the late reader.
     tail = TranscriptTail.from_run(
         run_id, runs_dir=runs_dir, poll_interval=0.02, follow=True
     )
 
     results: list[dict] = []
     reader_errors: list[Exception] = []
+    reader_started = threading.Event()  # signals: first non-rotate event consumed
     done_event = threading.Event()
 
     def _reader():
@@ -373,6 +387,8 @@ def test_c_late_attach_catches_up_from_file(tmp_path):
                 if evt.get("op") == "rotate":
                     continue
                 results.append(evt)
+                if not reader_started.is_set():
+                    reader_started.set()
                 if len(results) >= n_total:
                     done_event.set()
                     break
@@ -391,8 +407,12 @@ def test_c_late_attach_catches_up_from_file(tmp_path):
     reader_thread = threading.Thread(target=_reader, daemon=True)
     reader_thread.start()
 
-    # Give the reader a moment to start replaying archives, then signal writer.
-    time.sleep(0.05)
+    # Deterministic: wait for reader to actually start consuming (first event
+    # from the archive replay) before signalling the writer to emit live events.
+    # This replaces a fragile time.sleep(0.05).
+    assert reader_started.wait(timeout=10.0), (
+        "Reader failed to consume any events within 10s"
+    )
     writer_resume.set()
 
     done_event.wait(timeout=20.0)
@@ -432,15 +452,62 @@ def test_c_late_attach_catches_up_from_file(tmp_path):
             f"Late-attach: gap at index {i}: seq {seqs[i-1]} → {seqs[i]}"
         )
 
-    # Verify pre-attach events are in the results (replay worked).
     pre_events = [e for e in results if e.get("op") == "pre"]
     assert len(pre_events) == n_pre, (
         f"Expected {n_pre} pre-attach events to be replayed, got {len(pre_events)}"
     )
-
     post_events = [e for e in results if e.get("op") == "post"]
     assert len(post_events) == n_post, (
         f"Expected {n_post} live (post-attach) events, got {len(post_events)}"
+    )
+
+
+def test_c_godel_watch_cli_late_attaches_to_completed_run(tmp_path):
+    """Exercise the ``godel watch <run_id>`` CLI resolution path.
+
+    AC(c) calls out ``godel watch <run_id>`` specifically.  This test drives a
+    subprocess invocation against a completed run and asserts the CLI exits
+    cleanly (exit 0) after late-attaching, reading archives + live file, and
+    encountering a ``WORKFLOW_FINISHED`` sentinel.
+
+    Skipped if ``rich`` (required by ``godel[watch]``) is not importable.
+    """
+    pytest.importorskip("rich", reason="godel[watch] requires rich")
+
+    run_id = "cli-late-attach"
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / run_id
+
+    # Build a multi-file transcript that represents a completed run (rotations
+    # happened, then a terminal WORKFLOW_FINISHED sentinel was written).
+    with TranscriptWriter(run_dir, run_id=run_id, max_bytes=2048) as tw:
+        for i in range(150):
+            tw.write_event(
+                "step.enter",
+                step_path=[f"step_{i}"],
+                stream_path=[],
+            )
+        tw.write_workflow_finished(status="FINISHED")
+
+    assert _count_rotations(run_dir) >= 1, (
+        "Expected at least one rotation for a meaningful multi-file CLI test"
+    )
+
+    # Invoke the CLI from a cwd where godel is importable (the repo root).
+    # Using cwd=tmp_path would break because godel is installed as an editable
+    # package and needs to resolve via the repo's pyproject.toml.
+    repo_root = Path(__file__).resolve().parent.parent
+
+    result = subprocess.run(
+        [PYTHON, "-m", "godel", "watch", run_id, "--runs-dir", str(runs_dir)],
+        capture_output=True,
+        text=True,
+        cwd=str(repo_root),
+        timeout=20,
+    )
+    assert result.returncode == 0, (
+        f"`godel watch {run_id}` failed.\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
 
 
@@ -450,59 +517,76 @@ def test_c_late_attach_catches_up_from_file(tmp_path):
 
 
 def test_d_replay_with_watch_identical_to_live(tmp_path):
-    """Replay finished transcript through WatchModel reducer == live model.
+    """Replay a rotation-heavy finished transcript through WatchModel == live.
 
-    Run a workflow to completion while building a live WatchModel via
-    TranscriptTail.  Then open a second TranscriptTail on the finished
-    transcript (follow=False) and replay it through the same reducer.
-    The final WatchModel from replay must equal the live model.
+    Uses enough events (and a small max_bytes) to force many rotations, so
+    the multi-file replay path is actually stressed.  Verifies both steps,
+    panels, AND run_meta are equal between live and replay models.
     """
     run_id = "run_d"
     runs_dir = tmp_path
     run_dir = runs_dir / run_id
 
-    n_events = 50
-    max_bytes = 2048  # force some rotations to test multi-file replay
+    # Force many rotations: small max_bytes + a realistic mix of events.
+    max_bytes = 512
+    n_steps = 8
+    stdout_per_step = 30  # total ≈ 16 step events + 240 stdout = 256 events
 
-    # Write a realistic mix of events: step.enter, stdout lines, step.exit.
-    ops_sequence = []
     with TranscriptWriter(run_dir, run_id=run_id, max_bytes=max_bytes) as tw:
-        # Simulate a simple workflow: two sequential steps each emitting stdout.
-        for step_name in ("fetch", "process"):
+        for step_idx in range(n_steps):
+            step_name = f"step_{step_idx}"
             tw.write_event(
                 "step.enter",
                 step_path=[step_name],
                 stream_path=[],
             )
-            ops_sequence.append(("step.enter", step_name))
-
-            for j in range(n_events // 4):
+            for j in range(stdout_per_step):
                 tw.write_event(
                     "stdout",
                     step_path=[step_name],
                     stream_path=[step_name, "stdout"],
                     line=f"line {j} from {step_name}",
                 )
-                ops_sequence.append(("stdout", step_name))
-
             tw.write_event(
                 "step.exit",
                 step_path=[step_name],
                 stream_path=[],
                 status="done",
             )
-            ops_sequence.append(("step.exit", step_name))
 
-    # --- Build live model via TranscriptTail.from_run (follow=False) ---
+    # Sanity: ensure the multi-file replay path is actually exercised.
+    rotations = _count_rotations(run_dir)
+    assert rotations >= 3, (
+        f"Test is meant to stress multi-file replay — expected >= 3 rotations, "
+        f"got {rotations}.  Lower max_bytes or add more events."
+    )
+
+    # --- Build "live" model via TranscriptTail.from_run (follow=False) ---
+    # NOTE: TranscriptTail yields event dicts only (header lines are silently
+    # skipped by design).  To match the on-disk replay below we inject header
+    # reduction explicitly: one reduce_header call per file in write order
+    # (oldest archive → current), mirroring the stream a live tail would
+    # logically encounter.  Each rotation produces a fresh header with its own
+    # ``started_at`` timestamp, so run_meta reflects the most recent file's
+    # header after the merge — matching replay.
     live_model = WatchModel.empty()
+    for path in _ordered_transcript_files(run_dir):
+        with open(path, encoding="utf-8") as fh:
+            first = fh.readline().strip()
+            if not first:
+                continue
+            first_obj = json.loads(first)
+            if "header" in first_obj:
+                live_model = reduce_header(live_model, first_obj["header"])
+
     live_tail = TranscriptTail.from_run(run_id, runs_dir=runs_dir, follow=False)
     for evt in live_tail:
         live_model = reduce(live_model, evt)
 
-    # --- Build replay model via _replay_transcript_to_model ---
+    # --- Build replay model via the on-disk helper (handles headers too) ---
     replay_model = _replay_transcript_to_model(run_dir)
 
-    # The two models must be identical.
+    # Steps, panels, AND run_meta must match.
     assert live_model.steps == replay_model.steps, (
         f"Step state mismatch.\n"
         f"Live steps:   {dict(live_model.steps)}\n"
@@ -513,17 +597,19 @@ def test_d_replay_with_watch_identical_to_live(tmp_path):
         f"Live panels:   {dict(live_model.panels)}\n"
         f"Replay panels: {dict(replay_model.panels)}"
     )
-
-    # Sanity: the model must have observed both steps.
-    assert ("fetch",) in live_model.steps, "Expected 'fetch' step in live model"
-    assert ("process",) in live_model.steps, "Expected 'process' step in live model"
-    assert live_model.steps[("fetch",)].status == "done"
-    assert live_model.steps[("process",)].status == "done"
-
-    # Panels should exist for both steps' stdout streams.
-    assert ("fetch", "stdout") in live_model.panels, (
-        "Expected 'fetch.stdout' panel in live model"
+    assert dict(live_model.run_meta) == dict(replay_model.run_meta), (
+        f"run_meta mismatch.\n"
+        f"Live run_meta:   {dict(live_model.run_meta)}\n"
+        f"Replay run_meta: {dict(replay_model.run_meta)}"
     )
-    assert ("process", "stdout") in live_model.panels, (
-        "Expected 'process.stdout' panel in live model"
-    )
+
+    # Sanity: the model observed every step and every panel.
+    for step_idx in range(n_steps):
+        step_name = f"step_{step_idx}"
+        assert (step_name,) in live_model.steps, (
+            f"Expected step {step_name!r} in live model"
+        )
+        assert live_model.steps[(step_name,)].status == "done"
+        assert (step_name, "stdout") in live_model.panels, (
+            f"Expected panel for {step_name!r} in live model"
+        )
