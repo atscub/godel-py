@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.13.0 (2026-04-14)
+
+### Features
+
+- **watch**: Claude-code-style plain-log output with prompts & commands
+  ([`d7aa0f1`](https://github.com/atscub/godel-py/commit/d7aa0f1783ef5377e6840abf6a4c641fc6d9bc2b))
+
+
 ## v1.12.0 (2026-04-14)
 
 ### Bug Fixes
