@@ -527,6 +527,12 @@ def _producer_thread(
         reader = TranscriptTail.from_run(run_id, runs_dir)
         for event in reader:
             _put_with_drop_oldest(event)
+            # WORKFLOW_FINISHED is the terminal sentinel emitted by TranscriptWriter
+            # just before close().  When we see it the run is complete — push EOS
+            # immediately so the render loop exits cleanly without waiting for the
+            # next polling interval.
+            if event.get("op") == "WORKFLOW_FINISHED":
+                return  # finally block below pushes None sentinel
     except TranscriptTailError as exc:
         logger_.warning("TranscriptTail error: %s", exc)
     except Exception as exc:
@@ -750,3 +756,76 @@ def run_watch(
             _restore_signals(previous_signals)
 
     t.join(timeout=2.0)
+
+
+# ---------------------------------------------------------------------------
+# Subprocess entry point
+# ---------------------------------------------------------------------------
+
+_STREAM_AGENTS_HINT = (
+    "agent streaming disabled for this workflow; "
+    "enable with @workflow(stream_agents=True). "
+    "See docs/transcript-format.md"
+)
+
+
+def _transcript_dir_exists(run_id: str, runs_dir: str) -> bool:
+    """Return True if the transcript directory for *run_id* exists.
+
+    A transcript directory is created only when ``stream_agents=True`` is set
+    on the ``@workflow`` decorator.  Its absence indicates streaming is disabled.
+    """
+    from pathlib import Path
+    return (Path(runs_dir) / run_id).exists()
+
+
+if __name__ == "__main__":
+    """Subprocess entry point: ``python -m godel._watch <run_id> [--runs-dir DIR]``
+
+    This is the isolation boundary between the renderer and the workflow
+    process.  A renderer crash (e.g. Rich internal error, SIGKILL) cannot
+    propagate to the underlying run.
+
+    Exit codes
+    ----------
+    0  — normal exit (EOS received or Ctrl+C)
+    1  — missing / ambiguous run_id
+    2  — watch not installed (rich missing)
+    """
+    import argparse
+
+    ap = argparse.ArgumentParser(prog="python -m godel._watch", add_help=False)
+    ap.add_argument("run_id")
+    ap.add_argument("--runs-dir", default="./runs")
+    ap.add_argument(
+        "--hint-timeout",
+        type=float,
+        default=5.0,
+        help="Seconds to wait before showing the streaming-disabled hint",
+    )
+    ns = ap.parse_args()
+
+    # Discoverability hint: if the transcript directory does not exist within
+    # --hint-timeout seconds, streaming is likely disabled.  Show the hint on
+    # stderr and exit so we don't hang indefinitely.
+    import time as _time
+    _deadline = _time.monotonic() + ns.hint_timeout
+    while not _transcript_dir_exists(ns.run_id, ns.runs_dir):
+        if _time.monotonic() >= _deadline:
+            print(
+                f"[godel-watch] hint: {_STREAM_AGENTS_HINT}",
+                file=sys.stderr,
+                flush=True,
+            )
+            sys.exit(0)
+        _time.sleep(0.1)
+
+    try:
+        run_watch(ns.run_id, runs_dir=ns.runs_dir)
+    except KeyboardInterrupt:
+        sys.exit(0)
+    except SystemExit:
+        raise
+    except Exception as exc:
+        print(f"[godel-watch] error: {exc}", file=sys.stderr)
+        sys.exit(2)

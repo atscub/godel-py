@@ -240,6 +240,37 @@ class TranscriptWriter:
             self._current_file_has_real_event = True
             return seq
 
+    def write_workflow_finished(self, *, status: str = "FINISHED") -> None:
+        """Write a ``WORKFLOW_FINISHED`` sentinel event to the transcript.
+
+        This is the terminal event that signals live watchers that the run is
+        complete and they should exit their follow loop.  It must be written
+        *before* :meth:`close` so that the watcher receives it before the file
+        is closed.
+
+        Parameters
+        ----------
+        status:
+            Terminal status string — ``"FINISHED"`` (success) or ``"FAILED"``.
+        """
+        with self._lock:
+            if self._file is None:
+                return  # already closed; nothing to write
+            self._seq += 1
+            seq = self._seq
+            event_body: dict[str, object] = {
+                "ts": _now_iso(),
+                "seq": seq,
+                "op": "WORKFLOW_FINISHED",
+                "status": status,
+                "step_path": [],
+                "stream_path": [],
+            }
+            line = '{"event":' + _encode(event_body) + "}"
+            self._write_line(line)
+            self._last_written_seq = seq
+            self._current_file_has_real_event = True
+
     def close(self) -> None:
         """Flush and close the current transcript file."""
         with self._lock:
