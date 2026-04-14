@@ -391,6 +391,10 @@ class _PlainLineLog:
         # Running concatenation of streamed text per stream_path — used to
         # dedupe the terminating full-text echo from ``_invoke``.
         self._stream_accum: dict[tuple, dict[str, str]] = {}
+        # Visible column position per stream_path's in-progress line, used to
+        # soft-wrap long streamed chunks so continuations stay aligned under
+        # the block's indent instead of flushing to column zero.
+        self._burst_col: dict[tuple, int] = {}
 
     def start(self) -> None:
         pass
@@ -452,25 +456,68 @@ class _PlainLineLog:
             pass
         self._spinner_active = True
 
-    def _append_chunk(self, cont: str, text: str, *, op: str) -> None:
+    def _append_chunk(self, cont: str, text: str, *, op: str, stream_path: tuple = ()) -> None:
         """Write a streaming text chunk to the currently-open burst line.
 
         Embedded newlines are rewritten with the continuation indent so
-        multi-paragraph output stays aligned.  ``op`` picks the ANSI color
-        (dim for thoughts, default for responses).
+        multi-paragraph output stays aligned.  Long lines are soft-wrapped at
+        the terminal width with the same continuation indent so the reader
+        doesn't see text flush to column zero mid-paragraph.  ``op`` picks the
+        ANSI color (dim for thoughts, default for responses).
         """
         color = "dim" if op == "agent.thought" else None
+        width = self._term_width()
+        col = self._burst_col.get(stream_path, len(cont))
         parts = text.split("\n")
+
+        def _write(segment: str) -> None:
+            nonlocal col
+            if not segment:
+                return
+            self._file.write(self._c(color, segment) if color else segment)
+            col += len(segment)
+
+        def _newline() -> None:
+            nonlocal col
+            self._file.write("\n" + cont)
+            col = len(cont)
+
         for i, part in enumerate(parts):
             if i > 0:
-                self._file.write("\n" + cont)
-            if part:
-                self._file.write(self._c(color, part) if color else part)
+                _newline()
+            # Wrap an overlong part at the last space that fits on the
+            # current line.  If no space fits, first try a fresh continuation
+            # line; only hard-cut (mid-word) as a last resort.
+            while part and width > len(cont) and col + len(part) > width:
+                budget = width - col
+                cut = part.rfind(" ", 0, budget + 1) if budget > 0 else -1
+                if cut <= 0:
+                    if col > len(cont):
+                        # Move the whole word to a fresh line and retry.
+                        _newline()
+                        continue
+                    cut = max(budget, 1)
+                    head, rest = part[:cut], part[cut:]
+                else:
+                    head, rest = part[:cut], part[cut + 1:]
+                _write(head)
+                _newline()
+                part = rest
+            _write(part)
+
+        self._burst_col[stream_path] = col
         try:
             self._file.flush()
         except Exception:
             pass
         self._emitted_any = True
+
+    def _term_width(self) -> int:
+        try:
+            import shutil
+            return max(shutil.get_terminal_size((100, 24)).columns, 20)
+        except Exception:
+            return 100
 
     def _end_burst(self, stream_path: tuple | None = None) -> None:
         """Close any active burst by emitting a trailing newline.
@@ -484,11 +531,13 @@ class _PlainLineLog:
             self._file.write("\n")
             self._file.flush()
             self._burst.clear()
+            self._burst_col.clear()
             return
         if stream_path in self._burst:
             self._file.write("\n")
             self._file.flush()
             del self._burst[stream_path]
+            self._burst_col.pop(stream_path, None)
 
     def _clear_spinner(self) -> None:
         if self._spinner_active:
@@ -560,7 +609,7 @@ class _PlainLineLog:
         if cur_burst is not None and cur_burst[0] == op and op in ("agent.response", "agent.thought"):
             text = event.get("text", "")
             if text:
-                self._append_chunk(cur_burst[1], text, op=op)
+                self._append_chunk(cur_burst[1], text, op=op, stream_path=stream_path)
                 accum = self._stream_accum.setdefault(stream_path, {})
                 accum[op] = accum.get(op, "") + text
             return
@@ -585,7 +634,7 @@ class _PlainLineLog:
             prompt = event.get("prompt", "")
             model = event.get("model", "")
             header = pad + self._c("magenta", f"› prompt") + (f" {self._c('dim', '(' + model + ')')}" if model else "")
-            self._emit([header] + [cont + ln for ln in _wrap_multiline(prompt, indent="")])
+            self._emit([header] + [cont + ln for ln in _wrap_multiline(prompt, indent="", width=max(self._term_width() - len(cont), 20))])
             # Arm the spinner for the forthcoming response.
             self._pending_stream = stream_path
             self._pending_depth = depth
@@ -596,8 +645,9 @@ class _PlainLineLog:
             text = event.get("text", "")
             self._emit([pad + self._c("green", "‹ response")])
             self._file.write(cont)
+            self._burst_col[stream_path] = len(cont)
             if text:
-                self._append_chunk(cont, text, op=op)
+                self._append_chunk(cont, text, op=op, stream_path=stream_path)
             self._burst[stream_path] = (op, cont)
             accum = self._stream_accum.setdefault(stream_path, {})
             accum[op] = accum.get(op, "") + text
@@ -645,7 +695,7 @@ class _PlainLineLog:
             text = event.get("text", "")
             reason = event.get("reason", "")
             head = pad + self._c("red", "! raw") + (f" {self._c('dim', '(' + reason + ')')}" if reason else "")
-            self._emit([head] + [cont + ln for ln in _wrap_multiline(text, indent="")])
+            self._emit([head] + [cont + ln for ln in _wrap_multiline(text, indent="", width=max(self._term_width() - len(cont), 20))])
             return
 
         if op == "run.start":

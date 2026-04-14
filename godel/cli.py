@@ -368,16 +368,36 @@ def run_cmd(file, extra, no_strict, no_lint, watch, no_stream, plain):
                 rid, runs_dir=_runs_dir, plain=plain,
             )
 
+    def _drain_watcher() -> None:
+        # Wait for the watcher subprocess to finish rendering before we print
+        # our own status lines — otherwise the final agent events can appear
+        # *after* "[godel] completed ...", since the watcher writes to stdout
+        # while our status lines go to stderr with no ordering between them.
+        proc = _watch_proc[0]
+        if proc is None:
+            return
+        _watch_proc[0] = None
+        try:
+            proc.wait(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            proc.terminate()
+            try:
+                proc.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
     start_token = _on_run_start.set(_print_start)
     start = time.monotonic()
     try:
         _run_workflow_with_sigint(fn, wf_args, wf_kwargs)
         elapsed = time.monotonic() - start
+        _drain_watcher()
         click.echo(f"[godel] completed in {elapsed:.1f}s", err=True)
         sys.exit(0)
     except PauseSignal:
         elapsed = time.monotonic() - start
         run_id = getattr(fn, "_last_run_id", None)
+        _drain_watcher()
         click.echo(f"[godel] paused after {elapsed:.1f}s", err=True)
         if run_id:
             click.echo(f"[godel] resume with: godel resume {run_id}", err=True)
@@ -385,12 +405,14 @@ def run_cmd(file, extra, no_strict, no_lint, watch, no_stream, plain):
     except WorkflowFail as e:
         elapsed = time.monotonic() - start
         run_id = getattr(fn, "_last_run_id", None)
+        _drain_watcher()
         click.echo(f"[godel] WorkflowFail after {elapsed:.1f}s: {e}", err=True)
         if run_id:
             click.echo(f"[godel] resume with: godel resume {run_id} {file}", err=True)
         sys.exit(1)
     except KeyboardInterrupt:
         run_id = getattr(fn, "_last_run_id", None)
+        _drain_watcher()
         click.echo("Interrupted", err=True)
         if run_id:
             click.echo(f"[godel] resume with: godel resume {run_id}", err=True)
@@ -398,6 +420,7 @@ def run_cmd(file, extra, no_strict, no_lint, watch, no_stream, plain):
     except Exception:
         elapsed = time.monotonic() - start
         run_id = getattr(fn, "_last_run_id", None)
+        _drain_watcher()
         click.echo(f"[godel] unexpected error after {elapsed:.1f}s:", err=True)
         click.echo(traceback.format_exc(), err=True)
         if run_id:
@@ -405,19 +428,10 @@ def run_cmd(file, extra, no_strict, no_lint, watch, no_stream, plain):
         sys.exit(2)
     finally:
         _on_run_start.reset(start_token)
-        # Wait for the watcher subprocess to exit gracefully (it should have
-        # received EOS from the transcript once the run closed the writer).
-        # If still running, terminate it — a renderer crash must not strand here.
-        proc = _watch_proc[0]
-        if proc is not None:
-            try:
-                proc.wait(timeout=5.0)
-            except subprocess.TimeoutExpired:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=2.0)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
+        # Fallback: if an unexpected exit path skipped _drain_watcher (e.g.
+        # SystemExit before the echoes), still reap the subprocess so it is
+        # never stranded — renderer crashes must not leak processes.
+        _drain_watcher()
 
 
 @main.command("resume")
