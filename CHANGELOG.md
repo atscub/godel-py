@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v1.8.0 (2026-04-14)
+
+### Bug Fixes
+
+- **watch**: Address Pass-1 review (C-1, C-2, W-1, W-2, W-3)
+  ([`a1ff529`](https://github.com/atscub/godel-py/commit/a1ff5297c3517c60f2e468e04f4b9c8ab9ad5a32))
+
+- **watch**: Address Pass-2 review (C-1 pause, W-1 platform, W-2 psutil)
+  ([`9f914bb`](https://github.com/atscub/godel-py/commit/9f914bbe56dbbb1a71adbf92aa9c1112c8a7e828))
+
+### Features
+
+- **cli**: Add godel run --watch and godel watch subcommand
+  ([`2550545`](https://github.com/atscub/godel-py/commit/2550545f5d4efec4c8187124ded5132a116ab8bd))
+
+
 ## v1.7.0 (2026-04-14)
 
 ### Bug Fixes

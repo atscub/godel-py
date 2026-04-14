@@ -1,5 +1,5 @@
 """Godel — deterministic orchestrator for AI agent workflows."""
-__version__ = "1.7.0"
+__version__ = "1.8.0"
 
 from godel._decorators import workflow, step, WorkflowFail, parallel, retry
 from godel._run import run, CommandResult, CommandFailure
