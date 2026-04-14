@@ -433,6 +433,60 @@ def test_spawn_watch_subprocess_isolated(tmp_path):
     assert True
 
 
+def test_spawn_watch_subprocess_plain_flag(tmp_path, monkeypatch):
+    """_spawn_watch_subprocess(..., plain=True) appends --plain to the watcher cmd.
+
+    Intercept subprocess.Popen so we can inspect the command line without
+    actually launching a real subprocess.
+    """
+    import unittest.mock as mock
+    from godel.cli import _spawn_watch_subprocess
+
+    run_id = "plain-test-run"
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+
+    captured_cmds: list = []
+
+    def _fake_popen(cmd, **kwargs):
+        captured_cmds.append(list(cmd))
+        m = mock.MagicMock()
+        m.pid = 99999
+        return m
+
+    with mock.patch("subprocess.Popen", side_effect=_fake_popen):
+        _spawn_watch_subprocess(run_id, runs_dir=str(runs_dir), plain=True)
+
+    assert captured_cmds, "Popen was not called"
+    cmd = captured_cmds[0]
+    assert "--plain" in cmd, f"Expected --plain in watcher cmd; got: {cmd}"
+
+
+def test_spawn_watch_subprocess_no_plain_flag_by_default(tmp_path):
+    """_spawn_watch_subprocess without plain=True does NOT include --plain."""
+    import unittest.mock as mock
+    from godel.cli import _spawn_watch_subprocess
+
+    run_id = "noplain-test-run"
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+
+    captured_cmds: list = []
+
+    def _fake_popen(cmd, **kwargs):
+        captured_cmds.append(list(cmd))
+        m = mock.MagicMock()
+        m.pid = 99999
+        return m
+
+    with mock.patch("subprocess.Popen", side_effect=_fake_popen):
+        _spawn_watch_subprocess(run_id, runs_dir=str(runs_dir))
+
+    assert captured_cmds, "Popen was not called"
+    cmd = captured_cmds[0]
+    assert "--plain" not in cmd, f"--plain should not be in default watcher cmd; got: {cmd}"
+
+
 # ---------------------------------------------------------------------------
 # W-2: WORKFLOW_FINISHED status reflects actual outcome
 # ---------------------------------------------------------------------------

@@ -50,7 +50,7 @@ def parse_workflow_args(extra: tuple[str, ...]) -> tuple[list[str], dict[str, st
     return args, kwargs
 
 
-def _spawn_watch_subprocess(run_id: str, runs_dir: str = "./runs") -> "subprocess.Popen":
+def _spawn_watch_subprocess(run_id: str, runs_dir: str = "./runs", plain: bool = False) -> "subprocess.Popen":
     """Spawn ``python -m godel._watch <run_id>`` as an isolated subprocess.
 
     The subprocess is started in a **new process group** (``start_new_session``
@@ -64,12 +64,17 @@ def _spawn_watch_subprocess(run_id: str, runs_dir: str = "./runs") -> "subproces
         Workflow run identifier passed to the watcher.
     runs_dir:
         Path to the ``runs/`` directory (forwarded as ``--runs-dir``).
+    plain:
+        When ``True``, append ``--plain`` to the watcher command so the
+        subprocess renders in plain line-log mode instead of the Rich TUI.
 
     Returns
     -------
     subprocess.Popen
     """
     cmd = [sys.executable, "-m", "godel._watch", run_id, "--runs-dir", runs_dir]
+    if plain:
+        cmd.append("--plain")
     # Isolate the watcher from the parent's console-control signals so a
     # terminal Ctrl+C (or a crashing renderer) cannot affect the underlying
     # run.  On POSIX ``start_new_session=True`` starts the child in a new
@@ -103,7 +108,14 @@ def main():
 @click.option("--no-strict", is_flag=True, help="Disable strict mode (allow non-deterministic ops)")
 @click.option("--no-lint", is_flag=True, help="Skip lint pre-flight check")
 @click.option("--watch", is_flag=True, help="Stream live output (requires godel[watch])")
-def run_cmd(file, extra, no_strict, no_lint, watch):
+@click.option(
+    "--plain",
+    "-p",
+    is_flag=True,
+    default=False,
+    help="Force plain line-log output in the watcher subprocess (implies --watch; also: GODEL_WATCH_PLAIN=1).",
+)
+def run_cmd(file, extra, no_strict, no_lint, watch, plain):
     """Execute a @workflow-decorated function from FILE.
 
     Pass arguments to the workflow after a '--' separator:
@@ -233,7 +245,7 @@ def run_cmd(file, extra, no_strict, no_lint, watch):
             # when CWD != event-log root.
             from pathlib import Path as _Path
             _runs_dir = str(_Path(log_path).parent)
-            _watch_proc[0] = _spawn_watch_subprocess(rid, runs_dir=_runs_dir)
+            _watch_proc[0] = _spawn_watch_subprocess(rid, runs_dir=_runs_dir, plain=plain)
 
     start_token = _on_run_start.set(_print_start)
     start = time.monotonic()
