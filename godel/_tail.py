@@ -59,12 +59,18 @@ Key behaviours:
 from __future__ import annotations
 
 import asyncio
+import heapq
 import json
 import logging
 import os
+import re
 import time
 from pathlib import Path
 from typing import AsyncIterator, Generator
+
+# Compiled once: matches only ASCII digits (rejects non-ASCII digits and
+# suffixes like "1.bak" that ``str.isdigit()`` would accept or miss).
+_SUFFIX_DIGITS_RE = re.compile(r"\d+")
 
 from godel._events import Event, EventStatus
 
@@ -543,28 +549,33 @@ class TranscriptTail:
             seen_inodes = set()
 
         # Convergence loop: keep scanning for new archives until none appear
-        # for max_empty_retries consecutive iterations.
+        # for max_empty_retries consecutive iterations.  Each discovered
+        # archive is fully collected (sorted by seq locally) before moving on,
+        # then all archives are streaming merge-sorted via heapq.merge so
+        # memory stays bounded per-file rather than per-chain.
         max_iters = 200  # safety valve against infinite loops
         empty_streak = 0
         max_empty_retries = 8
 
-        # Accumulate all events across all iterations before emitting.
-        # This prevents ordering races where a newer archive (lower .N suffix,
-        # higher seqs) is processed before an older archive (higher suffix,
-        # lower seqs) exists yet.
-        pending_real: list[tuple[int, dict]] = []  # (seq, evt)
+        # One list of per-archive sorted (seq, evt) streams plus a flat list
+        # of sentinel events (small; informational).  The per-archive lists
+        # are the only big allocations — they free as heapq.merge consumes.
+        archive_event_lists: list[list[tuple[int, dict]]] = []
         pending_rotate: list[dict] = []  # sentinel/rotate events
 
+        converged = False
         for _ in range(max_iters):
             newly_opened = self._open_all_archives(seen_inodes)
             if not newly_opened:
                 empty_streak += 1
                 if empty_streak >= max_empty_retries:
+                    converged = True
                     break
                 time.sleep(0.005)
                 continue
             empty_streak = 0
             for ino, fh in newly_opened:
+                local: list[tuple[int, dict]] = []
                 try:
                     had_events = False
                     for evt in self._read_from_fh(fh):
@@ -574,7 +585,7 @@ class TranscriptTail:
                         else:
                             seq = evt.get("seq")
                             if isinstance(seq, int):
-                                pending_real.append((seq, evt))
+                                local.append((seq, evt))
                                 had_events = True
                     if had_events:
                         seen_inodes.add(ino)
@@ -583,7 +594,13 @@ class TranscriptTail:
                         fh.close()
                     except Exception:
                         pass
-        else:
+                if local:
+                    # Sort this archive's events once, locally.  Archives are
+                    # typically already sorted (writer appends monotonically),
+                    # but we sort defensively.
+                    local.sort(key=lambda t: t[0])
+                    archive_event_lists.append(local)
+        if not converged:
             logger.warning(
                 "TranscriptTail._fill_gaps: convergence not reached after %d "
                 "iterations; some events may be missing.",
@@ -593,12 +610,16 @@ class TranscriptTail:
         # Emit sentinels first (informational; order among them doesn't matter).
         yield from pending_rotate
 
-        # Emit real events sorted by seq, deduplicating against last_emitted_seq_ref.
-        pending_real.sort(key=lambda t: t[0])
-        for seq, evt in pending_real:
-            if seq > last_emitted_seq_ref[0]:
+        # Streaming merge: heapq.merge holds only one (seq, evt) per input
+        # list in its internal heap.  Memory is O(num_archives) not
+        # O(total_events).  We pop from the input lists in order so each
+        # archive's memory is released as its tail is consumed.
+        last = last_emitted_seq_ref
+        merged = heapq.merge(*archive_event_lists, key=lambda t: t[0])
+        for seq, evt in merged:
+            if seq > last[0]:
                 yield evt
-                last_emitted_seq_ref[0] = seq
+                last[0] = seq
 
     def _open_all_archives(
         self, skip_inodes: set[int]
@@ -627,7 +648,7 @@ class TranscriptTail:
         candidates: list[tuple[int, Path]] = []  # (suffix_int, path)
         for p in self._run_dir.glob(f"{_TRANSCRIPT_FILENAME}.*"):
             suffix = p.name[len(_TRANSCRIPT_FILENAME) + 1:]
-            if suffix.isdigit():
+            if _SUFFIX_DIGITS_RE.fullmatch(suffix):
                 candidates.append((int(suffix), p))
 
         # Sort by suffix descending: higher suffix = older file = lower first_seq.
@@ -671,56 +692,37 @@ class TranscriptTail:
         except OSError:
             pass
 
-    def _find_unread_archives(self, after_seq: int) -> list[Path]:
-        """Return archive paths that contain events with seq > *after_seq*.
+    def _open_current_with_retry(
+        self, max_wait: float = 2.0
+    ) -> tuple[int, Path]:
+        """Open a fresh ``transcript.jsonl`` handling the TOCTOU race.
 
-        .. deprecated::
-            Use :meth:`_open_unread_archives` instead, which opens files
-            immediately to avoid rename-cascade content swaps.  This method
-            is retained for compatibility with :meth:`_read_archive`.
+        ``_wait_for_fresh_current`` can confirm the file exists but the writer
+        may rotate it again before ``os.open`` actually opens it.  We retry
+        under a deadline; if the whole cascade takes longer than *max_wait*
+        we raise ``TranscriptTailError`` rather than spinning forever.
         """
-        candidates: list[tuple[int, Path]] = []
-        for p in self._run_dir.glob(f"{_TRANSCRIPT_FILENAME}.*"):
-            suffix = p.name[len(_TRANSCRIPT_FILENAME) + 1:]
-            if suffix.isdigit():
-                candidates.append((int(suffix), p))
-        if not candidates:
-            return []
-        candidates.sort(key=lambda t: t[0], reverse=True)
-        unread: list[Path] = []
-        for _, path in candidates:
-            max_seq = self._peek_max_seq(path)
-            if max_seq is not None and max_seq > after_seq:
-                unread.append(path)
-        return unread
-
-    def _peek_max_seq(self, path: Path) -> int | None:
-        """Return the highest real-event seq in *path*, or None if unreadable.
-
-        Reads the file and scans for the highest ``seq`` among non-sentinel
-        events.  This is an O(file-size) operation but archives are typically
-        small (capped at max_bytes from the writer).
-        """
-        max_seq: int | None = None
-        try:
-            with open(path, encoding="utf-8") as fh:
-                for raw in fh:
-                    raw = raw.strip()
-                    if not raw:
-                        continue
-                    try:
-                        obj = json.loads(raw)
-                    except json.JSONDecodeError:
-                        continue
-                    if "event" in obj:
-                        evt = obj["event"]
-                        if evt.get("op") != "rotate":
-                            seq = evt.get("seq")
-                            if isinstance(seq, int) and (max_seq is None or seq > max_seq):
-                                max_seq = seq
-        except OSError:
-            pass
-        return max_seq
+        deadline = time.monotonic() + max_wait
+        attempt = 0
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TranscriptTailError(
+                    f"Could not open fresh transcript after {max_wait}s "
+                    f"(rotation cascade did not settle)",
+                    path=self._run_dir / _TRANSCRIPT_FILENAME,
+                )
+            # Hand the remaining budget to the inner waiter so it can't
+            # consume more than our total deadline.
+            current = self._wait_for_fresh_current(max_wait=max(remaining, 0.01))
+            try:
+                fd = os.open(str(current), os.O_RDONLY)
+                return fd, current
+            except FileNotFoundError:
+                attempt += 1
+                # Back-off capped at poll_interval; short enough to catch the
+                # next rename but not a busy spin.
+                time.sleep(min(self._poll_interval, 0.005))
 
     def _iter_files(self) -> Generator[dict, None, None]:
         """Core generator: replay archives then tail the live file."""
@@ -740,9 +742,11 @@ class TranscriptTail:
                         last_emitted_seq = seq
 
         # Phase 2: tail the live transcript.jsonl by inode.
-        current = self._initial_wait_for_current()
-
-        fd = os.open(str(current), os.O_RDONLY)
+        # _initial_wait_for_current confirms the file exists, but there is a
+        # TOCTOU window before os.open — the writer may rotate it in between.
+        # Retry under a deadline to survive a rotation cascade at startup.
+        self._initial_wait_for_current()
+        fd, current = self._open_current_with_retry()
         fh = os.fdopen(fd, "r", encoding="utf-8")
         last_ino = os.fstat(fd).st_ino
         buf = ""
@@ -785,12 +789,31 @@ class TranscriptTail:
                     inode_warning_issued = False  # reset on successful read
                     evts, buf = self._parse_lines(buf, chunk)
                     rotate_seen = False
-                    for evt in evts:
+                    for idx, evt in enumerate(evts):
                         if evt.get("op") == "rotate":
                             # Always yield sentinel (informational) even if we
                             # already processed events up to this seq via archives.
                             yield evt
                             rotate_seen = True
+                            # Writer protocol: the sentinel is always the last
+                            # line of a rotated file.  Guard against a protocol
+                            # violation by warning if anything follows within
+                            # this parsed batch — previously we silently dropped
+                            # those events via ``break``.
+                            trailing = evts[idx + 1:]
+                            if trailing:
+                                trailing_seqs = [
+                                    e.get("seq") for e in trailing
+                                    if isinstance(e.get("seq"), int)
+                                ]
+                                logger.warning(
+                                    "TranscriptTail: %d event(s) followed rotate "
+                                    "sentinel in the same batch (seqs=%s); writer "
+                                    "protocol violation. Events dropped to preserve "
+                                    "rotation semantics.",
+                                    len(trailing),
+                                    trailing_seqs,
+                                )
                             break  # sentinel is always last; stop this batch
                         seq = evt.get("seq")
                         if isinstance(seq, int) and seq <= last_emitted_seq:
@@ -837,14 +860,9 @@ class TranscriptTail:
                         # Open the fresh current file.  Retry if the file
                         # disappears between _wait_for_fresh_current and os.open
                         # (possible if the writer rotates again during fill_gaps).
-                        while True:
-                            current = self._wait_for_fresh_current()
-                            try:
-                                fd = os.open(str(current), os.O_RDONLY)
-                            except FileNotFoundError:
-                                time.sleep(min(self._poll_interval, 0.005))
-                                continue
-                            break
+                        # Bounded by a deadline so a pathological rotation
+                        # cascade raises TranscriptTailError instead of spinning.
+                        fd, current = self._open_current_with_retry()
                         fh = os.fdopen(fd, "r", encoding="utf-8")
                         last_ino = os.fstat(fd).st_ino
                         # Add new live fd's inode to seen_inodes so periodic fills
@@ -930,14 +948,9 @@ class TranscriptTail:
                         last_emitted_seq = seq_ref[0]
                         # Open the current file with retry (TOCTOU: it may
                         # disappear between _wait_for_fresh_current and os.open).
-                        while True:
-                            current = self._wait_for_fresh_current()
-                            try:
-                                fd = os.open(str(current), os.O_RDONLY)
-                            except FileNotFoundError:
-                                time.sleep(min(self._poll_interval, 0.005))
-                                continue
-                            break
+                        # Bounded by a deadline so pathological cascades raise
+                        # TranscriptTailError instead of spinning forever.
+                        fd, current = self._open_current_with_retry()
                         fh = os.fdopen(fd, "r", encoding="utf-8")
                         last_ino = os.fstat(fd).st_ino
                         # Decide whether to reset seq tracking:
