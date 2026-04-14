@@ -6,31 +6,22 @@
 > `GODEL_NO_CAPTURE=1` whenever you need to drop into a debugger in code that opts into
 > stdout capture.
 
-> **Status: option accepted at decoration time; runtime behavior is TODO.**
-> In master today, `@step(capture_stdout=True)` and `@workflow(capture_stdout=True)` are
-> accepted as kwargs and stored on the decorator's options dict. **The capture pipe,
-> reader thread, and transcript wiring do not exist yet.** They are tracked by
-> `godel-py-5pl.7` (stdout capture: pipe-per-step, parallel-safe). One guard is already
-> enforced — see [`parallel()` incompatibility](#parallel-incompatibility) — but until
-> `5pl.7` lands, setting `capture_stdout=True` on a step outside of `parallel()` has no
-> effect.
-
-When the runtime support lands (`5pl.7`), stdout written inside a captured step (or
-captured workflow) will be routed through a dedicated pipe, tagged with the step's
-`step_path` / `stream_path`, and written as `stdout` events to the transcript.
+Stdout written inside a captured step (or captured workflow) is routed through a
+dedicated pipe, tagged with the step's `step_path` / `stream_path`, and written as
+`stdout` events to the transcript.
 
 ---
 
-## Enabling capture (intended)
+## Enabling capture
 
 ```python
 from godel import workflow, step
 
 @step(capture_stdout=True)
 async def analyse(text: str) -> str:
-    print("running analysis...")   # will be captured once 5pl.7 lands
+    print("running analysis...")   # captured → transcript
     result = text.upper()
-    print("done")                  # will be captured once 5pl.7 lands
+    print("done")                  # captured → transcript
     return result
 
 @workflow
@@ -38,7 +29,7 @@ async def my_workflow():
     output = await analyse("hello")
 ```
 
-Once `5pl.7` lands, each captured line will appear in the transcript as:
+Each captured line appears in the transcript as:
 
 ```json
 {"event": {"ts": "...", "seq": 7, "op": "stdout",
@@ -46,14 +37,12 @@ Once `5pl.7` lands, each captured line will appear in the transcript as:
            "chunk": "running analysis..."}}
 ```
 
-Subprocess children launched from inside a captured step will inherit the redirected fd
-and their stdout will land in the same stream.
+Subprocess children launched from inside a captured step inherit the redirected fd
+and their stdout lands in the same stream.
 
 ---
 
-## Pipe-per-step model (intended design)
-
-Per the `5pl.7` design:
+## Pipe-per-step model
 
 - At step entry, a fresh `os.pipe()` is opened. The write end replaces file descriptor 1
   (`os.dup2(w, 1)`); the saved original fd is kept for restoration.
@@ -100,12 +89,9 @@ Use capture_stdout on the enclosing @workflow instead.
 `dup2(w, 1)` would interleave their redirects — writes from one branch would land in
 another branch's pipe. There is no safe interleaving.
 
-> **Note.** The `5pl.7` design refers to this as "registration-time" enforcement in some
-> places, meaning at the moment the parallel block registers its branches (i.e. the call
-> to `parallel()`). In the implementation that lives in master today, this is literally
-> the `parallel()` call site — it happens before any branch is scheduled. Both phrasings
-> describe the same check; this page uses "at call time" consistently to avoid
-> ambiguity.
+> **Note.** This check fires at the `parallel()` call site — it happens before any
+> branch is scheduled. Both "registration-time" and "at call time" phrasings describe
+> the same check; this page uses "at call time" consistently.
 
 **Workaround:** Use `capture_stdout=True` on the enclosing `@workflow` decorator
 instead. A workflow-level capture installs a single pipe for the entire run and is safe
@@ -119,22 +105,17 @@ async def good_workflow():
 
 ---
 
-## `GODEL_NO_CAPTURE` escape hatch (intended)
+## `GODEL_NO_CAPTURE` escape hatch
 
-> **Not available today.** `GODEL_NO_CAPTURE` is not referenced anywhere in `godel/` in
-> master — it is part of the `5pl.7` implementation and will only take effect once that
-> lands. Setting it today has no effect, because there is no capture pipeline to disable.
-
-Once `5pl.7` lands, setting `GODEL_NO_CAPTURE=1` will disable all stdout capture
-globally, regardless of `capture_stdout=True` settings in code:
+Setting `GODEL_NO_CAPTURE=1` disables all stdout capture globally, regardless of
+`capture_stdout=True` settings in code:
 
 ```bash
 GODEL_NO_CAPTURE=1 godel run my_workflow.py
 ```
 
-The `5pl.7` design specifies that the capture context manager becomes a no-op when this
-env var is set — `sys.stdout` is not touched, fd 1 is not swapped, and no `stdout`
-events are emitted.
+When this env var is set, the capture context manager becomes a no-op — `sys.stdout` is
+not touched, fd 1 is not swapped, and no `stdout` events are emitted.
 
 This is useful when:
 
@@ -144,13 +125,13 @@ This is useful when:
   confused by double-capture.
 - Diagnosing a hang where the capture pipe itself is suspected.
 
-> `5pl.7` explicitly rejects a `sys.gettrace()` heuristic for auto-disabling under
-> debuggers/profilers — it misfires under `coverage` and `pytest-cov`. The env var is
-> the only supported escape hatch.
+> `GODEL_NO_CAPTURE` is the only supported escape hatch. A `sys.gettrace()` heuristic
+> for auto-disabling under debuggers/profilers was explicitly rejected — it misfires
+> under `coverage` and `pytest-cov`. Set the env var explicitly.
 
 ---
 
-## Known limitations (intended)
+## Known limitations
 
 | Limitation | Detail |
 |---|---|
@@ -158,14 +139,13 @@ This is useful when:
 | **`print` / `logging` semantics** | Capture changes the apparent destination of `print()` and anything logging to a handler bound to `sys.stdout`. Handlers bound to `sys.stderr` are unaffected. |
 | **Large output** | Captured output is streamed line-by-line through a pipe, not buffered indefinitely — but steps that emit enormous stdout volumes will still pay the serialisation cost on the reader thread. |
 | **`parallel()`** | See [above](#parallel-incompatibility). |
+| **pytest stdout capture** | pytest replaces `sys.stdout` at the Python object level; the fd-level redirect captures subprocess output but `print()` calls go through pytest's capture instead. Use `capsys.disabled()` or `os.write(1, ...)` in tests that exercise capture. |
+| **asyncio cross-task contamination** | fd 1 is process-global, so if a captured step `await`s and another coroutine in the same event loop writes to stdout while the step is suspended, that output is routed through the captured step's pipe and tagged with the *captured step's* `step_path` — even though it originated in an unrelated task. This is inherent to single-event-loop, process-global fd semantics; there is no safe interleaving. For workloads that fan out over concurrent stdout-producing tasks, prefer `capture_stdout=True` at the `@workflow` level (single pipe, workflow-scoped tagging) over per-`@step` capture. |
 
 ---
 
 ## See also
 
-- [Transcript Format](transcript-format.md) — where captured stdout events will land in
-  the JSONL stream (as `op: "stdout"`, post-`5pl.7`).
-- [Redaction](redaction.md) — filtering event payloads including, once wired, captured
-  stdout (status: runtime plumbing in flight, `godel-py-5pl.6`).
-- Ticket `godel-py-5pl.7` — the stdout-capture implementation that will make this page
-  live.
+- [Transcript Format](transcript-format.md) — where captured stdout events land in the
+  JSONL stream (as `op: "stdout"`).
+- [Redaction](redaction.md) — filtering event payloads including captured stdout.
