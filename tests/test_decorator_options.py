@@ -11,7 +11,7 @@ import asyncio
 import pytest
 
 from godel._decorators import workflow, step, parallel
-from godel._exceptions import ConfigError
+from godel._exceptions import ConfigError, GodelError
 
 
 # ---------------------------------------------------------------------------
@@ -356,3 +356,19 @@ def test_redact_wrong_arity_at_index_1():
         @workflow(redact=[lambda s: s, lambda: "x"])
         async def wf():
             return 1
+
+
+# ---------------------------------------------------------------------------
+# ConfigError hierarchy
+# ---------------------------------------------------------------------------
+
+def test_config_error_is_godel_error():
+    """ConfigError must be a GodelError subclass for catch-all compatibility."""
+    err = ConfigError("bad combo")
+    assert isinstance(err, GodelError)
+
+
+def test_config_error_catchable_as_godel_error():
+    """except GodelError: must catch ConfigError."""
+    with pytest.raises(GodelError):
+        raise ConfigError("incompatible options")

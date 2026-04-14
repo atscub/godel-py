@@ -1,15 +1,20 @@
-"""Exception hierarchy for godel strict mode and resume.
+"""Exception hierarchy for godel errors.
 
-Two disjoint root hierarchies exist — they are NOT the same despite the
-similar names:
+Two root hierarchies exist — they are NOT the same despite the similar names:
 
 * ``GodelStrictError`` — raised by the **static strict-mode guards** (AST,
   import, and audit layers) when they detect non-deterministic constructs at
-  analysis time.  It is *not* raised at runtime by the engine itself.
+  analysis time.  It is *not* raised by the engine itself.
 
-* ``GodelError`` — base for all **runtime structured errors** produced during
-  workflow execution (agent failures, schema mismatches, timeouts, etc.).
-  The linter / strict-mode guards never raise ``GodelError`` subclasses.
+* ``GodelError`` — base for **all structured errors** produced by the godel
+  engine: runtime errors during workflow execution (agent failures, schema
+  mismatches, timeouts, etc.), configuration errors raised at decoration or
+  parallel-call time (``ConfigError``), and resume/replay errors
+  (``ResumeError`` and its subclasses).  Using ``except GodelError`` is
+  therefore a reliable catch-all for any godel-originated failure.
+
+  ``GodelStrictError`` deliberately sits *outside* this hierarchy because it
+  is a static analysis signal, not a workflow operation failure.
 """
 from __future__ import annotations
 
@@ -28,9 +33,165 @@ class StrictViolation:
     layer: str  # 'ast' | 'import' | 'audit'
 
 
-class ResumeError(Exception):
+# ---------------------------------------------------------------------------
+# Internal control-flow signals — NOT user-facing errors.
+# These are raised and caught by godel internals to drive workflow state
+# transitions (rewind, pause).  They remain plain Exception subclasses so
+# that accidental ``except GodelError`` blocks never swallow them.
+# ---------------------------------------------------------------------------
+
+class RewindSignal(Exception):
+    """Raised by rewind() to unwind the workflow call stack.
+    Caught by the @workflow decorator, which applies the graph cut
+    and re-invokes the workflow function with a new ReplayWalker.
+    This is NOT a user-facing error — it's a control flow signal.
+    """
+    def __init__(self, target_ids: list[str], reason: str = ""):
+        self.target_ids = target_ids
+        self.reason = reason
+        super().__init__(f"RewindSignal to {target_ids}: {reason}")
+
+
+class PauseSignal(Exception):
+    """Raised inside a @step wrapper when a pause request is detected.
+
+    Caught by @workflow, which emits a PAUSED event and exits cleanly.
+    Not a user-facing error — a control flow signal.
+    """
+    def __init__(self, reason: str = "", request_ts: str = ""):
+        self.reason = reason
+        self.request_ts = request_ts
+        super().__init__(f"PauseSignal: {reason}")
+
+
+# ---------------------------------------------------------------------------
+# Static-analysis error — outside the GodelError hierarchy by design.
+# ---------------------------------------------------------------------------
+
+class GodelStrictError(Exception):
+    """Raised when the **strict-mode guards** detect non-deterministic
+    constructs (AST, import, or audit layer violations).
+
+    This is a *static analysis / pre-flight* error — it is raised before the
+    workflow runs, never during execution.  See ``GodelError`` for the runtime
+    error hierarchy.
+    """
+
+    def __init__(self, violations: list[StrictViolation], message: str = ""):
+        self.violations = violations
+        if not message:
+            message = f"godel strict: {len(violations)} violation(s) detected"
+        super().__init__(message)
+
+    def __str__(self) -> str:
+        lines = [f"GodelStrictError: {len(self.violations)} violation(s)"]
+        for v in self.violations:
+            loc = f"{v.file}:{v.line}:{v.col}" if v.line > 0 else v.file
+            lines.append(f"  [{v.layer}] {loc} — {v.message}")
+        return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# GodelError — base for ALL structured godel errors.
+# ---------------------------------------------------------------------------
+
+def _render_context_marker(
+    step_path: tuple[str, ...],
+    source_location: str,
+    remediation_hint: str,
+) -> str:
+    """Shared helper: build the ``[godel:...]`` context marker string.
+
+    Returns an empty string when all inputs are empty / falsy.
+
+    Empty-string and whitespace-only components in *step_path* are stripped so
+    that a path like ``('',)``, ``('   ',)``, or ``('a', '', 'b')`` never
+    renders as ``step=``, ``step=   ``, or ``step=a//b``.
+
+    Used by both :class:`GodelError` and :class:`~godel._run.CommandFailure`
+    so that the marker format stays in sync across both hierarchies.
+    """
+    parts = []
+    clean_path = tuple(s for s in step_path if s and s.strip())
+    if clean_path:
+        parts.append(f"step={'/'.join(clean_path)}")
+    if source_location:
+        parts.append(f"source={source_location}")
+    if remediation_hint:
+        parts.append(f"hint={remediation_hint}")
+    if not parts:
+        return ""
+    return "[godel:" + ", ".join(parts) + "]"
+
+
+class _GodelErrorKwargs(TypedDict, total=False):
+    """Keyword arguments shared by all :class:`GodelError` subclasses.
+
+    Using ``Unpack[_GodelErrorKwargs]`` in subclass ``__init__`` signatures
+    restores IDE / type-checker visibility for these arguments, which would
+    otherwise be hidden behind an opaque ``**kwargs``.
+    """
+
+    step_path: tuple[str, ...]
+    source_location: str
+    remediation_hint: str
+
+
+class GodelError(Exception):
+    """Base class for all structured Godel errors.
+
+    Covers runtime failures during workflow execution (agent failures, schema
+    mismatches, timeouts, etc.), configuration errors (``ConfigError``), and
+    resume/replay errors (``ResumeError`` family).  Every subclass provides
+    enough context for an LLM to diagnose the failure without additional log
+    scraping.
+
+    .. note::
+        ``GodelStrictError`` (static analysis guard) and the internal
+        control-flow signals ``RewindSignal`` / ``PauseSignal`` are **not**
+        subclasses of ``GodelError``.
+    """
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        step_path: tuple[str, ...] = (),
+        source_location: str = "",
+        remediation_hint: str = "",
+    ):
+        super().__init__(message)
+        self.step_path = step_path
+        self.source_location = source_location
+        self.remediation_hint = remediation_hint
+
+    def _context_marker(self) -> str:
+        """Return a structured marker string for LLM-readable context.
+
+        Delegates to :func:`_render_context_marker` — see that function for
+        the full format specification.
+        """
+        return _render_context_marker(self.step_path, self.source_location, self.remediation_hint)
+
+    def __str__(self) -> str:
+        base = super().__str__()
+        marker = self._context_marker()
+        if marker:
+            return f"{base} {marker}" if base else marker
+        return base
+
+
+# ---------------------------------------------------------------------------
+# Resume / replay errors — GodelError subclasses.
+# ---------------------------------------------------------------------------
+
+class ResumeError(GodelError):
     """General resume failure — corrupted log, missing WORKFLOW_STARTED,
-    request_hash mismatch with abort policy."""
+    request_hash mismatch with abort policy.
+
+    Inherits from :class:`GodelError` so that ``except GodelError`` catch-alls
+    cover resume failures alongside runtime errors.
+    """
     pass
 
 
@@ -80,6 +241,12 @@ class UnsafeResumeError(ResumeError):
         self.cmd = cmd
         self.step_path = step_path
 
+    def _context_marker(self) -> str:
+        # UnsafeResumeError renders step/command context in its own __str__
+        # format; suppress the GodelError [godel:...] marker to avoid
+        # duplicate output.
+        return ""
+
     def __str__(self) -> str:
         parts = [f"UnsafeResumeError: {super().__str__()}"]
         if self.cmd:
@@ -92,135 +259,39 @@ class UnsafeResumeError(ResumeError):
         return "\n".join(parts)
 
 
-class RewindSignal(Exception):
-    """Raised by rewind() to unwind the workflow call stack.
-    Caught by the @workflow decorator, which applies the graph cut
-    and re-invokes the workflow function with a new ReplayWalker.
-    This is NOT a user-facing error — it's a control flow signal.
+# ---------------------------------------------------------------------------
+# Configuration error — GodelError subclass.
+# ---------------------------------------------------------------------------
+
+class ConfigError(GodelError):
+    """Raised when a decorator is configured with an invalid combination of options.
+
+    This is a **pre-execution** error — raised either at decoration time
+    (module import / function definition) or when the workflow primitive that
+    owns the invalid configuration is entered, but always *before* any step
+    body runs.  No partial state is produced.
+
+    Inherits from :class:`GodelError` so that ``except GodelError`` catch-alls
+    cover configuration failures alongside runtime and resume errors.
+
+    When each check fires:
+
+    * ``@workflow(redact=[...])`` with a non-callable entry or a callable
+      whose arity is not a single positional argument → ``TypeError`` at
+      **decoration time** (module import).  ``TypeError`` is used instead of
+      ``ConfigError`` to match Python convention for argument-type errors.
+    * ``@step(capture_stdout=True)`` used inside a ``parallel()`` block →
+      ``ConfigError`` raised at **parallel-call time**, immediately upon
+      entering ``parallel()`` and before any branch is scheduled.  This check
+      cannot fire at decoration time because the step function and the
+      enclosing ``parallel()`` call are independently defined; the relationship
+      only becomes visible when the coroutines are handed to ``parallel()``.
     """
-    def __init__(self, target_ids: list[str], reason: str = ""):
-        self.target_ids = target_ids
-        self.reason = reason
-        super().__init__(f"RewindSignal to {target_ids}: {reason}")
-
-
-class PauseSignal(Exception):
-    """Raised inside a @step wrapper when a pause request is detected.
-
-    Caught by @workflow, which emits a PAUSED event and exits cleanly.
-    Not a user-facing error — a control flow signal.
-    """
-    def __init__(self, reason: str = "", request_ts: str = ""):
-        self.reason = reason
-        self.request_ts = request_ts
-        super().__init__(f"PauseSignal: {reason}")
-
-
-class GodelStrictError(Exception):
-    """Raised when the **strict-mode guards** detect non-deterministic
-    constructs (AST, import, or audit layer violations).
-
-    This is a *static analysis / pre-flight* error — it is raised before the
-    workflow runs, never during execution.  See ``GodelError`` for the runtime
-    error hierarchy.
-    """
-
-    def __init__(self, violations: list[StrictViolation], message: str = ""):
-        self.violations = violations
-        if not message:
-            message = f"godel strict: {len(violations)} violation(s) detected"
-        super().__init__(message)
-
-    def __str__(self) -> str:
-        lines = [f"GodelStrictError: {len(self.violations)} violation(s)"]
-        for v in self.violations:
-            loc = f"{v.file}:{v.line}:{v.col}" if v.line > 0 else v.file
-            lines.append(f"  [{v.layer}] {loc} — {v.message}")
-        return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
-# Structured exception hierarchy — each failure carries enough context for
-# LLM diagnosis (step path, source location, remediation hint).
+# Runtime GodelError subclasses.
 # ---------------------------------------------------------------------------
-
-def _render_context_marker(
-    step_path: tuple[str, ...],
-    source_location: str,
-    remediation_hint: str,
-) -> str:
-    """Shared helper: build the ``[godel:...]`` context marker string.
-
-    Returns an empty string when all inputs are empty / falsy.
-
-    Empty-string and whitespace-only components in *step_path* are stripped so
-    that a path like ``('',)``, ``('   ',)``, or ``('a', '', 'b')`` never
-    renders as ``step=``, ``step=   ``, or ``step=a//b``.
-
-    Used by both :class:`GodelError` and :class:`~godel._run.CommandFailure`
-    so that the marker format stays in sync across both hierarchies.
-    """
-    parts = []
-    clean_path = tuple(s for s in step_path if s and s.strip())
-    if clean_path:
-        parts.append(f"step={'/'.join(clean_path)}")
-    if source_location:
-        parts.append(f"source={source_location}")
-    if remediation_hint:
-        parts.append(f"hint={remediation_hint}")
-    if not parts:
-        return ""
-    return "[godel:" + ", ".join(parts) + "]"
-
-
-class _GodelErrorKwargs(TypedDict, total=False):
-    """Keyword arguments shared by all :class:`GodelError` subclasses.
-
-    Using ``Unpack[_GodelErrorKwargs]`` in subclass ``__init__`` signatures
-    restores IDE / type-checker visibility for these arguments, which would
-    otherwise be hidden behind an opaque ``**kwargs``.
-    """
-
-    step_path: tuple[str, ...]
-    source_location: str
-    remediation_hint: str
-
-
-class GodelError(Exception):
-    """Base class for all structured Godel runtime errors.
-
-    Every subclass should provide enough context for an LLM to diagnose
-    the failure without additional log scraping.
-    """
-
-    def __init__(
-        self,
-        message: str = "",
-        *,
-        step_path: tuple[str, ...] = (),
-        source_location: str = "",
-        remediation_hint: str = "",
-    ):
-        super().__init__(message)
-        self.step_path = step_path
-        self.source_location = source_location
-        self.remediation_hint = remediation_hint
-
-    def _context_marker(self) -> str:
-        """Return a structured marker string for LLM-readable context.
-
-        Delegates to :func:`_render_context_marker` — see that function for
-        the full format specification.
-        """
-        return _render_context_marker(self.step_path, self.source_location, self.remediation_hint)
-
-    def __str__(self) -> str:
-        base = super().__str__()
-        marker = self._context_marker()
-        if marker:
-            return f"{base} {marker}" if base else marker
-        return base
-
 
 class AgentRefusal(GodelError):
     """Raised when an AI model refuses to fulfil a request."""
@@ -315,29 +386,6 @@ class GodelWatchNotInstalledError(ImportError):
     Install the missing dependency with::
 
         pip install 'godel[watch]'
-    """
-
-
-class ConfigError(Exception):
-    """Raised when a decorator is configured with an invalid combination of options.
-
-    This is a **pre-execution** error — raised either at decoration time
-    (module import / function definition) or when the workflow primitive that
-    owns the invalid configuration is entered, but always *before* any step
-    body runs.  No partial state is produced.
-
-    When each check fires:
-
-    * ``@workflow(redact=[...])`` with a non-callable entry or a callable
-      whose arity is not a single positional argument → ``TypeError`` at
-      **decoration time** (module import).  ``TypeError`` is used instead of
-      ``ConfigError`` to match Python convention for argument-type errors.
-    * ``@step(capture_stdout=True)`` used inside a ``parallel()`` block →
-      ``ConfigError`` raised at **parallel-call time**, immediately upon
-      entering ``parallel()`` and before any branch is scheduled.  This check
-      cannot fire at decoration time because the step function and the
-      enclosing ``parallel()`` call are independently defined; the relationship
-      only becomes visible when the coroutines are handed to ``parallel()``.
     """
 
 
