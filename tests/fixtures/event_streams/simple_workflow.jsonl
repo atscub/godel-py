@@ -1,0 +1,10 @@
+{"header":{"v":1,"run_id":"run-simple-001","started_at":"2026-04-14T00:00:00+00:00"}}
+{"event":{"ts":"2026-04-14T00:00:01+00:00","seq":1,"op":"step.enter","step_path":["fetch_data"],"stream_path":[]}}
+{"event":{"ts":"2026-04-14T00:00:02+00:00","seq":2,"op":"stdout","step_path":["fetch_data"],"stream_path":["fetch_data"],"line":"Fetching data..."}}
+{"event":{"ts":"2026-04-14T00:00:03+00:00","seq":3,"op":"agent.thought","step_path":["fetch_data"],"stream_path":["fetch_data","agent"],"text":"I should call the API"}}
+{"event":{"ts":"2026-04-14T00:00:04+00:00","seq":4,"op":"agent.tool_call","step_path":["fetch_data"],"stream_path":["fetch_data","agent"],"tool":"http_get","input":"https://api.example.com/data"}}
+{"event":{"ts":"2026-04-14T00:00:05+00:00","seq":5,"op":"agent.tool_result","step_path":["fetch_data"],"stream_path":["fetch_data","agent"],"tool":"http_get","output":"{\"items\":[1,2,3]}"}}
+{"event":{"ts":"2026-04-14T00:00:06+00:00","seq":6,"op":"step.exit","step_path":["fetch_data"],"stream_path":[],"status":"done"}}
+{"event":{"ts":"2026-04-14T00:00:07+00:00","seq":7,"op":"step.enter","step_path":["summarize"],"stream_path":[]}}
+{"event":{"ts":"2026-04-14T00:00:08+00:00","seq":8,"op":"agent.raw","step_path":["summarize"],"stream_path":["summarize","agent"],"text":"Processing 3 items..."}}
+{"event":{"ts":"2026-04-14T00:00:09+00:00","seq":9,"op":"step.exit","step_path":["summarize"],"stream_path":[],"status":"done"}}

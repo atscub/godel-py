@@ -1,0 +1,7 @@
+{"header":{"v":1,"run_id":"run-rotate-001","started_at":"2026-04-14T01:00:00+00:00"}}
+{"event":{"ts":"2026-04-14T01:00:01+00:00","seq":1,"op":"step.enter","step_path":["work"],"stream_path":[]}}
+{"event":{"ts":"2026-04-14T01:00:02+00:00","seq":2,"op":"stdout","step_path":["work"],"stream_path":["work"],"line":"Line before rotation"}}
+{"event":{"ts":"2026-04-14T01:00:02+00:00","last_seq":2,"op":"rotate","step_path":[],"stream_path":[],"prev":"transcript.jsonl.2"}}
+{"header":{"v":1,"run_id":"run-rotate-001","started_at":"2026-04-14T01:00:00+00:00"}}
+{"event":{"ts":"2026-04-14T01:00:03+00:00","seq":3,"op":"stdout","step_path":["work"],"stream_path":["work"],"line":"Line after rotation"}}
+{"event":{"ts":"2026-04-14T01:00:04+00:00","seq":4,"op":"step.exit","step_path":["work"],"stream_path":[],"status":"done"}}
