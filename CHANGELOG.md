@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.17.0 (2026-04-14)
+
+### Features
+
+- **watch**: Dedupe agent.response when it echoes the final thought
+  ([`91c912a`](https://github.com/atscub/godel-py/commit/91c912a9b6a6e2ce9b9579c6964d8cb653be7167))
+
+
 ## v1.16.0 (2026-04-14)
 
 ### Features
