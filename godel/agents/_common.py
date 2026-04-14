@@ -23,12 +23,12 @@ import asyncio
 import io
 import json
 import re
-import sys
 from typing import TYPE_CHECKING, Type, TypeVar, overload
 
 from pydantic import BaseModel, ValidationError
 
 from godel._decorators import WorkflowFail
+from godel._run import run
 
 if TYPE_CHECKING:
     from godel._transcript import TranscriptWriter
@@ -291,7 +291,6 @@ class _BaseAgent:
             prompt, model_id, tools=tools, session_id=session_id,
             streaming=streaming,
         )
-        run = sys.modules[type(self).__module__].run
         result = await run(cmd, cwd=self._cwd)
 
         if streaming:

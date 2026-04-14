@@ -85,7 +85,7 @@ def test_copilot_delegates_to_run():
     """copilot() calls run(), not subprocess directly."""
     @workflow
     async def wf():
-        with patch("godel.agents._copilot.run", new=_mock_run_returning("hello world")):
+        with patch("godel.agents._common.run", new=_mock_run_returning("hello world")):
             agent = copilot()
             result = await agent("say hello")
             assert result == "hello world"
@@ -103,7 +103,7 @@ def test_copilot_passes_cwd_to_run():
 
     @workflow
     async def wf():
-        with patch("godel.agents._copilot.run", new=capturing_run):
+        with patch("godel.agents._common.run", new=capturing_run):
             agent = copilot(cwd="/workspace")
             await agent("do something")
 
@@ -125,7 +125,7 @@ def test_copilot_model_alias_in_command():
 
     @workflow
     async def wf():
-        with patch("godel.agents._copilot.run", new=capture_run):
+        with patch("godel.agents._common.run", new=capture_run):
             agent = copilot(model="sonnet")
             await agent("test")
 
@@ -142,7 +142,7 @@ def test_copilot_default_model_in_command():
 
     @workflow
     async def wf():
-        with patch("godel.agents._copilot.run", new=capture_run):
+        with patch("godel.agents._common.run", new=capture_run):
             agent = copilot(model="default")
             await agent("test")
 
@@ -160,7 +160,7 @@ def test_copilot_tools_in_command():
 
     @workflow
     async def wf():
-        with patch("godel.agents._copilot.run", new=capture_run):
+        with patch("godel.agents._common.run", new=capture_run):
             agent = copilot(tools=["bash", "python"])
             await agent("test")
 
@@ -180,7 +180,7 @@ def test_copilot_no_allow_all_tools_by_default():
 
     @workflow
     async def wf():
-        with patch("godel.agents._copilot.run", new=capture_run):
+        with patch("godel.agents._common.run", new=capture_run):
             agent = copilot()
             await agent("test")
 
@@ -210,7 +210,7 @@ def test_skip_permissions_adds_allow_all_tools():
 
     @workflow
     async def wf():
-        with patch("godel.agents._copilot.run", new=capture_run):
+        with patch("godel.agents._common.run", new=capture_run):
             agent = copilot(skip_permissions=True)
             return await agent("give me a number", schema=MyModel)
 
@@ -240,7 +240,7 @@ def test_skip_permissions_false_no_allow_all_tools_in_fallback():
 
     @workflow
     async def wf():
-        with patch("godel.agents._copilot.run", new=capture_run):
+        with patch("godel.agents._common.run", new=capture_run):
             agent = copilot(skip_permissions=False)
             return await agent("give me a number", schema=MyModel)
 
@@ -278,7 +278,7 @@ def test_skip_permissions_with_tools_extraction_has_no_tool_flags():
 
     @workflow
     async def wf():
-        with patch("godel.agents._copilot.run", new=capture_run):
+        with patch("godel.agents._common.run", new=capture_run):
             agent = copilot(skip_permissions=True, tools=["bash"])
             return await agent("give me a number", schema=MyModel)
 
@@ -315,7 +315,7 @@ def test_copilot_schema_raw_json():
     """Direct JSON in stdout → parsed and validated."""
     @workflow
     async def wf():
-        with patch("godel.agents._copilot.run", new=_mock_run_returning('{"value": 7}')):
+        with patch("godel.agents._common.run", new=_mock_run_returning('{"value": 7}')):
             agent = copilot()
             result = await agent("give me a number", schema=MyModel)
             assert isinstance(result, MyModel)
@@ -330,7 +330,7 @@ def test_copilot_schema_fenced_json():
 
     @workflow
     async def wf():
-        with patch("godel.agents._copilot.run", new=_mock_run_returning(fenced)):
+        with patch("godel.agents._common.run", new=_mock_run_returning(fenced)):
             agent = copilot()
             result = await agent("give me a number", schema=MyModel)
             assert isinstance(result, MyModel)
@@ -353,7 +353,7 @@ def test_copilot_schema_fallback_extraction():
 
     @workflow
     async def wf():
-        with patch("godel.agents._copilot.run", new=two_step_run):
+        with patch("godel.agents._common.run", new=two_step_run):
             agent = copilot()
             result = await agent("give me a number", schema=MyModel)
             assert isinstance(result, MyModel)
@@ -378,7 +378,7 @@ def test_copilot_schema_fallback_uses_extraction_model():
 
     @workflow
     async def wf():
-        with patch("godel.agents._copilot.run", new=capture_run):
+        with patch("godel.agents._common.run", new=capture_run):
             agent = copilot()
             await agent("test", schema=MyModel)
 
@@ -393,7 +393,7 @@ def test_copilot_schema_total_failure_raises():
     """When all coercion strategies fail, SchemaValidationFailure is raised."""
     @workflow
     async def wf():
-        with patch("godel.agents._copilot.run", new=_mock_run_returning("not json at all")):
+        with patch("godel.agents._common.run", new=_mock_run_returning("not json at all")):
             agent = copilot()
             with pytest.raises(SchemaValidationFailure):
                 await agent("give me a number", schema=MyModel)
@@ -425,7 +425,7 @@ def test_complex_tool_name_is_shell_quoted():
 
     @workflow
     async def wf():
-        with patch("godel.agents._copilot.run", new=capture_run):
+        with patch("godel.agents._common.run", new=capture_run):
             agent = copilot(tools=[complex_tool])
             await agent("test")
 
@@ -455,7 +455,7 @@ def test_schema_validation_failure_type_identity():
     """
     @workflow
     async def wf():
-        with patch("godel.agents._copilot.run", new=_mock_run_returning("not json")):
+        with patch("godel.agents._common.run", new=_mock_run_returning("not json")):
             agent = copilot()
             try:
                 await agent("test", schema=MyModel)
@@ -484,7 +484,7 @@ def test_copilot_error_path_emits_failed(tmp_path, monkeypatch):
     async def wf():
         agent = copilot(model="default")
         with patch(
-            "godel.agents._copilot.run",
+            "godel.agents._common.run",
             new=AsyncMock(side_effect=CommandFailure("copilot failed", returncode=1)),
         ):
             return await agent("test prompt")
@@ -511,7 +511,7 @@ def test_copilot_success_emits_started_finished(tmp_path, monkeypatch):
     async def wf():
         agent = copilot(model="default")
         with patch(
-            "godel.agents._copilot.run",
+            "godel.agents._common.run",
             new=AsyncMock(
                 return_value=CommandResult(stdout="hello", stderr="", returncode=0)
             ),

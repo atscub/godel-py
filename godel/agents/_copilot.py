@@ -29,7 +29,7 @@ from __future__ import annotations
 import json
 import shlex
 
-from godel._run import run  # noqa: F401 — re-exported so tests can patch `godel.agents._copilot.run`
+from godel._run import run  # noqa: F401 — re-exported for backward-compat; canonical patch target is godel.agents._common.run
 from godel.agents._common import _BaseAgent
 
 __all__ = ["copilot"]

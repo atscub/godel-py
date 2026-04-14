@@ -33,7 +33,7 @@ def test_claude_code_delegates_to_run():
 
     @workflow
     async def wf():
-        with patch("godel.agents._claude.run", new=_mock_run_returning(response)):
+        with patch("godel.agents._common.run", new=_mock_run_returning(response)):
             agent = claude_code()
             result = await agent("say hello")
             assert result == "hello world"
@@ -46,7 +46,7 @@ def test_claude_code_schema_parsing():
 
     @workflow
     async def wf():
-        with patch("godel.agents._claude.run", new=_mock_run_returning(response)):
+        with patch("godel.agents._common.run", new=_mock_run_returning(response)):
             agent = claude_code()
             result = await agent("give me a number", schema=MyModel)
             assert isinstance(result, MyModel)
@@ -60,7 +60,7 @@ def test_claude_code_schema_failure():
 
     @workflow
     async def wf():
-        with patch("godel.agents._claude.run", new=_mock_run_returning(response)):
+        with patch("godel.agents._common.run", new=_mock_run_returning(response)):
             agent = claude_code()
             with pytest.raises(SchemaValidationFailure):
                 await agent("give me a number", schema=MyModel)
@@ -80,7 +80,7 @@ def test_claude_code_model_alias():
 
     @workflow
     async def wf():
-        with patch("godel.agents._claude.run", new=capture_run):
+        with patch("godel.agents._common.run", new=capture_run):
             await agent("test")
 
     asyncio.run(wf())
@@ -117,7 +117,7 @@ def test_claude_session_id_captured_and_resumed():
 
     @workflow
     async def wf():
-        with patch("godel.agents._claude.run", new=capture_run):
+        with patch("godel.agents._common.run", new=capture_run):
             agent = claude_code()
             await agent("one")
             await agent("two")
@@ -145,7 +145,7 @@ def test_agent_serializes_concurrent_calls():
 
     @workflow
     async def wf():
-        with patch("godel.agents._claude.run", new=slow_run):
+        with patch("godel.agents._common.run", new=slow_run):
             agent = claude_code()
             await asyncio.gather(agent("a"), agent("b"), agent("c"))
 
