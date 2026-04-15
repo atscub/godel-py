@@ -1,14 +1,13 @@
 # Monitoring godel runs (agent guide)
 
-Lessons from monitoring `examples/feature_factory.py` runs. Aimed at future
-agents that need to babysit a long workflow without burning context or losing
+Tricks for gents that need to babysit a long workflow without burning context or losing
 the run to a terminal mishap.
 
 ## TL;DR
 
 - Run bare (`python -m godel run FILE`), **not** `--watch` / `--plain`. The
-  watchers can spam terminals enough to SIGHUP the workflow (see
-  `godel-py-7kd`). Until that's fixed, monitor from a separate channel.
+  watchers can spam terminals enough to SIGHUP the workflow. 
+  Until that's fixed, monitor from a separate channel.
 - Tail `runs/<id>.jsonl` directly. It is append-only JSON-per-line and is
   the source of truth for everything godel did.
 - Filter aggressively. The raw stream contains tool calls, streamed agent
@@ -27,7 +26,7 @@ runs/<id>/transcript.jsonl  # full chunked stream: prompts, tool calls,
 `request.prompt` and `response.value` in `<id>.jsonl` are clipped to ~500
 chars. Full content lives in `transcript.jsonl` as chunked
 `agent.response` events grouped by `stream_path`. Reassemble by
-concatenating `text` fields per `stream_path`. (Tracked: `godel-py-6wg`.)
+concatenating `text` fields per `stream_path`.
 
 ## High-signal event shapes
 
@@ -113,7 +112,7 @@ while True:
     time.sleep(1)
 ```
 
-Wire that to `Monitor(persistent=true, command="python -u /tmp/godel_monitor.py runs/<id>.jsonl")`.
+Wire that to `Monitor(persistent=true, command="python -u /tmp/godel_monitor.py runs/<id>.jsonl")` (claude code specific, check for alternative patterns on other backends).
 Each filtered line becomes one harness notification — no polling, no cache
 churn, instant on event.
 
@@ -184,8 +183,6 @@ string repr of the pydantic model. To get the full structured output:
      crashed run to unstick manually.
   3. Fresh run (last resort — loses all prior agent tokens).
 
-  (`godel-py-ddt` proposes opt-in idempotency to make option 1 less
-  necessary.)
 - **Run looks stuck**: check whether last event is `input STARTED` (waiting
   on stdin) before assuming a hang. `input()` is `sys.stdin.readline()` —
   pipe stdin or press enter in the controlling terminal.
