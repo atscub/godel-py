@@ -23,6 +23,7 @@ GUIDES: list[tuple[str, str]] = [
     ("concepts", "Mental model — @workflow, @step, event log, replay"),
     ("engineer", "Author workflows: when to use @step, schemas, failure handling"),
     ("runner",   "Execute / resume / pause / rewind / repair workflows"),
+    ("monitoring", "Tail/monitor a live run efficiently without burning context"),
     ("cli",      "Full CLI reference for every godel command"),
     ("api-reference", "Python API reference — decorators, primitives, types"),
 ]

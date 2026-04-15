@@ -176,7 +176,7 @@ Named-workflow registry. Workflows live in `.godel/workflows/*.py` (project) or
 ### `godel guide [NAME]`
 Print one of the bundled onboarding guides shipped with the installed package, so agents
 can pull just-in-time context without the godel repo being present. Available slugs:
-`getting-started`, `concepts`, `engineer`, `runner`, `cli`, `api-reference`. Call with
+`getting-started`, `concepts`, `engineer`, `runner`, `monitoring`, `cli`, `api-reference`. Call with
 no `NAME` to list them all.
 
 ## Run-lifecycle cheat sheet

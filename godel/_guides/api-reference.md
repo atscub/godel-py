@@ -36,6 +36,15 @@ await agent(prompt: str, *, schema: Type[BaseModel]) -> BaseModel
 
 Raises `SchemaValidationFailure` if `schema=` is set and the reply cannot be parsed.
 
+> **Schema design guidance.** Keep schemas minimal and flat. Models reliably
+> emit JSON for small, single-purpose schemas with primitive fields and short
+> string lists. Risks rise sharply with: deep nesting, many sibling models,
+> long free-text fields, optional/union fields, or schemas that mix
+> control-flow signals with prose. Prefer one schema per decision (a verdict,
+> a report, a ref) over one schema that bundles several outputs. If a model
+> repeatedly fails to produce valid JSON, simplify the schema before
+> reaching for retries.
+
 ### `godel.agents.copilot(*, model="default", cwd=None, tools=None, skip_permissions=False)`
 Returns an async callable wrapping the `copilot` CLI (from the `@github/copilot-cli` npm
 package, v0.0.337+).
