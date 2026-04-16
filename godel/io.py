@@ -31,13 +31,17 @@ def _maybe_warn_non_tty() -> None:
         return  # Caller declared intent — no warning needed.
     try:
         if not sys.stdin.isatty():
+            # Set sentinel BEFORE writing so concurrent callers (e.g. parallel
+            # steps awaiting input() at once) can't both pass the guard and
+            # emit the warning twice.
+            _tty_warned = True
             sys.stderr.write(
                 "[godel] warning: godel.input() called but stdin is not a TTY. "
                 "To script checkpoint answers, pipe answers or set "
-                "GODEL_AUTO_CHECKPOINT=1 to suppress this warning.\n"
+                "GODEL_AUTO_CHECKPOINT=<mode> (e.g. pipe, file, fifo) to "
+                "suppress this warning.\n"
             )
             sys.stderr.flush()
-            _tty_warned = True
     except Exception:
         pass  # Swallow — TTY detection is best-effort.
 

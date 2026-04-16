@@ -183,16 +183,20 @@ GODEL_AUTO_CHECKPOINT=pipe godel run review.py < answers.txt
 ```
 [godel] warning: godel.input() called but stdin is not a TTY.
 To script checkpoint answers, pipe answers or set
-GODEL_AUTO_CHECKPOINT=1 to suppress this warning.
+GODEL_AUTO_CHECKPOINT=<mode> (e.g. pipe, file, fifo) to suppress this warning.
 ```
 
 Setting `GODEL_AUTO_CHECKPOINT` suppresses the warning and records the value
 in each `input` event's `request.auto_checkpoint` field, making the audit log
-self-documenting about how answers were supplied.
+self-documenting about how answers were supplied.  The `auto_checkpoint`
+value is **excluded from the replay `request_hash`** — it's execution-context
+metadata, not part of the workflow's logical request identity.
 
 **Replay is unaffected.**  A run scripted with piped stdin can still be
 resumed normally — the recorded answers are replayed from the audit log, so
-the new run does not need stdin to be re-piped.
+the new run does not need stdin to be re-piped.  You can even change or drop
+the `--auto-checkpoint` mode on the resume command line; the cached answers
+still match.
 
 ## Where next
 

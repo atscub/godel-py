@@ -257,7 +257,9 @@ def run_cmd(file, extra, no_strict, no_lint, watch, no_stream, plain, auto_check
         watch = True
     if no_stream:
         os.environ["GODEL_STREAM_AGENTS"] = "0"
-    if auto_checkpoint:
+    if auto_checkpoint is not None:
+        # Explicit --auto-checkpoint=<v> wins over any inherited env var.
+        # An empty string clears the declaration (falls back to warning).
         os.environ["GODEL_AUTO_CHECKPOINT"] = auto_checkpoint
     if watch:
         try:
@@ -481,7 +483,8 @@ def resume_cmd(run_id, file, on_mismatch, on_source_edit, no_strict, no_lint, no
 
     if no_stream:
         os.environ["GODEL_STREAM_AGENTS"] = "0"
-    if auto_checkpoint:
+    if auto_checkpoint is not None:
+        # Explicit --auto-checkpoint=<v> wins over any inherited env var.
         os.environ["GODEL_AUTO_CHECKPOINT"] = auto_checkpoint
 
     # 1. Find JSONL by prefix

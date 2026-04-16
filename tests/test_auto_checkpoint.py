@@ -6,17 +6,21 @@ Covers:
 - warning emitted when stdin is not a TTY and env var is unset
 - warning suppressed when GODEL_AUTO_CHECKPOINT is set
 - warning fires only once per process (sentinel reset between tests via fixture)
+- replay is unaffected when auto_checkpoint mode changes between record and
+  resume (request_hash must exclude auto_checkpoint)
 """
 import asyncio
 import io
 import json
-import os
 import sys
 import pytest
-from unittest.mock import patch
 
 import godel.io as godel_io
+from godel._context import WorkflowContext, _current_workflow
 from godel._decorators import workflow
+from godel._event_log import EventLog
+from godel._events import Event
+from godel._replay import ReplayWalker
 from godel.io import input as ainput
 
 
@@ -185,3 +189,99 @@ def test_input_multiple_answers_from_pipe(monkeypatch):
         return a, b, c
 
     assert asyncio.run(wf()) == ("first", "second", "third")
+
+
+# ---------------------------------------------------------------------------
+# Replay determinism: auto_checkpoint must NOT affect request_hash
+# ---------------------------------------------------------------------------
+
+def test_compute_request_hash_ignores_auto_checkpoint():
+    """Auto-checkpoint mode is execution metadata, not request identity.
+
+    Changing the value (or dropping it) must produce the same hash so resume
+    never hits a spurious mismatch.
+    """
+    base = {"prompt": "proceed? "}
+    h_bare = Event.compute_request_hash(base)
+    h_pipe = Event.compute_request_hash({**base, "auto_checkpoint": "pipe"})
+    h_file = Event.compute_request_hash({**base, "auto_checkpoint": "file"})
+    h_one = Event.compute_request_hash({**base, "auto_checkpoint": "1"})
+    assert h_bare == h_pipe == h_file == h_one
+
+
+def _make_input_log(tmp_path, prompt: str, cached_value: str, auto_cp: str | None) -> EventLog:
+    """Persist a single FINISHED input event, optionally tagged with
+    auto_checkpoint, and return the reloaded log.
+    """
+    run_id = "auto-cp-replay"
+    log = EventLog(run_id, runs_dir=str(tmp_path))
+    req = {"prompt": prompt}
+    if auto_cp is not None:
+        req["auto_checkpoint"] = auto_cp
+    started = log.emit_started(
+        op="input",
+        step_path=(),
+        request=req,
+        invocation_seq=0,
+        step_local_seq=0,
+    )
+    log.emit_finished(started.event_id, response={"value": cached_value})
+    log.close()
+    return EventLog.load(run_id, runs_dir=str(tmp_path))
+
+
+@pytest.fixture
+def cleanup_ctx():
+    token = _current_workflow.set(None)
+    yield
+    try:
+        _current_workflow.reset(token)
+    except Exception:
+        _current_workflow.set(None)
+
+
+def test_replay_unaffected_when_auto_checkpoint_dropped(tmp_path, monkeypatch, cleanup_ctx):
+    """Record with GODEL_AUTO_CHECKPOINT=pipe, replay without it: cache hit."""
+    # Stage a persisted log whose input event carries auto_checkpoint="pipe".
+    loaded = _make_input_log(tmp_path, prompt="q? ", cached_value="yes", auto_cp="pipe")
+
+    walker = ReplayWalker(loaded)
+    ctx = WorkflowContext(
+        run_id=loaded._run_id,
+        event_log=loaded,
+        replay_walker=walker,
+    )
+    _current_workflow.set(ctx)
+
+    # Resume with NO env var — the request dict built by io.input() will not
+    # include auto_checkpoint.  Before the _HASH_EXCLUDE_KEYS fix this produced
+    # a different hash than the persisted event and the replay missed.
+    monkeypatch.delenv("GODEL_AUTO_CHECKPOINT", raising=False)
+    # stdin should never be read — if the replay misses we'd fall through to
+    # a blocking readline().  Point stdin at an empty buffer so any fallthrough
+    # surfaces as an empty string mismatch instead of hanging.
+    monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+    monkeypatch.setattr(sys, "stdout", io.StringIO())
+
+    result = asyncio.run(ainput("q? "))
+    assert result == "yes"
+
+
+def test_replay_unaffected_when_auto_checkpoint_changed(tmp_path, monkeypatch, cleanup_ctx):
+    """Record with mode=pipe, replay with mode=file: still a cache hit."""
+    loaded = _make_input_log(tmp_path, prompt="q? ", cached_value="approved", auto_cp="pipe")
+
+    walker = ReplayWalker(loaded)
+    ctx = WorkflowContext(
+        run_id=loaded._run_id,
+        event_log=loaded,
+        replay_walker=walker,
+    )
+    _current_workflow.set(ctx)
+
+    monkeypatch.setenv("GODEL_AUTO_CHECKPOINT", "file")
+    monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+    monkeypatch.setattr(sys, "stdout", io.StringIO())
+
+    result = asyncio.run(ainput("q? "))
+    assert result == "approved"

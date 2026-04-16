@@ -88,7 +88,11 @@ class Event:
     # editing source should trigger the source-edit guardrail, not a
     # request_hash mismatch.  Keeping them separate lets each policy (
     # --on-mismatch vs --on-source-edit) operate independently.
-    _HASH_EXCLUDE_KEYS: frozenset[str] = frozenset({"source_hash"})
+    # auto_checkpoint records how scripted-stdin answers were supplied
+    # (env-var mode, e.g. "pipe"/"file"/"fifo"/"1").  It's execution-context
+    # metadata, not part of the workflow's logical request identity, so a
+    # resume that changes or drops the mode must not trigger a hash mismatch.
+    _HASH_EXCLUDE_KEYS: frozenset[str] = frozenset({"source_hash", "auto_checkpoint"})
 
     @staticmethod
     def compute_request_hash(request: dict) -> str:
