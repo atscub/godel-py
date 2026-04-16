@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v3.6.0 (2026-04-16)
+
+### Bug Fixes
+
+- **agents**: Apply all pass-1 review findings (C1, C2, W1–W4)
+  ([`f87dea9`](https://github.com/atscub/godel-py/commit/f87dea965fef9393fa52bc6cf1a5e7f04005e8b3))
+
+### Features
+
+- **agents**: Add system_prompt kwarg — set once, not repeated per call
+  ([`0eb7c08`](https://github.com/atscub/godel-py/commit/0eb7c088597152960f6db20b7942babfd20633c2))
+
+
 ## v3.5.0 (2026-04-16)
 
 
