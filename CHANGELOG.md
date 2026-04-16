@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v3.8.0 (2026-04-16)
+
+### Bug Fixes
+
+- **timeout**: Pass-1 CRITICAL + WARN fixes for @step(timeout=N) cancellation propagation
+  ([`b41e253`](https://github.com/atscub/godel-py/commit/b41e253d7745d95362c24a9c3e476c00baaf842e))
+
+### Features
+
+- **step**: Add timeout=N parameter for per-step wall-clock cancellation
+  ([`0c3bf9d`](https://github.com/atscub/godel-py/commit/0c3bf9d77d3e24754c391c2c1917a6337f220f8f))
+
+
 ## v3.7.0 (2026-04-16)
 
 ### Bug Fixes
