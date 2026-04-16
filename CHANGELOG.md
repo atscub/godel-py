@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v3.10.1 (2026-04-16)
+
+### Bug Fixes
+
+- **strict-ast**: Detect aliased from-import sleep bypassing the ban
+  ([`0ca01b4`](https://github.com/atscub/godel-py/commit/0ca01b49416405a48f0a2cdf4c045766e6b3b765))
+
+
 ## v3.10.0 (2026-04-16)
 
 ### Features
