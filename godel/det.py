@@ -5,6 +5,8 @@ In M3 (replay), they will return the recorded value instead of executing.
 """
 from __future__ import annotations
 
+import asyncio
+import math
 import secrets
 import uuid as _uuid
 from datetime import datetime, timezone
@@ -124,3 +126,68 @@ def uuid4() -> str:
         ctx.event_log.emit_finished(event.event_id, response={"value": value})
 
     return value
+
+
+async def sleep(seconds: float) -> None:
+    """Deterministic audited sleep.
+
+    Records the sleep in the event log on first call so that replay skips
+    the actual wait entirely (returns immediately without sleeping).
+
+    This is the primitive used internally by ``@retry`` exponential backoff.
+    It may also be used directly in workflow code when you need a recorded
+    sleep that is guaranteed to be a no-op on replay.
+
+    Args:
+        seconds: Duration to sleep. Must be a finite non-negative number.
+
+    Raises:
+        RuntimeError: If called outside a ``@workflow``.
+        ValueError: If *seconds* is negative, NaN, or not finite.
+    """
+    try:
+        seconds_f = float(seconds)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"godel.det.sleep() requires a numeric duration, got {seconds!r}"
+        ) from exc
+    if math.isnan(seconds_f) or not math.isfinite(seconds_f) or seconds_f < 0:
+        raise ValueError(
+            f"godel.det.sleep() requires a finite non-negative duration, got {seconds!r}"
+        )
+    seconds = seconds_f
+
+    ctx = _current_workflow.get()
+    if ctx is None:
+        raise RuntimeError("godel.det.sleep() must be called inside a @workflow")
+
+    inv_seq, local_seq = ctx.next_op_position()
+
+    # Replay guard — on a finished cache hit, skip the actual sleep entirely.
+    if ctx.replay_walker:
+        from godel._events import Event, EventStatus
+        req = {"seconds": seconds}
+        req_hash = Event.compute_request_hash(req)
+        match = ctx.replay_walker.try_match(
+            step_path=tuple(ctx.step_stack),
+            invocation_seq=inv_seq,
+            step_local_seq=local_seq,
+            op="det.sleep",
+            request_hash=req_hash,
+        )
+        if match.hit and match.status == EventStatus.FINISHED:
+            return
+
+    if ctx.event_log:
+        event = ctx.event_log.emit_started(
+            op="det.sleep",
+            step_path=tuple(ctx.step_stack),
+            request={"seconds": seconds},
+            invocation_seq=inv_seq,
+            step_local_seq=local_seq,
+            parent_event_id=ctx.current_parent_event_id,
+        )
+        await asyncio.sleep(seconds)
+        ctx.event_log.emit_finished(event.event_id, response={"seconds": seconds})
+    else:
+        await asyncio.sleep(seconds)

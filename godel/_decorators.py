@@ -985,12 +985,38 @@ async def parallel(*aws: Awaitable[T]) -> tuple:
     return tuple(results)
 
 
-def retry(times: int):
+def retry(
+    times: int,
+    *,
+    backoff_seconds: float = 0.0,
+    backoff_multiplier: float = 2.0,
+):
+    """Retry decorator with optional exponential backoff.
+
+    Args:
+        times: Total number of attempts (including the first).
+        backoff_seconds: Base wait time in seconds before the second attempt.
+            Wait before attempt *k* (1-indexed, where 1 is the first retry)
+            is ``backoff_seconds * (backoff_multiplier ** (k - 1))``.
+            Defaults to ``0.0`` (no delay — preserves existing behaviour).
+        backoff_multiplier: Multiplier applied to each successive wait.
+            Defaults to ``2.0`` (doubles the wait on each retry).
+
+    The backoff sleep is recorded via ``godel.det.sleep()`` so that replay
+    skips the actual wait entirely — replayed runs return cached results
+    at full speed.
+    """
     def decorator(fn):
         @functools.wraps(fn)
         async def wrapper(*args, **kwargs):
             last_exc = None
-            for _ in range(times):
+            for attempt in range(times):
+                if attempt > 0 and backoff_seconds > 0.0:
+                    # Wait before this retry. attempt=1 → first retry.
+                    # Wait = backoff_seconds * (backoff_multiplier ** (attempt - 1))
+                    delay = backoff_seconds * (backoff_multiplier ** (attempt - 1))
+                    from godel import det as _det
+                    await _det.sleep(delay)
                 try:
                     return await fn(*args, **kwargs)
                 except (RewindSignal, PauseSignal):

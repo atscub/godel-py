@@ -141,3 +141,137 @@ def test_parallel_concurrent():
 
     result = asyncio.run(my_wf())
     assert result == (1, 2)
+
+
+# ---------------------------------------------------------------------------
+# Exponential backoff tests
+# ---------------------------------------------------------------------------
+
+def test_retry_backoff_no_args_identical_to_current():
+    """@retry(times=3) with no backoff args is identical to current behaviour."""
+    call_count = 0
+
+    @retry(3)
+    @step
+    async def flaky():
+        nonlocal call_count
+        call_count += 1
+        raise WorkflowFail("fail")
+
+    @workflow
+    async def my_wf():
+        await flaky()
+
+    with pytest.raises(WorkflowFail):
+        asyncio.run(my_wf())
+    assert call_count == 3
+
+
+def test_retry_backoff_zero_preserves_zero_delay():
+    """backoff_seconds=0 explicitly preserves zero delay (no det.sleep calls)."""
+    sleep_calls = []
+
+    import godel.det as det_mod
+    original_sleep = det_mod.sleep
+
+    async def mock_sleep(seconds):
+        sleep_calls.append(seconds)
+        # Do NOT actually sleep
+    det_mod.sleep = mock_sleep
+
+    try:
+        call_count = 0
+
+        @retry(3, backoff_seconds=0.0)
+        @step
+        async def flaky():
+            nonlocal call_count
+            call_count += 1
+            raise WorkflowFail("fail")
+
+        @workflow
+        async def my_wf():
+            await flaky()
+
+        with pytest.raises(WorkflowFail):
+            asyncio.run(my_wf())
+    finally:
+        det_mod.sleep = original_sleep
+
+    assert call_count == 3
+    assert sleep_calls == [], "No sleep should be called when backoff_seconds=0"
+
+
+def test_retry_backoff_delays_computed_correctly():
+    """backoff_seconds * multiplier^(k-1) delays are passed to det.sleep."""
+    sleep_calls = []
+
+    import godel.det as det_mod
+    original_sleep = det_mod.sleep
+
+    async def mock_sleep(seconds):
+        sleep_calls.append(seconds)
+        # Do NOT actually sleep
+
+    det_mod.sleep = mock_sleep
+
+    try:
+        call_count = 0
+
+        @retry(3, backoff_seconds=1.0, backoff_multiplier=2.0)
+        @step
+        async def flaky():
+            nonlocal call_count
+            call_count += 1
+            raise WorkflowFail("fail")
+
+        @workflow
+        async def my_wf():
+            await flaky()
+
+        with pytest.raises(WorkflowFail):
+            asyncio.run(my_wf())
+    finally:
+        det_mod.sleep = original_sleep
+
+    assert call_count == 3
+    # attempt 0 → no sleep; attempt 1 → 1*2^0=1s; attempt 2 → 1*2^1=2s
+    assert sleep_calls == [1.0, 2.0]
+
+
+def test_retry_backoff_succeeds_on_second_try_with_backoff():
+    """With backoff, retry succeeds on the second attempt."""
+    sleep_calls = []
+
+    import godel.det as det_mod
+    original_sleep = det_mod.sleep
+
+    async def mock_sleep(seconds):
+        sleep_calls.append(seconds)
+
+    det_mod.sleep = mock_sleep
+
+    try:
+        call_count = 0
+
+        @retry(3, backoff_seconds=1.0, backoff_multiplier=2.0)
+        @step
+        async def flaky():
+            nonlocal call_count
+            call_count += 1
+            if call_count < 2:
+                raise WorkflowFail("fail")
+            return "ok"
+
+        @workflow
+        async def my_wf():
+            return await flaky()
+
+        result = asyncio.run(my_wf())
+    finally:
+        det_mod.sleep = original_sleep
+
+    assert result == "ok"
+    assert call_count == 2
+    # One sleep before the second attempt: 1 * 2^0 = 1s
+    assert sleep_calls == [1.0]
