@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v3.10.0 (2026-04-16)
+
+### Features
+
+- **formatters**: Surface path and byte-count in read_text/write_text display
+  ([`e177103`](https://github.com/atscub/godel-py/commit/e1771033a9c0b6b280f4a9abb18187c7180405da))
+
+
 ## v3.9.0 (2026-04-16)
 
 ### Bug Fixes
