@@ -7,7 +7,7 @@ import pytest
 from pydantic import BaseModel
 
 from godel.agents._claude import claude_code, SchemaValidationFailure, _ClaudeCodeAgent
-from godel._run import CommandResult
+from godel._run import CommandResult, CommandFailure
 from godel._decorators import workflow
 
 
@@ -266,3 +266,247 @@ def test_claude_code_system_prompt_sent_flag_tracks_state():
             assert agent._system_prompt_sent is True
 
     asyncio.run(wf())
+
+
+# ---------------------------------------------------------------------------
+# REVIEW FIX C1: system_prompt must appear in the agent.call event log entry
+# for the first call (audit log must record the prompt actually sent to CLI).
+# ---------------------------------------------------------------------------
+
+def test_claude_code_system_prompt_recorded_in_event_log(tmp_path, monkeypatch):
+    """The first agent.call event logs the *combined* prompt (system + user)."""
+    monkeypatch.chdir(tmp_path)
+
+    async def fake_run(cmd, **kwargs):
+        return CommandResult(
+            stdout='{"result": "ok", "session_id": "s1"}',
+            stderr="", returncode=0,
+        )
+
+    @workflow
+    async def wf():
+        with patch("godel.agents._common.run", new=fake_run):
+            agent = claude_code(system_prompt="SYS-BRIEF-XYZ")
+            await agent("USER-MSG-ABC")
+            await agent("USER-MSG-DEF")
+
+    asyncio.run(wf())
+
+    runs = list((tmp_path / "runs").glob("*.jsonl"))
+    assert runs, "No event log written"
+    events = [json.loads(line) for line in runs[0].read_text().strip().split("\n")]
+    agent_started = [
+        e for e in events if e["op"] == "agent.call" and e["status"] == "STARTED"
+    ]
+    assert len(agent_started) == 2
+    # First call: system briefing is part of the logged prompt.
+    first_prompt = agent_started[0]["request"]["prompt"]
+    assert "SYS-BRIEF-XYZ" in first_prompt, (
+        f"First agent.call prompt must contain system briefing, got: {first_prompt!r}"
+    )
+    assert "USER-MSG-ABC" in first_prompt
+    # Second call: system briefing is NOT in the logged prompt.
+    second_prompt = agent_started[1]["request"]["prompt"]
+    assert "SYS-BRIEF-XYZ" not in second_prompt, (
+        f"Second agent.call prompt must NOT contain system briefing, got: {second_prompt!r}"
+    )
+    assert "USER-MSG-DEF" in second_prompt
+
+
+# ---------------------------------------------------------------------------
+# REVIEW FIX C2: if the first CLI call fails, _system_prompt_sent must stay
+# False so that retries still carry the briefing.
+# ---------------------------------------------------------------------------
+
+def test_claude_code_system_prompt_preserved_across_first_call_failure():
+    """First call fails → _system_prompt_sent stays False → retry re-prepends."""
+    cmds: list[str] = []
+    call = 0
+
+    async def flaky_run(cmd, **kwargs):
+        nonlocal call
+        cmds.append(cmd)
+        call += 1
+        if call == 1:
+            raise CommandFailure("transient CLI crash", returncode=1)
+        return CommandResult(
+            stdout='{"result": "ok", "session_id": "s1"}',
+            stderr="", returncode=0,
+        )
+
+    @workflow
+    async def wf():
+        with patch("godel.agents._common.run", new=flaky_run):
+            agent = claude_code(system_prompt="RETRY-BRIEF")
+            assert agent._system_prompt_sent is False
+            with pytest.raises(CommandFailure):
+                await agent("first try")
+            # Flag must still be False so the briefing travels with the retry.
+            assert agent._system_prompt_sent is False
+            await agent("retry")
+            # Now (and only now) flipped.
+            assert agent._system_prompt_sent is True
+
+    asyncio.run(wf())
+    assert len(cmds) == 2
+    # Both the failed first call and the successful retry carry the briefing.
+    assert "RETRY-BRIEF" in cmds[0]
+    assert "RETRY-BRIEF" in cmds[1]
+
+
+# ---------------------------------------------------------------------------
+# REVIEW FIX W2: whitespace-only system_prompt is normalised to "no prompt"
+# ---------------------------------------------------------------------------
+
+def test_claude_code_whitespace_system_prompt_is_ignored():
+    """system_prompt='   ' is treated as no system prompt (no prepend, no flag)."""
+    cmds: list[str] = []
+
+    async def capture_run(cmd, **kwargs):
+        cmds.append(cmd)
+        return CommandResult(
+            stdout='{"result": "ok"}', stderr="", returncode=0,
+        )
+
+    @workflow
+    async def wf():
+        with patch("godel.agents._common.run", new=capture_run):
+            agent = claude_code(system_prompt="   \n  \t  ")
+            assert agent._system_prompt is None
+            await agent("real prompt")
+
+    asyncio.run(wf())
+    assert len(cmds) == 1
+    # The leading whitespace wrapper must NOT appear in the command; only the
+    # caller's real prompt text.
+    assert "real prompt" in cmds[0]
+    # Bare '\n\n' from the prepend formatter should not be present.
+    # (We can't easily check for "no whitespace" but we can check the
+    # shlex-quoted prompt does not start with whitespace.)
+    import shlex
+    assert shlex.quote("real prompt") in cmds[0]
+
+
+def test_claude_code_empty_system_prompt_is_ignored():
+    """system_prompt='' is treated as no system prompt."""
+    agent = claude_code(system_prompt="")
+    assert agent._system_prompt is None
+
+
+def test_claude_code_system_prompt_is_stripped():
+    """Leading / trailing whitespace is stripped at construction."""
+    agent = claude_code(system_prompt="  hello world  \n")
+    assert agent._system_prompt == "hello world"
+
+
+# ---------------------------------------------------------------------------
+# REVIEW FIX W3: system_prompt works correctly with schema=... (structured)
+# ---------------------------------------------------------------------------
+
+def test_claude_code_system_prompt_with_schema_path():
+    """system_prompt is prepended exactly once on the first schema-structured call."""
+    cmds: list[str] = []
+    call = 0
+
+    async def capture_run(cmd, **kwargs):
+        nonlocal call
+        cmds.append(cmd)
+        call += 1
+        return CommandResult(
+            stdout=json.dumps({"result": '{"value": 42}', "session_id": "s1"}),
+            stderr="", returncode=0,
+        )
+
+    @workflow
+    async def wf():
+        with patch("godel.agents._common.run", new=capture_run):
+            agent = claude_code(system_prompt="BRIEF-W3")
+            r1 = await agent("first", schema=MyModel)
+            r2 = await agent("second", schema=MyModel)
+            assert isinstance(r1, MyModel) and r1.value == 42
+            assert isinstance(r2, MyModel) and r2.value == 42
+
+    asyncio.run(wf())
+    assert len(cmds) == 2
+    # First call: carries the briefing AND schema boilerplate.
+    assert "BRIEF-W3" in cmds[0]
+    assert "JSON" in cmds[0]  # schema boilerplate keyword
+    # Second call: briefing absent, schema boilerplate still there.
+    assert "BRIEF-W3" not in cmds[1]
+    assert "JSON" in cmds[1]
+
+
+# ---------------------------------------------------------------------------
+# REVIEW FIX W4: concurrent calls on a system_prompt agent — exactly ONE
+# prepend across all calls (the lock serialises them, and only the first one
+# through flips the flag).
+# ---------------------------------------------------------------------------
+
+def test_claude_code_system_prompt_concurrent_calls_prepend_once():
+    """Three concurrent calls → briefing appears in exactly one command."""
+    cmds: list[str] = []
+
+    async def slow_run(cmd, **kwargs):
+        cmds.append(cmd)
+        await asyncio.sleep(0.005)
+        return CommandResult(
+            stdout='{"result": "ok", "session_id": "s"}',
+            stderr="", returncode=0,
+        )
+
+    @workflow
+    async def wf():
+        with patch("godel.agents._common.run", new=slow_run):
+            agent = claude_code(system_prompt="ONCE-ONLY-BRIEF")
+            await asyncio.gather(agent("a"), agent("b"), agent("c"))
+
+    asyncio.run(wf())
+    assert len(cmds) == 3
+    occurrences = sum("ONCE-ONLY-BRIEF" in c for c in cmds)
+    assert occurrences == 1, (
+        f"System prompt must appear in exactly one of the three concurrent "
+        f"commands; got {occurrences}. Commands: {cmds!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# REVIEW FIX W1: resumed session (session_id already set) must NOT re-prepend
+# the system_prompt even if _system_prompt_sent is False (as it would be after
+# workflow resume reconstructs the agent instance from scratch).
+# ---------------------------------------------------------------------------
+
+def test_claude_code_system_prompt_not_prepended_when_session_already_set():
+    """When _session_id is already populated (resume scenario), system_prompt
+    is NOT re-prepended even though _system_prompt_sent is still False."""
+    cmds: list[str] = []
+    call = 0
+
+    async def capture_run(cmd, **kwargs):
+        nonlocal call
+        cmds.append(cmd)
+        call += 1
+        return CommandResult(
+            stdout=f'{{"result": "r{call}", "session_id": "resumed-sess"}}',
+            stderr="", returncode=0,
+        )
+
+    @workflow
+    async def wf():
+        with patch("godel.agents._common.run", new=capture_run):
+            # Simulate a resumed agent: freshly constructed but already has a
+            # session_id from the replay of prior completed calls.
+            agent = claude_code(system_prompt="RESUME-BRIEF")
+            assert agent._system_prompt_sent is False
+            # Inject the session id as the replay would have done.
+            agent._session_id = "resumed-sess"
+
+            await agent("post-resume call")
+
+    asyncio.run(wf())
+    assert len(cmds) == 1
+    # The session already carries the briefing — must NOT be prepended again.
+    assert "RESUME-BRIEF" not in cmds[0], (
+        f"system_prompt must not be re-prepended when session_id is already set; "
+        f"got: {cmds[0]!r}"
+    )
+    assert "post-resume call" in cmds[0]

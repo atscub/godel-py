@@ -194,9 +194,17 @@ class _BaseAgent:
         self._tools = tools
         self._skip_permissions = skip_permissions
         self._session_id: str | None = None
-        self._system_prompt: str | None = system_prompt
-        # Tracks whether the system_prompt has been prepended to a call yet.
-        # Set to True after the first call so subsequent calls do not repeat it.
+        # Normalise the system prompt: strip whitespace and treat empty / all
+        # whitespace as "no system prompt at all" so we never prepend bare
+        # whitespace into the first user prompt.
+        if system_prompt is not None:
+            stripped = system_prompt.strip()
+            self._system_prompt: str | None = stripped or None
+        else:
+            self._system_prompt = None
+        # Tracks whether the system_prompt has been successfully sent to the
+        # CLI. Flipped to True only AFTER a successful agent call returns, so
+        # a first-call failure leaves the prompt available for retry.
         self._system_prompt_sent: bool = False
         # Agents are conversational: a single instance must serialize its
         # calls so session state stays coherent under PARALLEL / gather().
@@ -222,25 +230,48 @@ class _BaseAgent:
         new_stream_path = parent_stream_path + [launch_id]
         stream_path_token = _current_stream_path.set(new_stream_path)
 
+        # The system-prompt prepend + event emission + CLI invocation all
+        # happen inside self._lock so that under concurrent gather()/PARALLEL
+        # the briefing is prepended exactly once (whichever task acquires the
+        # lock first sees _system_prompt_sent=False, prepends, and — after
+        # success — flips the flag; the rest see the flipped flag).
         event = None
-        if ctx and ctx.event_log:
-            request_data = {
-                "model": self._model,
-                "prompt": prompt[:500],
-                "has_schema": schema is not None,
-                "schema_name": schema.__name__ if schema else None,
-                "session_id": self._session_id,
-            }
-            event = ctx.event_log.emit_started(
-                op="agent.call",
-                step_path=tuple(ctx.step_stack),
-                request=request_data,
-                stream_path=new_stream_path,
-            )
-
+        prepended_system_prompt = False
         try:
             try:
                 async with self._lock:
+                    # Apply the system-prompt prepend INSIDE the lock so the
+                    # audit log records the exact prompt sent to the CLI
+                    # and so concurrent calls cannot each re-prepend.
+                    # The flag is NOT flipped here — we must wait until the
+                    # CLI call succeeds (see below) so a first-call failure
+                    # leaves the briefing available for retry.
+                    #
+                    # Resume guard: if _session_id is already set (either
+                    # because a prior successful call populated it, or because
+                    # workflow replay restored it), the briefing was already
+                    # delivered in that session — skip the prepend regardless
+                    # of _system_prompt_sent.  This prevents double-delivery
+                    # when a workflow resumes mid-run.
+                    if self._system_prompt and not self._system_prompt_sent and not self._session_id:
+                        prompt = f"{self._system_prompt}\n\n{prompt}"
+                        prepended_system_prompt = True
+
+                    if ctx and ctx.event_log:
+                        request_data = {
+                            "model": self._model,
+                            "prompt": prompt[:500],
+                            "has_schema": schema is not None,
+                            "schema_name": schema.__name__ if schema else None,
+                            "session_id": self._session_id,
+                        }
+                        event = ctx.event_log.emit_started(
+                            op="agent.call",
+                            step_path=tuple(ctx.step_stack),
+                            request=request_data,
+                            stream_path=new_stream_path,
+                        )
+
                     result = await self._execute(prompt, schema=schema)
             except (Exception, asyncio.CancelledError) as exc:
                 # NOTE: scope is intentionally (Exception, CancelledError) and
@@ -281,18 +312,23 @@ class _BaseAgent:
                 }
                 ctx.event_log.emit_finished(event.event_id, response=response_data)
 
+            # Only mark the system prompt as sent after a successful call;
+            # this way, if the first invocation raises (network error,
+            # CLI crash, etc.) the next retry still gets the briefing.
+            if prepended_system_prompt:
+                self._system_prompt_sent = True
+
             return result
         finally:
             _current_stream_path.reset(stream_path_token)
 
     async def _execute(self, prompt: str, *, schema=None):
         model_id = self._model_aliases.get(self._model, self._model)
-
-        # Prepend the system prompt on the very first call only.
-        if self._system_prompt and not self._system_prompt_sent:
-            prompt = f"{self._system_prompt}\n\n{prompt}"
-            self._system_prompt_sent = True
-
+        # Note: the system-prompt prepend lives in __call__() so that:
+        #   (a) the agent.call event log records the exact prompt sent to
+        #       the CLI (auditability), and
+        #   (b) the flag is flipped only after a successful call, letting
+        #       retries after a first-call failure still carry the briefing.
         full_prompt = prompt
         if schema is not None:
             schema_json = json.dumps(schema.model_json_schema(), indent=2)

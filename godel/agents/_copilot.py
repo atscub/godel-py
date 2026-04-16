@@ -153,6 +153,13 @@ def copilot(
         agent instance.  Subsequent calls on the same instance do not repeat
         it, so the context already lives in the conversation session.
 
+        Empty / whitespace-only strings are treated as "no system prompt"
+        and ignored silently.
+
+        The flag that records "system prompt already delivered" is flipped
+        only after a successful CLI call, so a first-call failure leaves the
+        briefing available for retry.
+
         Example::
 
             agent = copilot(
@@ -160,6 +167,13 @@ def copilot(
             )
             await agent("check feature A")   # preamble already in context
             await agent("check feature B")   # no repetition
+
+        Resume behaviour:
+            When a workflow resumes from an event log, agent objects are
+            re-constructed with ``_system_prompt_sent=False`` but the
+            session id is restored from the replayed events.  The runtime
+            detects an existing session id and skips re-prepending, so the
+            briefing is delivered exactly once even across a pause/resume.
     """
     return _CopilotAgent(
         model=model,
