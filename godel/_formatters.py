@@ -156,6 +156,16 @@ def _fmt_det_uuid4(event: "Event") -> str:
     return _base_line(event)
 
 
+@register("read_text")
+def _fmt_read_text(event: "Event") -> str:
+    return _base_line(event)
+
+
+@register("write_text")
+def _fmt_write_text(event: "Event") -> str:
+    return _base_line(event)
+
+
 @register("UNRECOVERABLE")
 def _fmt_unrecoverable(event: "Event") -> str:
     return _base_line(event)

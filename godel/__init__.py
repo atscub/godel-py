@@ -21,7 +21,7 @@ def version() -> str:
 
 from godel._decorators import workflow, step, WorkflowFail, parallel, retry
 from godel._run import run, CommandResult, CommandFailure
-from godel.io import print, input
+from godel.io import print, input, read_text, write_text
 from godel._events import Event, EventStatus
 from godel._event_log import EventLog
 from godel._context import get_event_log
@@ -59,6 +59,8 @@ __all__ = [
     "CommandFailure",
     "print",
     "input",
+    "read_text",
+    "write_text",
     "Event",
     "EventStatus",
     "EventLog",

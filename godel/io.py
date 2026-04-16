@@ -1,9 +1,10 @@
-"""Async print/input shadows with audit event emission."""
+"""Async print/input/read_text/write_text shadows with audit event emission."""
 import asyncio
 import os
 import sys
+from pathlib import Path
 
-from godel._context import _current_workflow
+from godel._context import _current_workflow, _privileged
 
 # Sentinel so we warn only once per process about non-TTY stdin with no
 # GODEL_AUTO_CHECKPOINT declaration.
@@ -174,3 +175,118 @@ async def input(prompt: str = "", *, schema=None):
     if event:
         ctx.event_log.emit_finished(event.event_id, response={"value": result})
     return result
+
+
+async def read_text(path: str) -> str:
+    """Read a file and record content in the audit log.
+
+    On replay, returns cached content without touching the filesystem.
+    Mismatch policy (--on-mismatch) applies when the path key differs.
+    """
+    ctx = _current_workflow.get()
+
+    inv_seq, local_seq = (0, 0)
+    if ctx:
+        inv_seq, local_seq = ctx.next_op_position()
+
+    req = {"path": path}
+
+    # Replay guard
+    if ctx and ctx.replay_walker:
+        from godel._events import Event, EventStatus
+        req_hash = Event.compute_request_hash(req)
+        match = ctx.replay_walker.try_match(
+            step_path=tuple(ctx.step_stack),
+            invocation_seq=inv_seq,
+            step_local_seq=local_seq,
+            op="read_text",
+            request_hash=req_hash,
+        )
+        if match.hit and match.status == EventStatus.FINISHED:
+            if match.hash_mismatch:
+                from godel._replay import handle_hash_mismatch
+                await handle_hash_mismatch(match, ctx.event_log)
+            return match.cached_response.get("content", "")
+
+    event = None
+    if ctx and ctx.event_log:
+        event = ctx.event_log.emit_started(
+            op="read_text",
+            step_path=tuple(ctx.step_stack),
+            request=req,
+            invocation_seq=inv_seq,
+            step_local_seq=local_seq,
+            parent_event_id=ctx.current_parent_event_id,
+        )
+
+    token = _privileged.set(True)
+    try:
+        content = Path(path).read_text()
+    finally:
+        _privileged.reset(token)
+
+    if event:
+        ctx.event_log.emit_finished(event.event_id, response={"content": content})
+    return content
+
+
+async def write_text(path: str, content: str) -> None:
+    """Write content to a file and record the operation in the audit log.
+
+    On replay, the write is skipped (filesystem is not touched) and the cached
+    result is returned.  Mismatch policy (--on-mismatch) applies when the
+    path/content key differs.
+    """
+    ctx = _current_workflow.get()
+
+    inv_seq, local_seq = (0, 0)
+    if ctx:
+        inv_seq, local_seq = ctx.next_op_position()
+
+    req = {"path": path, "content": content}
+
+    # Replay guard
+    if ctx and ctx.replay_walker:
+        from godel._events import Event, EventStatus
+        req_hash = Event.compute_request_hash(req)
+        match = ctx.replay_walker.try_match(
+            step_path=tuple(ctx.step_stack),
+            invocation_seq=inv_seq,
+            step_local_seq=local_seq,
+            op="write_text",
+            request_hash=req_hash,
+        )
+        if match.hit and match.status == EventStatus.FINISHED:
+            if match.hash_mismatch:
+                from godel._replay import handle_hash_mismatch
+                await handle_hash_mismatch(match, ctx.event_log)
+            # On replay: skip the write, return cached result
+            return
+        elif match.hit and match.status == EventStatus.STARTED:
+            # STARTED-only: treat as unsafe (write may have partially happened)
+            from godel._exceptions import UnsafeResumeError
+            raise UnsafeResumeError(
+                f"write_text() has STARTED-only state (write may be partial)",
+                cmd=f"write_text({path!r})",
+                step_path=tuple(ctx.step_stack),
+            )
+
+    event = None
+    if ctx and ctx.event_log:
+        event = ctx.event_log.emit_started(
+            op="write_text",
+            step_path=tuple(ctx.step_stack),
+            request=req,
+            invocation_seq=inv_seq,
+            step_local_seq=local_seq,
+            parent_event_id=ctx.current_parent_event_id,
+        )
+
+    token = _privileged.set(True)
+    try:
+        Path(path).write_text(content)
+    finally:
+        _privileged.reset(token)
+
+    if event:
+        ctx.event_log.emit_finished(event.event_id, response={})
