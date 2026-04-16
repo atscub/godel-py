@@ -186,3 +186,125 @@ class TestRunReplay:
         # With idempotent=True, STARTED-only should fall through and actually execute
         result = asyncio.run(run("echo safe", idempotent=True))
         assert "safe" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# sleep() replay — returns immediately without sleeping
+# ---------------------------------------------------------------------------
+
+class TestSleepReplay:
+    def test_returns_immediately_on_cache_hit(self, tmp_path):
+        import time
+        from godel.io import sleep as godel_sleep
+
+        req = {"seconds": 60.0}
+        loaded = _make_log_with_events(tmp_path, [
+            {"op": "sleep", "finish": True, "request": req, "response": {"elapsed": 60.0}},
+        ])
+        _install_replay_ctx(loaded)
+
+        t0 = time.monotonic()
+        asyncio.run(godel_sleep(60.0))
+        elapsed = time.monotonic() - t0
+        # Should return near-instantly, definitely not 60s
+        assert elapsed < 1.0
+
+    def test_started_only_resume_sleeps_remainder_not_full(self, tmp_path):
+        """STARTED-only sleep: resume sleeps only the remainder from ts_start.
+
+        Verifies W3 fix: a workflow that crashed mid-sleep re-executes using
+        the *remaining* duration, not the full requested duration.
+        """
+        import time
+        from datetime import datetime, timedelta, timezone
+        from godel.io import sleep as godel_sleep
+        from godel._event_log import EventLog
+
+        run_id = "sleep-remainder-run"
+        log = EventLog(run_id, runs_dir=str(tmp_path))
+        started = log.emit_started(
+            op="sleep",
+            step_path=(),
+            request={"seconds": 10.0},
+            invocation_seq=0,
+            step_local_seq=0,
+        )
+        # Backdate ts_start to 9.95s ago — remainder should be ~0.05s, not 10s.
+        started.ts_start = (
+            datetime.now(timezone.utc) - timedelta(seconds=9.95)
+        ).isoformat()
+        # Re-persist so the JSONL file contains the backdated ts_start.
+        log._append_event(started)
+        log.close()
+        loaded = EventLog.load(run_id, runs_dir=str(tmp_path))
+        _install_replay_ctx(loaded)
+
+        t0 = time.monotonic()
+        asyncio.run(godel_sleep(10.0))
+        elapsed = time.monotonic() - t0
+        # Should sleep ~0.05s remainder, not the full 10s.
+        assert elapsed < 2.0, f"expected remainder-sleep <2s, got {elapsed}s"
+
+    def test_started_only_past_deadline_returns_quickly(self, tmp_path):
+        """If ts_start is far enough in the past that remainder is 0, sleep returns fast."""
+        import time
+        from datetime import datetime, timedelta, timezone
+        from godel.io import sleep as godel_sleep
+        from godel._event_log import EventLog
+
+        run_id = "sleep-past-deadline"
+        log = EventLog(run_id, runs_dir=str(tmp_path))
+        started = log.emit_started(
+            op="sleep",
+            step_path=(),
+            request={"seconds": 0.1},
+            invocation_seq=0,
+            step_local_seq=0,
+        )
+        # ts_start was long ago — remainder should be 0.
+        started.ts_start = (
+            datetime.now(timezone.utc) - timedelta(seconds=60)
+        ).isoformat()
+        # Re-persist so the JSONL file contains the backdated ts_start.
+        log._append_event(started)
+        log.close()
+        loaded = EventLog.load(run_id, runs_dir=str(tmp_path))
+        _install_replay_ctx(loaded)
+
+        t0 = time.monotonic()
+        asyncio.run(godel_sleep(0.1))
+        elapsed = time.monotonic() - t0
+        assert elapsed < 1.0
+
+    def test_started_only_resume_emits_finished(self, tmp_path):
+        """Resume completes the sleep: a FINISHED event is appended."""
+        from datetime import datetime, timedelta, timezone
+        from godel.io import sleep as godel_sleep
+        from godel._event_log import EventLog
+
+        run_id = "sleep-resume-finished"
+        log = EventLog(run_id, runs_dir=str(tmp_path))
+        started = log.emit_started(
+            op="sleep",
+            step_path=(),
+            request={"seconds": 0.01},
+            invocation_seq=0,
+            step_local_seq=0,
+        )
+        started.ts_start = (
+            datetime.now(timezone.utc) - timedelta(seconds=60)
+        ).isoformat()
+        # Re-persist so the JSONL file contains the backdated ts_start.
+        log._append_event(started)
+        log.close()
+        loaded = EventLog.load(run_id, runs_dir=str(tmp_path))
+        _install_replay_ctx(loaded)
+
+        asyncio.run(godel_sleep(0.01))
+
+        reopened = EventLog.load(run_id, runs_dir=str(tmp_path))
+        sleep_events = [e for e in reopened.all_events() if e.op == "sleep"]
+        statuses = [e.status.value for e in sleep_events]
+        assert "FINISHED" in statuses
+        finished = next(e for e in sleep_events if e.status.value == "FINISHED")
+        assert finished.response.get("resumed") is True

@@ -82,3 +82,53 @@ def test_scan_file_raises(tmp_path):
     with pytest.raises(GodelStrictError) as exc_info:
         scan_file(str(f))
     assert len(exc_info.value.violations) == 1
+
+
+def test_detects_asyncio_sleep():
+    vs = scan_source("import asyncio\nawait asyncio.sleep(1)")
+    assert len(vs) == 1
+    assert "asyncio.sleep()" in vs[0].message
+    assert "godel.sleep" in vs[0].message
+
+
+def test_detects_time_sleep_hint():
+    """time.sleep should also suggest godel.sleep."""
+    vs = scan_source("import time\ntime.sleep(1)")
+    assert len(vs) == 1
+    assert "godel.sleep" in vs[0].message
+
+
+def test_asyncio_sleep_aliased():
+    vs = scan_source("import asyncio as aio\nawait aio.sleep(1)")
+    assert len(vs) == 1
+    assert "asyncio.sleep()" in vs[0].message
+
+
+def test_from_asyncio_import_sleep_bare_call():
+    """`from asyncio import sleep; sleep(1)` must still be flagged (W1)."""
+    vs = scan_source("from asyncio import sleep\nawait sleep(1)")
+    assert len(vs) == 1
+    assert "asyncio.sleep()" in vs[0].message
+    assert "godel.sleep" in vs[0].message
+
+
+def test_from_time_import_sleep_bare_call():
+    """`from time import sleep; sleep(1)` must still be flagged (W1)."""
+    vs = scan_source("from time import sleep\nsleep(1)")
+    assert len(vs) == 1
+    assert "time.sleep()" in vs[0].message
+    assert "godel.sleep" in vs[0].message
+
+
+def test_from_random_import_random_bare_call():
+    """Generalised: non-sleep banned bare-Name calls also flagged."""
+    vs = scan_source("from random import random\nrandom()")
+    assert len(vs) == 1
+    assert "random.random()" in vs[0].message
+    assert "godel.det" in vs[0].message
+
+
+def test_bare_name_unrelated_calls_not_flagged():
+    """Bare calls to non-banned names must not be false-flagged."""
+    vs = scan_source("from json import dumps\ndumps({'a': 1})")
+    assert len(vs) == 0

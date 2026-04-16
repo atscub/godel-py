@@ -1,10 +1,10 @@
-"""Tests for print/input event instrumentation."""
+"""Tests for print/input/sleep event instrumentation."""
 import asyncio
 import io
 import json
 import sys
 from godel._decorators import workflow
-from godel.io import print as godel_print, input as godel_input
+from godel.io import print as godel_print, input as godel_input, sleep as godel_sleep
 
 
 def test_print_emits_event(tmp_path, monkeypatch):
@@ -60,3 +60,29 @@ def test_input_works_outside_workflow(monkeypatch):
     monkeypatch.setattr(sys, "stdout", io.StringIO())
     result = asyncio.run(godel_input("prompt: "))
     assert result == "test"
+
+
+def test_sleep_emits_event(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    @workflow
+    async def wf():
+        await godel_sleep(0.0)
+        return "done"
+
+    asyncio.run(wf())
+    runs = list((tmp_path / "runs").glob("*.jsonl"))
+    lines = runs[0].read_text().strip().split("\n")
+    events = [json.loads(l) for l in lines]
+    sleep_events = [e for e in events if e["op"] == "sleep"]
+    assert len(sleep_events) == 2  # STARTED + FINISHED
+    assert sleep_events[0]["status"] == "STARTED"
+    assert sleep_events[0]["request"]["seconds"] == 0.0
+    assert sleep_events[1]["status"] == "FINISHED"
+    assert "elapsed" in sleep_events[1]["response"]
+
+
+def test_sleep_works_outside_workflow():
+    """sleep should work without a workflow (no events, no crash)."""
+    asyncio.run(godel_sleep(0.0))
+    # Just verify no exception

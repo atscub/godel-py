@@ -141,6 +141,18 @@ def _fmt_input(event: "Event") -> str:
     return _base_line(event)
 
 
+@register("sleep")
+def _fmt_sleep(event: "Event") -> str:
+    base = _base_line(event)
+    req_secs = event.request.get("seconds")
+    if req_secs is not None:
+        elapsed = (event.response or {}).get("elapsed")
+        if elapsed is not None:
+            return f"{base}  [{req_secs}s requested, {elapsed:.3f}s elapsed]"
+        return f"{base}  [{req_secs}s]"
+    return base
+
+
 @register("det.now")
 def _fmt_det_now(event: "Event") -> str:
     return _base_line(event)

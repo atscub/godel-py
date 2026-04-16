@@ -1,9 +1,12 @@
-"""Async print/input/read_text/write_text shadows with audit event emission."""
+"""Async print/input/sleep/read_text/write_text shadows with audit event emission."""
 import asyncio
 import contextvars
+import math
 import os
 import sys
 import tempfile
+import time as _time
+from datetime import datetime
 from pathlib import Path
 
 from godel._context import _current_workflow, _privileged
@@ -264,6 +267,95 @@ async def input(prompt: str = "", *, schema=None):
     return result
 
 
+async def sleep(seconds: float) -> None:
+    """Audited async sleep. Emits sleep event with requested and actual elapsed duration.
+
+    On replay (FINISHED cache hit), returns immediately without sleeping.
+
+    On resume from a mid-sleep crash (STARTED-only event), sleeps only the
+    *remaining* duration computed from the original ``ts_start``, not the full
+    requested duration. A new FINISHED event is emitted.
+
+    Raises:
+        ValueError: if *seconds* is negative, NaN, or not finite.
+    """
+    try:
+        seconds_f = float(seconds)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"godel.sleep() requires a numeric duration, got {seconds!r}"
+        ) from exc
+    if math.isnan(seconds_f) or not math.isfinite(seconds_f) or seconds_f < 0:
+        raise ValueError(
+            f"godel.sleep() requires a finite non-negative duration, got {seconds!r}"
+        )
+    seconds = seconds_f
+
+    ctx = _current_workflow.get()
+
+    inv_seq, local_seq = (0, 0)
+    if ctx:
+        inv_seq, local_seq = ctx.next_op_position()
+
+    resume_remaining: float | None = None
+    if ctx and ctx.replay_walker:
+        from godel._events import Event, EventStatus
+        req = {"seconds": seconds}
+        req_hash = Event.compute_request_hash(req)
+        match = ctx.replay_walker.try_match(
+            step_path=tuple(ctx.step_stack),
+            invocation_seq=inv_seq,
+            step_local_seq=local_seq,
+            op="sleep",
+            request_hash=req_hash,
+        )
+        if match.hit and match.status == EventStatus.FINISHED:
+            return
+        if match.hit and match.status == EventStatus.STARTED and match.event is not None:
+            ts_start = match.event.ts_start
+            if ts_start:
+                try:
+                    started_at = datetime.fromisoformat(ts_start)
+                    now = datetime.now(started_at.tzinfo)
+                    already = (now - started_at).total_seconds()
+                    resume_remaining = max(0.0, seconds - already)
+                except (ValueError, TypeError):
+                    resume_remaining = None
+
+    event = None
+    if ctx and ctx.event_log:
+        event = ctx.event_log.emit_started(
+            op="sleep",
+            step_path=tuple(ctx.step_stack),
+            request={"seconds": seconds},
+            invocation_seq=inv_seq,
+            step_local_seq=local_seq,
+            parent_event_id=ctx.current_parent_event_id,
+        )
+
+    sleep_for = resume_remaining if resume_remaining is not None else seconds
+
+    t0 = _time.monotonic()
+    try:
+        await asyncio.sleep(sleep_for)
+    except BaseException as exc:
+        if event and ctx and ctx.event_log:
+            ctx.event_log.emit_failed(
+                event.event_id,
+                error=f"sleep interrupted: {type(exc).__name__}",
+                error_type=type(exc).__name__,
+            )
+        raise
+    elapsed = _time.monotonic() - t0
+
+    if event:
+        response = {"elapsed": elapsed}
+        if resume_remaining is not None:
+            response["resumed"] = True
+            response["remaining_slept"] = elapsed
+        ctx.event_log.emit_finished(event.event_id, response=response)
+
+
 # ---------------------------------------------------------------------------
 # File I/O primitives — audited, deterministic-replay-compatible.
 # ---------------------------------------------------------------------------
@@ -392,7 +484,6 @@ async def read_text(path: str, *, encoding: str = "utf-8") -> str:
         # idempotent so this is safe — unlike write_text, a partial STARTED
         # read cannot have corrupted external state. The new attempt either
         # succeeds (adding a FINISHED snapshot) or emits a FAILED event.
-        # (Document asymmetry with write_text.)
 
     event = None
     if ctx and ctx.event_log:
