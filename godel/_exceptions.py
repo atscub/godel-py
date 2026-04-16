@@ -431,3 +431,39 @@ class RewindUnsafe(GodelError):
         self.event_id = event_id
         self.op = op
         self.cmd = cmd
+
+
+# ---------------------------------------------------------------------------
+# Per-step wall-clock timeout error — GodelError subclass.
+# ---------------------------------------------------------------------------
+
+class StepTimeout(GodelError):
+    """Raised when a ``@step(timeout=N)`` body exceeds N seconds.
+
+    The step is cancelled via ``asyncio.wait_for``; its event log entry is
+    emitted as FAILED with ``error_type='StepTimeout'`` and
+    ``reason='timeout'``.
+
+    Compose with ``@retry`` to automatically retry timed-out steps::
+
+        @retry(max_attempts=3)
+        @step(timeout=10)
+        async def fetch_data():
+            ...
+
+    Attributes:
+        step_name: Name of the step that timed out.
+        timeout_seconds: The configured timeout limit in seconds.
+    """
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        step_name: str = "",
+        timeout_seconds: float | None = None,
+        **kwargs: Unpack[_GodelErrorKwargs],
+    ):
+        super().__init__(message, **kwargs)
+        self.step_name = step_name
+        self.timeout_seconds = timeout_seconds

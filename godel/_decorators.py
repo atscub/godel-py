@@ -426,7 +426,7 @@ def workflow(
     return _make_workflow
 
 
-def step(fn=None, *, name=None, idempotent=False, capture_stdout: bool = False):
+def step(fn=None, *, name=None, idempotent=False, capture_stdout: bool = False, timeout: float | None = None):
     """Decorator that marks an async function as a workflow step.
 
     Can be applied as ``@step`` (bare) or ``@step(...)`` with options:
@@ -440,6 +440,11 @@ def step(fn=None, *, name=None, idempotent=False, capture_stdout: bool = False):
             captured and attached to the step's event log entry.  Cannot be
             ``True`` for steps used inside a ``parallel()`` block.
             Defaults to ``False``.
+        timeout: Wall-clock time limit in seconds for the step body.  If the
+            body does not finish within ``timeout`` seconds it is cancelled and
+            ``StepTimeout`` is raised.  The step's event log entry is emitted
+            as FAILED with ``error_type='StepTimeout'`` and
+            ``reason='timeout'``.  Defaults to ``None`` (no limit).
     """
     def decorator(fn):
         if not asyncio.iscoroutinefunction(fn):
@@ -612,7 +617,20 @@ def step(fn=None, *, name=None, idempotent=False, capture_stdout: bool = False):
                     _stream_path = list(_current_stream_path.get() or [])
                     try:
                         with _capture(step_path=list(step_path), stream_path=_stream_path, transcript=tw):
-                            result = await fn(*args, **kwargs)
+                            _body_coro = fn(*args, **kwargs)
+                            if timeout is not None:
+                                try:
+                                    result = await asyncio.wait_for(_body_coro, timeout=timeout)
+                                except asyncio.TimeoutError:
+                                    from godel._exceptions import StepTimeout
+                                    raise StepTimeout(
+                                        f"step {step_name!r} timed out after {timeout}s",
+                                        step_name=step_name,
+                                        timeout_seconds=timeout,
+                                        step_path=step_path,
+                                    )
+                            else:
+                                result = await _body_coro
                     finally:
                         # WARN-1 fix: close/cleanup the owned transcript even
                         # when fn() raised, so the TranscriptWriter file handle
@@ -629,7 +647,19 @@ def step(fn=None, *, name=None, idempotent=False, capture_stdout: bool = False):
                                 except Exception:
                                     pass
                 else:
-                    result = await fn(*args, **kwargs)
+                    if timeout is not None:
+                        try:
+                            result = await asyncio.wait_for(fn(*args, **kwargs), timeout=timeout)
+                        except asyncio.TimeoutError:
+                            from godel._exceptions import StepTimeout
+                            raise StepTimeout(
+                                f"step {step_name!r} timed out after {timeout}s",
+                                step_name=step_name,
+                                timeout_seconds=timeout,
+                                step_path=step_path,
+                            )
+                    else:
+                        result = await fn(*args, **kwargs)
                 if event:
                     ctx.event_log.emit_finished(event.event_id, response={"result": repr(result)})
                     # WARN-1 fix: during replay, event.event_id is a fresh ephemeral
@@ -699,7 +729,7 @@ def step(fn=None, *, name=None, idempotent=False, capture_stdout: bool = False):
                 if _idempotent_token is not None:
                     _step_idempotent.reset(_idempotent_token)
 
-        _opts = {"capture_stdout": capture_stdout}
+        _opts = {"capture_stdout": capture_stdout, "timeout": timeout}
 
         # Wrap the async wrapper so that calling the step-decorated function
         # returns a _StepCoroutine instead of a bare coroutine.  This allows

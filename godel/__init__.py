@@ -41,6 +41,7 @@ from godel._exceptions import (
     RewindUnsafe,
     GodelWatchNotInstalledError,
     ConfigError,
+    StepTimeout,
 )
 from godel._pause import check_pause_request, write_pause_request, clear_pause_request, pause
 from godel._config import load_config, GodelConfig, LoadedConfig, resolve_workflow, list_workflows, open_event_log
@@ -82,6 +83,7 @@ __all__ = [
     "RewindUnsafe",
     "GodelWatchNotInstalledError",
     "ConfigError",
+    "StepTimeout",
     "PauseSignal",
     "check_pause_request",
     "write_pause_request",
