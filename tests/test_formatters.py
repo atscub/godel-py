@@ -237,3 +237,166 @@ def test_default_formatter_duration():
     )
     result = _default_formatter(event)
     assert "1.000s" in result
+
+
+# ---------------------------------------------------------------------------
+# read_text / write_text — richer formatters
+# ---------------------------------------------------------------------------
+
+def _make_io_event(
+    op: str,
+    request: dict | None = None,
+    response: dict | None = None,
+    status: str = "FINISHED",
+    ts_start: str = "2025-01-01T00:00:00+00:00",
+    ts_end: str | None = "2025-01-01T00:00:01+00:00",
+    step_path: tuple[str, ...] = ("my_step",),
+    event_id: str = "ABCDEF1234567890ABCDEF12",
+) -> Event:
+    """Build an Event with explicit request/response dicts for I/O op tests."""
+    from godel._events import EventStatus
+    return Event(
+        event_id=event_id,
+        run_id="test-run",
+        seq=0,
+        step_path=step_path,
+        op=op,
+        status=EventStatus(status),
+        ts_start=ts_start,
+        ts_end=ts_end,
+        request=request or {},
+        response=response,
+    )
+
+
+class TestReadTextFormatter:
+    def test_shows_resolved_path(self):
+        """read_text formatter includes the resolved path from event.request."""
+        event = _make_io_event(
+            op="read_text",
+            request={"path": "/home/user/data.txt", "encoding": "utf-8"},
+            response={"content": "hello", "bytes_read": 5},
+        )
+        result = _fmt_event(event)
+        assert "/home/user/data.txt" in result
+
+    def test_shows_bytes_read(self):
+        """read_text formatter includes bytes_read from event.response."""
+        event = _make_io_event(
+            op="read_text",
+            request={"path": "/tmp/file.txt", "encoding": "utf-8"},
+            response={"content": "hello world", "bytes_read": 11},
+        )
+        result = _fmt_event(event)
+        assert "11B read" in result
+
+    def test_path_and_bytes_read_together(self):
+        """read_text formatter shows both path and bytes_read."""
+        event = _make_io_event(
+            op="read_text",
+            request={"path": "/tmp/report.txt", "encoding": "utf-8"},
+            response={"content": "data", "bytes_read": 4},
+        )
+        result = _fmt_event(event)
+        assert "/tmp/report.txt" in result
+        assert "4B read" in result
+
+    def test_no_path_no_extra(self):
+        """read_text formatter falls back to base line when request has no path."""
+        event = _make_io_event(op="read_text", request={}, response=None)
+        result = _fmt_event(event)
+        assert "read_text" in result
+        # No trailing bracket annotation when nothing extra to show;
+        # note the event_id bracket [ABCDEF12] is expected, so we check
+        # that no "[/" or "[B " suffix appears, not that "[" is absent.
+        assert "B read" not in result
+        assert result.endswith("FINISHED  (1.000s)")
+
+    def test_no_response_path_still_shown(self):
+        """read_text formatter shows path even when response (bytes_read) is absent."""
+        event = _make_io_event(
+            op="read_text",
+            request={"path": "/tmp/x.txt", "encoding": "utf-8"},
+            response=None,
+        )
+        result = _fmt_event(event)
+        assert "/tmp/x.txt" in result
+        assert "B read" not in result
+
+    def test_started_event_shows_path_no_bytes(self):
+        """STARTED read_text event shows path but not bytes_read (no response yet)."""
+        event = _make_io_event(
+            op="read_text",
+            request={"path": "/tmp/pending.txt", "encoding": "utf-8"},
+            response=None,
+            status="STARTED",
+            ts_end=None,
+        )
+        result = _fmt_event(event)
+        assert "/tmp/pending.txt" in result
+        assert "B read" not in result
+
+
+class TestWriteTextFormatter:
+    def test_shows_resolved_path(self):
+        """write_text formatter includes the resolved path from event.response."""
+        event = _make_io_event(
+            op="write_text",
+            request={"path": "/home/user/out.txt", "encoding": "utf-8"},
+            response={"path": "/home/user/out.txt", "bytes_written": 42},
+        )
+        result = _fmt_event(event)
+        assert "/home/user/out.txt" in result
+
+    def test_shows_bytes_written(self):
+        """write_text formatter includes bytes_written from event.response."""
+        event = _make_io_event(
+            op="write_text",
+            request={"path": "/tmp/out.txt", "encoding": "utf-8"},
+            response={"path": "/tmp/out.txt", "bytes_written": 100},
+        )
+        result = _fmt_event(event)
+        assert "100B written" in result
+
+    def test_path_and_bytes_written_together(self):
+        """write_text formatter shows both path and bytes_written."""
+        event = _make_io_event(
+            op="write_text",
+            request={"path": "/tmp/result.txt", "encoding": "utf-8"},
+            response={"path": "/tmp/result.txt", "bytes_written": 256},
+        )
+        result = _fmt_event(event)
+        assert "/tmp/result.txt" in result
+        assert "256B written" in result
+
+    def test_no_path_no_extra(self):
+        """write_text formatter falls back to base line when request has no path."""
+        event = _make_io_event(op="write_text", request={}, response=None)
+        result = _fmt_event(event)
+        assert "write_text" in result
+        assert "B written" not in result
+        assert result.endswith("FINISHED  (1.000s)")
+
+    def test_no_response_path_still_shown(self):
+        """write_text formatter shows path even when response (bytes_written) is absent."""
+        event = _make_io_event(
+            op="write_text",
+            request={"path": "/tmp/y.txt", "encoding": "utf-8"},
+            response=None,
+        )
+        result = _fmt_event(event)
+        assert "/tmp/y.txt" in result
+        assert "B written" not in result
+
+    def test_started_event_shows_path_no_bytes(self):
+        """STARTED write_text event shows path but not bytes_written (no response yet)."""
+        event = _make_io_event(
+            op="write_text",
+            request={"path": "/tmp/writing.txt", "encoding": "utf-8"},
+            response=None,
+            status="STARTED",
+            ts_end=None,
+        )
+        result = _fmt_event(event)
+        assert "/tmp/writing.txt" in result
+        assert "B written" not in result

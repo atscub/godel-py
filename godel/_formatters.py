@@ -170,12 +170,32 @@ def _fmt_det_uuid4(event: "Event") -> str:
 
 @register("read_text")
 def _fmt_read_text(event: "Event") -> str:
-    return _base_line(event)
+    base = _base_line(event)
+    parts: list[str] = []
+    path = (event.request or {}).get("path")
+    if path:
+        parts.append(path)
+    bytes_read = (event.response or {}).get("bytes_read")
+    if bytes_read is not None:
+        parts.append(f"{bytes_read}B read")
+    if parts:
+        return f"{base}  [{', '.join(parts)}]"
+    return base
 
 
 @register("write_text")
 def _fmt_write_text(event: "Event") -> str:
-    return _base_line(event)
+    base = _base_line(event)
+    parts: list[str] = []
+    path = (event.request or {}).get("path")
+    if path:
+        parts.append(path)
+    bytes_written = (event.response or {}).get("bytes_written")
+    if bytes_written is not None:
+        parts.append(f"{bytes_written}B written")
+    if parts:
+        return f"{base}  [{', '.join(parts)}]"
+    return base
 
 
 @register("UNRECOVERABLE")
