@@ -221,8 +221,10 @@ def main():
         "Declare that checkpoint answers arrive programmatically, not from a "
         "human terminal.  Sets GODEL_AUTO_CHECKPOINT=<MODE> so godel.input() "
         "tags events and suppresses the 'stdin is not a TTY' warning.  "
-        "Use '1' for generic scripting, or a descriptive value such as "
-        "'pipe', 'file', or 'fifo'.  Also: GODEL_AUTO_CHECKPOINT env var."
+        "Use a descriptive value such as 'pipe', 'file', or 'fifo' (or '1' "
+        "for generic scripting).  Passing an empty string (--auto-checkpoint=) "
+        "explicitly clears any inherited GODEL_AUTO_CHECKPOINT env var and "
+        "re-enables the warning.  Also: GODEL_AUTO_CHECKPOINT env var."
     ),
 )
 def run_cmd(file, extra, no_strict, no_lint, watch, no_stream, plain, auto_checkpoint):
@@ -467,7 +469,9 @@ def run_cmd(file, extra, no_strict, no_lint, watch, no_stream, plain, auto_check
     metavar="MODE",
     help=(
         "Declare that checkpoint answers arrive programmatically.  "
-        "Sets GODEL_AUTO_CHECKPOINT=<MODE>.  Use '1' for generic scripting.  "
+        "Sets GODEL_AUTO_CHECKPOINT=<MODE>.  Use 'pipe', 'file', 'fifo', or "
+        "'1' for generic scripting.  Passing an empty string "
+        "(--auto-checkpoint=) clears any inherited env var.  "
         "Also: GODEL_AUTO_CHECKPOINT env var."
     ),
 )

@@ -285,3 +285,36 @@ def test_replay_unaffected_when_auto_checkpoint_changed(tmp_path, monkeypatch, c
 
     result = asyncio.run(ainput("q? "))
     assert result == "approved"
+
+
+def test_replay_hit_does_not_emit_non_tty_warning(tmp_path, monkeypatch, cleanup_ctx, capsys):
+    """Cache hits never touch stdin, so the non-TTY warning must NOT fire.
+
+    Regression guard for WARN-1: a prior implementation called
+    _maybe_warn_non_tty() unconditionally at the top of input(), so replaying
+    a scripted run in CI (non-TTY stdin, no env var) produced a spurious
+    "stdin is not a TTY" warning even though stdin was never consulted.
+    """
+    loaded = _make_input_log(tmp_path, prompt="q? ", cached_value="yes", auto_cp="pipe")
+
+    walker = ReplayWalker(loaded)
+    ctx = WorkflowContext(
+        run_id=loaded._run_id,
+        event_log=loaded,
+        replay_walker=walker,
+    )
+    _current_workflow.set(ctx)
+
+    monkeypatch.delenv("GODEL_AUTO_CHECKPOINT", raising=False)
+    # Non-TTY stdin (default for StringIO) — would trigger the warning on a
+    # live read path.
+    monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+    monkeypatch.setattr(sys, "stdout", io.StringIO())
+
+    result = asyncio.run(ainput("q? "))
+    assert result == "yes"
+
+    captured = capsys.readouterr()
+    assert "stdin is not a TTY" not in captured.err, (
+        "replay hit must not emit the non-TTY warning — stdin is never read"
+    )

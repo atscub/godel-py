@@ -20,9 +20,11 @@ def _maybe_warn_non_tty() -> None:
     """Emit a one-shot stderr warning when stdin is not a TTY and the caller
     has not declared ``GODEL_AUTO_CHECKPOINT``.
 
-    This surfaces the situation where a workflow that calls ``godel.input()``
-    is run non-interactively (e.g. in CI or via a detached process) without
-    explicitly opting in, which can cause the run to hang on EOF.
+    Called lazily on the **live-read path only** (after the replay guard has
+    been checked), so replayed ``input()`` hits — which never touch stdin —
+    do not trigger a spurious warning.  This surfaces the situation where a
+    workflow that calls ``godel.input()`` is about to block on EOF because
+    it was run non-interactively without explicitly opting in.
     """
     global _tty_warned
     if _tty_warned:
@@ -31,9 +33,11 @@ def _maybe_warn_non_tty() -> None:
         return  # Caller declared intent — no warning needed.
     try:
         if not sys.stdin.isatty():
-            # Set sentinel BEFORE writing so concurrent callers (e.g. parallel
-            # steps awaiting input() at once) can't both pass the guard and
-            # emit the warning twice.
+            # Flip the sentinel first so the write path is unreachable twice
+            # even if an exception interrupts the write below.  asyncio runs
+            # this synchronously on the event-loop thread, so there is no
+            # concurrency at this call site — the ordering is purely for
+            # exception-safety and future-proofing.
             _tty_warned = True
             sys.stderr.write(
                 "[godel] warning: godel.input() called but stdin is not a TTY. "
@@ -119,8 +123,6 @@ async def input(prompt: str = "", *, schema=None):
     the event's ``request.auto_checkpoint`` field so the audit log reflects
     the scripted mode.
     """
-    _maybe_warn_non_tty()
-
     ctx = _current_workflow.get()
 
     inv_seq, local_seq = (0, 0)
@@ -133,7 +135,8 @@ async def input(prompt: str = "", *, schema=None):
     if auto_cp is not None:
         req["auto_checkpoint"] = auto_cp
 
-    # Replay guard
+    # Replay guard — cache hits never read from stdin, so the non-TTY warning
+    # must NOT fire here.
     if ctx and ctx.replay_walker:
         from godel._events import Event, EventStatus
         req_hash = Event.compute_request_hash(req)
@@ -146,6 +149,9 @@ async def input(prompt: str = "", *, schema=None):
         )
         if match.hit and match.status == EventStatus.FINISHED:
             return match.cached_response.get("value", "")
+
+    # Only the live-read path can block on EOF — warn lazily, here.
+    _maybe_warn_non_tty()
 
     event = None
     if ctx and ctx.event_log:

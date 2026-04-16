@@ -177,14 +177,19 @@ godel run review.py --auto-checkpoint=pipe < answers.txt
 GODEL_AUTO_CHECKPOINT=pipe godel run review.py < answers.txt
 ```
 
-**Why declare intent?**  When Godel detects that `stdin` is not a TTY and
-`GODEL_AUTO_CHECKPOINT` is not set, it emits a one-shot warning:
+**Why declare intent?**  Detection is **lazy**: when the first live (non-
+replayed) `godel.input()` call is about to read stdin and finds it is not a
+TTY — and `GODEL_AUTO_CHECKPOINT` is not set — Godel emits a one-shot
+warning:
 
 ```
 [godel] warning: godel.input() called but stdin is not a TTY.
 To script checkpoint answers, pipe answers or set
 GODEL_AUTO_CHECKPOINT=<mode> (e.g. pipe, file, fifo) to suppress this warning.
 ```
+
+Workflows that never call `godel.input()` — or whose `input()` calls are all
+satisfied from the replay cache on resume — never trigger the check.
 
 Setting `GODEL_AUTO_CHECKPOINT` suppresses the warning and records the value
 in each `input` event's `request.auto_checkpoint` field, making the audit log
