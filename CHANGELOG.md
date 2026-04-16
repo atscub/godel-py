@@ -2,6 +2,37 @@
 
 <!-- version list -->
 
+## v3.2.0 (2026-04-16)
+
+### Documentation
+
+- **examples**: Add feature_factory workflow + monitoring guide
+  ([`3d7b858`](https://github.com/atscub/godel-py/commit/3d7b858d4983d620e9c79ebe2b30c9f1daad4300))
+
+- **guide**: Add best-practices guide
+  ([`d9ed5ac`](https://github.com/atscub/godel-py/commit/d9ed5ac01e1c15bde9a098b404a43201e253db56))
+
+- **guide**: Expose monitoring guide via `godel guide`
+  ([`25e2432`](https://github.com/atscub/godel-py/commit/25e2432ab8aa663f06d59f129be327252cde8c42))
+
+- **monitoring**: Clarify rewind marks events invalidated (log is append-only)
+  ([`bba22e9`](https://github.com/atscub/godel-py/commit/bba22e9ecec5779ac66ed98c83de861ea2dac066))
+
+- **monitoring**: Improved documents
+  ([`6a0851d`](https://github.com/atscub/godel-py/commit/6a0851dd16e7fa3dda1c5f01da750a511f0032eb))
+
+- **monitoring**: Note godel tail streams all events (no invalid/retry filtering)
+  ([`3237736`](https://github.com/atscub/godel-py/commit/3237736403624b187bda99f981a3929f7812cd45))
+
+- **monitoring**: Prefer godel tail over raw file seek; add rewind-then-resume recovery
+  ([`2ea1aa2`](https://github.com/atscub/godel-py/commit/2ea1aa2fbf3d87e33aad79bdd8c6e13904176c48))
+
+### Features
+
+- **cli**: Add godel runs list command
+  ([`74c3683`](https://github.com/atscub/godel-py/commit/74c3683b36cf4e90868a7ace672ff6ba8dccc186))
+
+
 ## v3.1.0 (2026-04-14)
 
 ### Bug Fixes
