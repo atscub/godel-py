@@ -2,18 +2,26 @@
 from __future__ import annotations
 
 import asyncio
+import os
+from pathlib import Path
+
 import pytest
 
-from godel.io import read_text, write_text
+from godel.io import read_text, write_text, _CONTENT_LOG_LIMIT, _normalize_path
 from godel._context import WorkflowContext, _current_workflow
 from godel._event_log import EventLog
 from godel._events import EventStatus
-from godel._replay import ReplayWalker
+from godel._replay import ReplayWalker, MismatchPolicy, set_mismatch_policy
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _resolved(p) -> str:
+    """Return the absolute-resolved form used internally by the primitives."""
+    return _normalize_path(str(p))
+
 
 def _make_log_with_events(tmp_path, events: list[dict]) -> EventLog:
     """Create an EventLog, emit events into it, close, and reload."""
@@ -49,9 +57,10 @@ def _install_replay_ctx(loaded_log: EventLog) -> WorkflowContext:
 
 @pytest.fixture(autouse=True)
 def _cleanup_ctx():
-    """Reset _current_workflow after each test to avoid leaking."""
+    """Reset _current_workflow and global mismatch policy after each test."""
     yield
     _current_workflow.set(None)
+    set_mismatch_policy(None)
 
 
 # ---------------------------------------------------------------------------
@@ -81,14 +90,16 @@ class TestReadTextLive:
 
         events = log.all_events()
         read_events = [e for e in events if e.op == "read_text"]
-        # In-memory list holds one entry per event (mutated STARTED → FINISHED)
         assert len(read_events) == 1
         assert read_events[0].status == EventStatus.FINISHED
         assert read_events[0].response["content"] == "some content"
-        assert read_events[0].request["path"] == str(test_file)
+        assert read_events[0].response["bytes_read"] == len(b"some content")
+        # Path stored in resolved/absolute form
+        assert read_events[0].request["path"] == _resolved(test_file)
+        assert read_events[0].request["encoding"] == "utf-8"
 
     def test_records_path_in_request(self, tmp_path):
-        """read_text records the path in the event request."""
+        """read_text records the resolved path in the event request."""
         test_file = tmp_path / "audit.txt"
         test_file.write_text("audited")
 
@@ -101,7 +112,95 @@ class TestReadTextLive:
 
         events = log.all_events()
         read_events = [e for e in events if e.op == "read_text"]
-        assert any(e.request.get("path") == str(test_file) for e in read_events)
+        assert any(e.request.get("path") == _resolved(test_file) for e in read_events)
+
+    def test_emits_failed_event_on_nonexistent_file(self, tmp_path):
+        """Missing file → FileNotFoundError propagates; event is FAILED, not STARTED."""
+        missing = tmp_path / "missing.txt"
+
+        run_id = "test-read-fail"
+        log = EventLog(run_id, runs_dir=str(tmp_path / "runs"))
+        ctx = WorkflowContext(run_id=run_id, event_log=log)
+        _current_workflow.set(ctx)
+
+        with pytest.raises(FileNotFoundError):
+            asyncio.run(read_text(str(missing)))
+
+        events = log.all_events()
+        read_events = [e for e in events if e.op == "read_text"]
+        assert len(read_events) == 1
+        assert read_events[0].status == EventStatus.FAILED
+        assert read_events[0].response["error_type"] == "FileNotFoundError"
+
+    def test_accepts_encoding_parameter(self, tmp_path):
+        """read_text honours the encoding kwarg (latin-1 round-trip)."""
+        test_file = tmp_path / "latin.txt"
+        test_file.write_bytes("café".encode("latin-1"))
+
+        result = asyncio.run(read_text(str(test_file), encoding="latin-1"))
+        assert result == "café"
+
+    def test_raises_unicode_decode_error_on_binary(self, tmp_path):
+        """Default utf-8 raises UnicodeDecodeError on invalid bytes; event is FAILED."""
+        bad = tmp_path / "bad.bin"
+        bad.write_bytes(b"\xff\xfe\xfd\xfc")
+
+        run_id = "test-read-unicode"
+        log = EventLog(run_id, runs_dir=str(tmp_path / "runs"))
+        ctx = WorkflowContext(run_id=run_id, event_log=log)
+        _current_workflow.set(ctx)
+
+        with pytest.raises(UnicodeDecodeError):
+            asyncio.run(read_text(str(bad)))
+
+        events = log.all_events()
+        read_events = [e for e in events if e.op == "read_text"]
+        assert read_events[0].status == EventStatus.FAILED
+        assert read_events[0].response["error_type"] == "UnicodeDecodeError"
+
+    def test_expanduser_resolves_tilde(self, tmp_path, monkeypatch):
+        """Tilde in path is expanded; resolved path recorded in log."""
+        monkeypatch.setenv("HOME", str(tmp_path))
+        target = tmp_path / "home_file.txt"
+        target.write_text("home sweet home")
+
+        run_id = "test-read-tilde"
+        log = EventLog(run_id, runs_dir=str(tmp_path / "runs"))
+        ctx = WorkflowContext(run_id=run_id, event_log=log)
+        _current_workflow.set(ctx)
+
+        result = asyncio.run(read_text("~/home_file.txt"))
+        assert result == "home sweet home"
+
+        events = log.all_events()
+        read_events = [e for e in events if e.op == "read_text"]
+        # Tilde must have been expanded to an absolute path
+        assert not read_events[0].request["path"].startswith("~")
+        assert read_events[0].request["path"] == _resolved(target)
+
+    def test_large_content_truncated_in_log_but_returned_in_full(self, tmp_path):
+        """Files larger than _CONTENT_LOG_LIMIT are truncated in the log only."""
+        big = tmp_path / "big.txt"
+        big_content = "X" * (_CONTENT_LOG_LIMIT + 5000)
+        big.write_text(big_content)
+
+        run_id = "test-read-big"
+        log = EventLog(run_id, runs_dir=str(tmp_path / "runs"))
+        ctx = WorkflowContext(run_id=run_id, event_log=log)
+        _current_workflow.set(ctx)
+
+        result = asyncio.run(read_text(str(big)))
+        # Caller receives FULL content
+        assert result == big_content
+
+        events = log.all_events()
+        read_events = [e for e in events if e.op == "read_text"]
+        stored = read_events[0].response["content"]
+        # Log is truncated
+        assert len(stored) < len(big_content)
+        assert "truncated from audit log" in stored
+        # bytes_read reflects the ACTUAL file size, not the truncated snapshot
+        assert read_events[0].response["bytes_read"] == len(big_content)
 
 
 # ---------------------------------------------------------------------------
@@ -112,12 +211,13 @@ class TestReadTextReplay:
     def test_returns_cached_content(self, tmp_path):
         """On replay, read_text returns cached content without touching the FS."""
         target_path = str(tmp_path / "cached.txt")
+        resolved = _normalize_path(target_path)
 
         loaded = _make_log_with_events(tmp_path / "logs", [
             {
                 "op": "read_text",
                 "finish": True,
-                "request": {"path": target_path},
+                "request": {"path": resolved, "encoding": "utf-8"},
                 "response": {"content": "cached content"},
             },
         ])
@@ -130,12 +230,13 @@ class TestReadTextReplay:
     def test_no_disk_access_on_replay(self, tmp_path):
         """read_text on replay skips filesystem entirely — even for non-existent paths."""
         nonexistent = str(tmp_path / "does_not_exist.txt")
+        resolved = _normalize_path(nonexistent)
 
         loaded = _make_log_with_events(tmp_path / "logs", [
             {
                 "op": "read_text",
                 "finish": True,
-                "request": {"path": nonexistent},
+                "request": {"path": resolved, "encoding": "utf-8"},
                 "response": {"content": "replay only"},
             },
         ])
@@ -143,6 +244,53 @@ class TestReadTextReplay:
 
         result = asyncio.run(read_text(nonexistent))
         assert result == "replay only"
+
+    def test_relative_path_matches_cache_despite_cwd_change(self, tmp_path, monkeypatch):
+        """Relative paths resolve to absolute; replay matches regardless of cwd."""
+        target = tmp_path / "rel.txt"
+        resolved = _normalize_path(str(target))
+
+        loaded = _make_log_with_events(tmp_path / "logs", [
+            {
+                "op": "read_text",
+                "finish": True,
+                "request": {"path": resolved, "encoding": "utf-8"},
+                "response": {"content": "via absolute"},
+            },
+        ])
+        _install_replay_ctx(loaded)
+
+        # Original run used an absolute path. Replay from a DIFFERENT cwd, using
+        # an absolute path that resolves to the same location, still hits the
+        # cache because both are normalised identically.
+        other_dir = tmp_path / "other_cwd"
+        other_dir.mkdir()
+        monkeypatch.chdir(other_dir)
+
+        result = asyncio.run(read_text(str(target)))
+        assert result == "via absolute"
+
+    def test_continue_policy_warns_on_mismatch(self, tmp_path, capsys):
+        """read_text with --on-mismatch=continue warns when returning stale cache."""
+        target_path = str(tmp_path / "mismatch.txt")
+        resolved = _normalize_path(target_path)
+
+        # Cache has old content; current request would use encoding latin-1
+        loaded = _make_log_with_events(tmp_path / "logs", [
+            {
+                "op": "read_text",
+                "finish": True,
+                "request": {"path": resolved, "encoding": "utf-8"},
+                "response": {"content": "old cached"},
+            },
+        ])
+        _install_replay_ctx(loaded)
+        set_mismatch_policy(MismatchPolicy.CONTINUE)
+
+        result = asyncio.run(read_text(target_path, encoding="latin-1"))
+        assert result == "old cached"
+        captured = capsys.readouterr()
+        assert "hash mismatch" in captured.err.lower() or "hash mismatch" in captured.out.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +305,7 @@ class TestWriteTextLive:
         assert target.read_text() == "written content"
 
     def test_records_event_in_log(self, tmp_path):
-        """write_text emits a FINISHED event in the audit log."""
+        """write_text emits a FINISHED event with bytes_written response."""
         target = tmp_path / "out.txt"
         run_id = "test-write-live"
         log = EventLog(run_id, runs_dir=str(tmp_path / "runs"))
@@ -168,11 +316,13 @@ class TestWriteTextLive:
 
         events = log.all_events()
         write_events = [e for e in events if e.op == "write_text"]
-        # In-memory list holds one entry per event (mutated STARTED → FINISHED)
         assert len(write_events) == 1
         assert write_events[0].status == EventStatus.FINISHED
-        assert write_events[0].request["path"] == str(target)
+        assert write_events[0].request["path"] == _resolved(target)
         assert write_events[0].request["content"] == "log me"
+        # NIT-1 fix: response carries path + bytes_written
+        assert write_events[0].response["path"] == _resolved(target)
+        assert write_events[0].response["bytes_written"] == len(b"log me")
 
     def test_records_path_and_content_in_request(self, tmp_path):
         """write_text records both path and content in the event request."""
@@ -187,8 +337,84 @@ class TestWriteTextLive:
         events = log.all_events()
         write_events = [e for e in events if e.op == "write_text"]
         req = write_events[0].request
-        assert req["path"] == str(target)
+        assert req["path"] == _resolved(target)
         assert req["content"] == "the content"
+        assert req["encoding"] == "utf-8"
+
+    def test_creates_parent_directories(self, tmp_path):
+        """write_text creates nested parent directories as needed."""
+        deep = tmp_path / "a" / "b" / "c" / "file.txt"
+        asyncio.run(write_text(str(deep), "deep"))
+        assert deep.read_text() == "deep"
+
+    def test_write_is_atomic(self, tmp_path):
+        """write_text writes via a temp file, renaming atomically into place.
+
+        After the call, target exists with the final content and no stray
+        .tmp siblings remain in the directory.
+        """
+        target = tmp_path / "atomic.txt"
+        target.write_text("original")  # existing file
+
+        asyncio.run(write_text(str(target), "replaced"))
+        assert target.read_text() == "replaced"
+
+        # No leftover .tmp siblings
+        strays = [p for p in tmp_path.iterdir() if p.name != "atomic.txt"]
+        assert strays == [], f"unexpected leftover files: {strays}"
+
+    def test_emits_failed_event_on_permission_error(self, tmp_path, monkeypatch):
+        """Write failure propagates and emits a FAILED event."""
+        # Simulate a failure by monkey-patching _write_text_atomic to raise.
+        from godel import io as godel_io
+
+        def boom(path, content, encoding):
+            raise PermissionError(f"simulated permission denied: {path}")
+
+        monkeypatch.setattr(godel_io, "_write_text_atomic", boom)
+
+        target = tmp_path / "denied.txt"
+        run_id = "test-write-fail"
+        log = EventLog(run_id, runs_dir=str(tmp_path / "runs"))
+        ctx = WorkflowContext(run_id=run_id, event_log=log)
+        _current_workflow.set(ctx)
+
+        with pytest.raises(PermissionError):
+            asyncio.run(write_text(str(target), "nope"))
+
+        events = log.all_events()
+        write_events = [e for e in events if e.op == "write_text"]
+        assert len(write_events) == 1
+        assert write_events[0].status == EventStatus.FAILED
+        assert write_events[0].response["error_type"] == "PermissionError"
+
+    def test_accepts_encoding_parameter(self, tmp_path):
+        """write_text honours the encoding kwarg."""
+        target = tmp_path / "latin.txt"
+        asyncio.run(write_text(str(target), "café", encoding="latin-1"))
+        assert target.read_bytes() == "café".encode("latin-1")
+
+    def test_large_content_truncated_in_log_but_written_in_full(self, tmp_path):
+        """Files larger than _CONTENT_LOG_LIMIT are truncated in log only, not on disk."""
+        target = tmp_path / "big.txt"
+        big_content = "Y" * (_CONTENT_LOG_LIMIT + 5000)
+
+        run_id = "test-write-big"
+        log = EventLog(run_id, runs_dir=str(tmp_path / "runs"))
+        ctx = WorkflowContext(run_id=run_id, event_log=log)
+        _current_workflow.set(ctx)
+
+        asyncio.run(write_text(str(target), big_content))
+
+        # On disk: full content
+        assert target.read_text() == big_content
+        # In log: truncated
+        events = log.all_events()
+        write_events = [e for e in events if e.op == "write_text"]
+        stored = write_events[0].request["content"]
+        assert len(stored) < len(big_content)
+        assert "truncated from audit log" in stored
+        assert write_events[0].response["bytes_written"] == len(big_content.encode("utf-8"))
 
 
 # ---------------------------------------------------------------------------
@@ -199,12 +425,13 @@ class TestWriteTextReplay:
     def test_skips_write_on_replay(self, tmp_path):
         """On replay, write_text does NOT write to the filesystem."""
         target_path = str(tmp_path / "should_not_exist.txt")
+        resolved = _normalize_path(target_path)
 
         loaded = _make_log_with_events(tmp_path / "logs", [
             {
                 "op": "write_text",
                 "finish": True,
-                "request": {"path": target_path, "content": "written"},
+                "request": {"path": resolved, "content": "written", "encoding": "utf-8"},
                 "response": {},
             },
         ])
@@ -213,7 +440,6 @@ class TestWriteTextReplay:
         asyncio.run(write_text(target_path, "written"))
 
         # File should NOT have been written during replay
-        from pathlib import Path
         assert not Path(target_path).exists()
 
     def test_started_only_raises_unsafe_resume_error(self, tmp_path):
@@ -221,12 +447,13 @@ class TestWriteTextReplay:
         from godel._exceptions import UnsafeResumeError
 
         target_path = str(tmp_path / "partial.txt")
+        resolved = _normalize_path(target_path)
 
         loaded = _make_log_with_events(tmp_path / "logs", [
             {
                 "op": "write_text",
                 "finish": False,  # STARTED but never FINISHED
-                "request": {"path": target_path, "content": "partial"},
+                "request": {"path": resolved, "content": "partial", "encoding": "utf-8"},
                 "response": {},
             },
         ])
@@ -234,6 +461,50 @@ class TestWriteTextReplay:
 
         with pytest.raises(UnsafeResumeError):
             asyncio.run(write_text(target_path, "partial"))
+
+    def test_continue_policy_warns_and_skips_write(self, tmp_path, capsys):
+        """write_text with --on-mismatch=continue warns; write stays skipped."""
+        target_path = str(tmp_path / "mismatch_write.txt")
+        resolved = _normalize_path(target_path)
+
+        loaded = _make_log_with_events(tmp_path / "logs", [
+            {
+                "op": "write_text",
+                "finish": True,
+                "request": {"path": resolved, "content": "cached", "encoding": "utf-8"},
+                "response": {},
+            },
+        ])
+        _install_replay_ctx(loaded)
+        set_mismatch_policy(MismatchPolicy.CONTINUE)
+
+        # Caller passes DIFFERENT content — triggers hash mismatch
+        asyncio.run(write_text(target_path, "new content"))
+
+        captured = capsys.readouterr()
+        err = captured.err + captured.out
+        assert "hash mismatch" in err.lower()
+        # Write was skipped — file does not exist
+        assert not Path(target_path).exists()
+
+    def test_invalidate_policy_executes_fresh_write(self, tmp_path):
+        """write_text with --on-mismatch=invalidate performs the new write."""
+        target_path = str(tmp_path / "invalidate_write.txt")
+        resolved = _normalize_path(target_path)
+
+        loaded = _make_log_with_events(tmp_path / "logs", [
+            {
+                "op": "write_text",
+                "finish": True,
+                "request": {"path": resolved, "content": "old", "encoding": "utf-8"},
+                "response": {},
+            },
+        ])
+        _install_replay_ctx(loaded)
+        set_mismatch_policy(MismatchPolicy.INVALIDATE)
+
+        asyncio.run(write_text(target_path, "fresh content"))
+        assert Path(target_path).read_text() == "fresh content"
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +521,6 @@ class TestFormatters:
         assert "write_text" in FORMATTERS
 
     def test_read_text_formatter_renders_base_line(self, tmp_path):
-        """read_text formatter produces a non-empty string."""
         from godel._formatters import FORMATTERS
         from godel._events import Event, EventStatus
         event = Event(
@@ -260,7 +530,7 @@ class TestFormatters:
             op="read_text",
             status=EventStatus.FINISHED,
             request={"path": "/tmp/foo.txt"},
-            response={"content": "hello"},
+            response={"content": "hello", "bytes_read": 5},
             ts_start="2026-01-01T00:00:00+00:00",
             ts_end="2026-01-01T00:00:01+00:00",
         )
@@ -269,7 +539,6 @@ class TestFormatters:
         assert "FINISHED" in line
 
     def test_write_text_formatter_renders_base_line(self, tmp_path):
-        """write_text formatter produces a non-empty string."""
         from godel._formatters import FORMATTERS
         from godel._events import Event, EventStatus
         event = Event(
@@ -279,7 +548,7 @@ class TestFormatters:
             op="write_text",
             status=EventStatus.FINISHED,
             request={"path": "/tmp/bar.txt", "content": "data"},
-            response={},
+            response={"path": "/tmp/bar.txt", "bytes_written": 4},
             ts_start="2026-01-01T00:00:00+00:00",
             ts_end="2026-01-01T00:00:01+00:00",
         )
@@ -321,10 +590,11 @@ class TestStrictModeCompatibility:
 
         Runs in a child process because sys.addaudithook() is a one-way
         operation that would contaminate subsequent tests in the same process.
+        Also exercises the contextvars.copy_context() propagation path — the
+        executor thread must see _privileged=True or the audit hook blocks.
         """
         import subprocess
         import sys
-        from pathlib import Path
 
         project_root = str(Path(__file__).parent.parent)
         target = tmp_path / "strict_test.txt"
@@ -336,11 +606,10 @@ from godel._strict_audit import install_audit_hook
 install_audit_hook()
 
 import asyncio
-from godel.io import write_text
+from godel.io import write_text, read_text
 
 asyncio.run(write_text({str(target)!r}, "allowed"))
-
-content = open({str(target)!r}).read()
+content = asyncio.run(read_text({str(target)!r}))
 assert content == "allowed", f"unexpected content: {{content!r}}"
 print("ok")
 """
