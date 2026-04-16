@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v3.4.0 (2026-04-16)
+
+### Bug Fixes
+
+- **io**: Address critical review issues on read_text / write_text
+  ([`b663cc8`](https://github.com/atscub/godel-py/commit/b663cc851f01ad97468c7e90de3d0ed8ba520906))
+
+- **io**: Address pass-2 WARN review findings in io.py
+  ([`a33cd28`](https://github.com/atscub/godel-py/commit/a33cd28e821d395c5c7dce6b67a958fc163045f1))
+
+### Features
+
+- **io**: Add audited read_text / write_text primitives
+  ([`6fc600f`](https://github.com/atscub/godel-py/commit/6fc600fd947b34d80d70e41897629b6a041d951c))
+
+
 ## v3.3.0 (2026-04-16)
 
 ### Bug Fixes
