@@ -153,3 +153,116 @@ def test_agent_serializes_concurrent_calls():
     assert max_in_flight == 1, (
         f"Agent calls must be serialized; saw {max_in_flight} concurrent run() invocations"
     )
+
+
+# ---------------------------------------------------------------------------
+# system_prompt: set once, not repeated per call
+# ---------------------------------------------------------------------------
+
+def test_claude_code_system_prompt_accepted_at_construction():
+    """claude_code() accepts system_prompt kwarg without error."""
+    agent = claude_code(system_prompt="You are the engineer for ticket X.")
+    assert agent._system_prompt == "You are the engineer for ticket X."
+    assert agent._system_prompt_sent is False
+
+
+def test_claude_code_system_prompt_prepended_on_first_call():
+    """system_prompt is prepended to the first call's prompt."""
+    prompts_sent: list[str] = []
+
+    async def capture_run(cmd, **kwargs):
+        prompts_sent.append(cmd)
+        return CommandResult(
+            stdout='{"result": "done", "session_id": "s1"}',
+            stderr="", returncode=0,
+        )
+
+    @workflow
+    async def wf():
+        with patch("godel.agents._common.run", new=capture_run):
+            agent = claude_code(system_prompt="SYSTEM: be concise.")
+            await agent("do the task")
+
+    asyncio.run(wf())
+    assert len(prompts_sent) == 1
+    # The raw command string contains the prompt passed to shlex.quote(), so
+    # we can check that the system_prompt and original prompt both appear.
+    assert "SYSTEM: be concise." in prompts_sent[0]
+    assert "do the task" in prompts_sent[0]
+
+
+def test_claude_code_system_prompt_not_repeated_on_second_call():
+    """system_prompt is NOT prepended on the second call."""
+    prompts_sent: list[str] = []
+    call = 0
+
+    async def capture_run(cmd, **kwargs):
+        nonlocal call
+        prompts_sent.append(cmd)
+        call += 1
+        return CommandResult(
+            stdout=f'{{"result": "r{call}", "session_id": "s1"}}',
+            stderr="", returncode=0,
+        )
+
+    @workflow
+    async def wf():
+        with patch("godel.agents._common.run", new=capture_run):
+            agent = claude_code(system_prompt="PREAMBLE")
+            await agent("first call")
+            await agent("second call")
+
+    asyncio.run(wf())
+    assert len(prompts_sent) == 2
+    # First call: preamble present
+    assert "PREAMBLE" in prompts_sent[0]
+    # Second call: preamble absent
+    assert "PREAMBLE" not in prompts_sent[1]
+
+
+def test_claude_code_no_system_prompt_unaffected():
+    """When system_prompt is not set, behaviour is unchanged."""
+    prompts_sent: list[str] = []
+
+    async def capture_run(cmd, **kwargs):
+        prompts_sent.append(cmd)
+        return CommandResult(
+            stdout='{"result": "done"}',
+            stderr="", returncode=0,
+        )
+
+    @workflow
+    async def wf():
+        with patch("godel.agents._common.run", new=capture_run):
+            agent = claude_code()
+            await agent("plain prompt")
+
+    asyncio.run(wf())
+    assert len(prompts_sent) == 1
+    # Only the original prompt — no preamble inserted.
+    assert "plain prompt" in prompts_sent[0]
+
+
+def test_claude_code_system_prompt_sent_flag_tracks_state():
+    """_system_prompt_sent flips True after first call, stays True."""
+    call = 0
+
+    async def capture_run(cmd, **kwargs):
+        nonlocal call
+        call += 1
+        return CommandResult(
+            stdout=f'{{"result": "r{call}", "session_id": "s"}}',
+            stderr="", returncode=0,
+        )
+
+    @workflow
+    async def wf():
+        with patch("godel.agents._common.run", new=capture_run):
+            agent = claude_code(system_prompt="CHECK")
+            assert agent._system_prompt_sent is False
+            await agent("call 1")
+            assert agent._system_prompt_sent is True
+            await agent("call 2")
+            assert agent._system_prompt_sent is True
+
+    asyncio.run(wf())

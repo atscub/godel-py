@@ -100,5 +100,40 @@ def claude_code(
     cwd: str | None = None,
     tools: list[str] | None = None,
     skip_permissions: bool = False,
+    system_prompt: str | None = None,
 ) -> _ClaudeCodeAgent:
-    return _ClaudeCodeAgent(model=model, cwd=cwd, tools=tools, skip_permissions=skip_permissions)
+    """Return an async callable that dispatches prompts to the Claude CLI.
+
+    Parameters
+    ----------
+    model:
+        Model alias or full Claude model identifier.  Recognised aliases:
+        ``"sonnet"`` (→ claude-sonnet-4-6), ``"opus"`` (→ claude-opus-4-6),
+        ``"haiku"`` (→ claude-haiku-4-5-20251001).
+    cwd:
+        Working directory passed to run().
+    tools:
+        Specific tool names to allow (forwarded as ``--allowedTools TOOL``).
+        If *None*, no ``--allowedTools`` flags are added.
+    skip_permissions:
+        When *True* pass ``--dangerously-skip-permissions`` to the Claude CLI.
+    system_prompt:
+        Optional briefing text prepended to the *first* prompt sent to this
+        agent instance.  Subsequent calls on the same instance do not repeat
+        it, so the context already lives in the conversation session.
+
+        Example::
+
+            eng = claude_code(
+                system_prompt="You are the engineer for ticket X. Always run pytest before commit."
+            )
+            await eng("implement feature A")   # preamble already in context
+            await eng("now implement feature B")  # no repetition
+    """
+    return _ClaudeCodeAgent(
+        model=model,
+        cwd=cwd,
+        tools=tools,
+        skip_permissions=skip_permissions,
+        system_prompt=system_prompt,
+    )

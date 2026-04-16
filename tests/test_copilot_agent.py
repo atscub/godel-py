@@ -529,3 +529,58 @@ def test_copilot_success_emits_started_finished(tmp_path, monkeypatch):
     assert len(started) == 1
     assert len(finished) == 1
     assert started[0]["request"]["model"] == "default"
+
+
+# ---------------------------------------------------------------------------
+# system_prompt: set once, not repeated per call (copilot parity)
+# ---------------------------------------------------------------------------
+
+def test_copilot_system_prompt_accepted_at_construction():
+    """copilot() accepts system_prompt kwarg without error."""
+    agent = copilot(system_prompt="You are the QA engineer.")
+    assert agent._system_prompt == "You are the QA engineer."
+    assert agent._system_prompt_sent is False
+
+
+def test_copilot_system_prompt_prepended_on_first_call():
+    """system_prompt is prepended to the first call's prompt."""
+    cmds: list[str] = []
+
+    async def capture_run(cmd, **kwargs):
+        cmds.append(cmd)
+        return CommandResult(stdout="ok", stderr="", returncode=0)
+
+    @workflow
+    async def wf():
+        with patch("godel.agents._common.run", new=capture_run):
+            agent = copilot(system_prompt="SYSTEM: be precise.")
+            await agent("run checks")
+
+    asyncio.run(wf())
+    assert len(cmds) == 1
+    assert "SYSTEM: be precise." in cmds[0]
+    assert "run checks" in cmds[0]
+
+
+def test_copilot_system_prompt_not_repeated_on_second_call():
+    """system_prompt is NOT prepended on the second call."""
+    cmds: list[str] = []
+    call = 0
+
+    async def capture_run(cmd, **kwargs):
+        nonlocal call
+        cmds.append(cmd)
+        call += 1
+        return CommandResult(stdout="ok", stderr="", returncode=0)
+
+    @workflow
+    async def wf():
+        with patch("godel.agents._common.run", new=capture_run):
+            agent = copilot(system_prompt="PREAMBLE")
+            await agent("first")
+            await agent("second")
+
+    asyncio.run(wf())
+    assert len(cmds) == 2
+    assert "PREAMBLE" in cmds[0]
+    assert "PREAMBLE" not in cmds[1]

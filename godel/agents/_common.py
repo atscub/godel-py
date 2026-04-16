@@ -187,12 +187,17 @@ class _BaseAgent:
         cwd: str | None,
         tools: list[str] | None,
         skip_permissions: bool,
+        system_prompt: str | None = None,
     ):
         self._model = model
         self._cwd = cwd
         self._tools = tools
         self._skip_permissions = skip_permissions
         self._session_id: str | None = None
+        self._system_prompt: str | None = system_prompt
+        # Tracks whether the system_prompt has been prepended to a call yet.
+        # Set to True after the first call so subsequent calls do not repeat it.
+        self._system_prompt_sent: bool = False
         # Agents are conversational: a single instance must serialize its
         # calls so session state stays coherent under PARALLEL / gather().
         self._lock = asyncio.Lock()
@@ -282,6 +287,12 @@ class _BaseAgent:
 
     async def _execute(self, prompt: str, *, schema=None):
         model_id = self._model_aliases.get(self._model, self._model)
+
+        # Prepend the system prompt on the very first call only.
+        if self._system_prompt and not self._system_prompt_sent:
+            prompt = f"{self._system_prompt}\n\n{prompt}"
+            self._system_prompt_sent = True
+
         full_prompt = prompt
         if schema is not None:
             schema_json = json.dumps(schema.model_json_schema(), indent=2)

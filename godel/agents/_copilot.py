@@ -129,6 +129,7 @@ def copilot(
     cwd: str | None = None,
     tools: list[str] | None = None,
     skip_permissions: bool = False,
+    system_prompt: str | None = None,
 ) -> _CopilotAgent:
     """Return an async callable that dispatches prompts to the Copilot CLI.
 
@@ -147,5 +148,23 @@ def copilot(
     skip_permissions:
         When *True* pass ``--allow-all-tools`` to the Copilot CLI, mirroring
         ``--dangerously-skip-permissions`` in the Claude agent.
+    system_prompt:
+        Optional briefing text prepended to the *first* prompt sent to this
+        agent instance.  Subsequent calls on the same instance do not repeat
+        it, so the context already lives in the conversation session.
+
+        Example::
+
+            agent = copilot(
+                system_prompt="You are the QA engineer. Always verify tests pass."
+            )
+            await agent("check feature A")   # preamble already in context
+            await agent("check feature B")   # no repetition
     """
-    return _CopilotAgent(model=model, cwd=cwd, tools=tools, skip_permissions=skip_permissions)
+    return _CopilotAgent(
+        model=model,
+        cwd=cwd,
+        tools=tools,
+        skip_permissions=skip_permissions,
+        system_prompt=system_prompt,
+    )
