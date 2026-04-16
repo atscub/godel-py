@@ -51,25 +51,32 @@ class _StrictVisitor(ast.NodeVisitor):
                 self._imported_names[name] = node.module
         self.generic_visit(node)
 
-    _SLEEP_PAIRS: frozenset[tuple[str, str]] = frozenset({
-        ("time", "sleep"), ("asyncio", "sleep"),
-    })
+    def _record_banned(self, node: ast.Call, module_name: str, attr: str) -> None:
+        hint = "use godel.sleep instead" if attr == "sleep" else "use godel.det instead"
+        self.violations.append(StrictViolation(
+            file=self.filename, line=node.lineno, col=node.col_offset,
+            message=f"banned call: {module_name}.{attr}() — {hint}",
+            layer="ast",
+        ))
 
     def visit_Call(self, node: ast.Call):
+        # Module.attr form: e.g. ``time.sleep(1)`` or ``aio.sleep(1)`` (aliased).
         if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
             module_alias = node.func.value.id
             module_name = self._imported_names.get(module_alias, module_alias)
             pair = (module_name, node.func.attr)
             if pair in BANNED_ATTR_CALLS:
-                if pair in self._SLEEP_PAIRS:
-                    hint = "use godel.sleep instead"
-                else:
-                    hint = "use godel.det instead"
-                self.violations.append(StrictViolation(
-                    file=self.filename, line=node.lineno, col=node.col_offset,
-                    message=f"banned call: {module_name}.{node.func.attr}() — {hint}",
-                    layer="ast",
-                ))
+                self._record_banned(node, module_name, node.func.attr)
+        # Bare-Name form: e.g. ``sleep(1)`` after ``from asyncio import sleep``.
+        # _imported_names maps the bound local name back to its source module
+        # (populated by visit_ImportFrom).  Without this branch, ``from X import Y``
+        # followed by ``Y(...)`` would silently bypass the ban.
+        elif isinstance(node.func, ast.Name):
+            source_module = self._imported_names.get(node.func.id)
+            if source_module is not None:
+                pair = (source_module, node.func.id)
+                if pair in BANNED_ATTR_CALLS:
+                    self._record_banned(node, source_module, node.func.id)
         self.generic_visit(node)
 
 
