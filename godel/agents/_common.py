@@ -229,6 +229,7 @@ class _BaseAgent:
                 re-running produces the same observable effect.
         """
         from godel._context import _current_workflow, _current_stream_path, _step_idempotent
+        from godel._events import EventStatus
         from ulid import ULID
 
         ctx = _current_workflow.get()
@@ -244,12 +245,72 @@ class _BaseAgent:
 
         # Resolve effective idempotency: per-call kwarg, enclosing @step flag,
         # or global assume-idempotent override (set by godel resume --assume-idempotent).
+        # Also track WHICH source granted idempotency so we can annotate the
+        # re-emitted STARTED event (see _idempotent_source below) for audit-log
+        # traceability.
         from godel._replay import get_assume_idempotent_all
-        _effective_idempotent = (
-            assume_idempotent
-            or _step_idempotent.get()
-            or get_assume_idempotent_all()
-        )
+        if assume_idempotent:
+            _idempotent_source = "assume_idempotent_kwarg"
+        elif _step_idempotent.get():
+            _idempotent_source = "step_idempotent"
+        elif get_assume_idempotent_all():
+            _idempotent_source = "resume_flag"
+        else:
+            _idempotent_source = ""
+        _effective_idempotent = bool(_idempotent_source)
+
+        # Determine this call's position in the step's operation sequence so
+        # the replay index can distinguish multiple agent calls inside the
+        # same step.  Same logic as run(): next_op_position() increments
+        # step_local_seq atomically.
+        inv_seq, local_seq = (0, 0)
+        if ctx:
+            inv_seq, local_seq = ctx.next_op_position()
+
+        # Replay guard — mirror run()'s STARTED-only check for the agent.call
+        # event itself.  Without this, a STARTED-only agent.call from a
+        # previously interrupted run would be silently re-executed regardless
+        # of the caller's idempotency stance (C1 fix).
+        #
+        # Scope note: we only enforce the STARTED-only safety check here.
+        # FINISHED events are NOT short-circuited at this layer because the
+        # ``agent.call`` response stores only ``repr(result)[:500]`` which is
+        # lossy (truncated, unparseable for structured schema types).  The
+        # inner run() call's replay guard already returns the cached
+        # CommandResult for FINISHED run events, so agent-call replay works
+        # end-to-end via the existing run()-level cache; we deliberately fall
+        # through for FINISHED here so _execute() can reconstruct the real
+        # object from the cached CLI stdout.
+        if ctx and ctx.replay_walker:
+            from godel._events import Event as _Event
+            _agent_req = {
+                "model": self._model,
+                "prompt": prompt[:500],
+                "has_schema": schema is not None,
+                "schema_name": schema.__name__ if schema else None,
+                "session_id": self._session_id,
+            }
+            _agent_hash = _Event.compute_request_hash(_agent_req)
+            match = ctx.replay_walker.try_match(
+                step_path=tuple(ctx.step_stack),
+                invocation_seq=inv_seq,
+                step_local_seq=local_seq,
+                op="agent.call",
+                request_hash=_agent_hash,
+            )
+            if match.hit and match.status == EventStatus.STARTED:
+                if not _effective_idempotent:
+                    from godel._exceptions import UnsafeResumeError
+                    # Reset the stream_path contextvar before raising so we
+                    # don't leak it into the caller's context.
+                    _current_stream_path.reset(stream_path_token)
+                    raise UnsafeResumeError(
+                        "agent() has STARTED-only state and is not marked idempotent",
+                        cmd=f"agent({self._model})",
+                        step_path=tuple(ctx.step_stack),
+                    )
+                # STARTED + idempotent (any source) — fall through to execute.
+            # FINISHED or no match — fall through; inner run() handles caching.
 
         # The system-prompt prepend + event emission + CLI invocation all
         # happen inside self._lock so that under concurrent gather()/PARALLEL
@@ -295,10 +356,17 @@ class _BaseAgent:
                             "schema_name": schema.__name__ if schema else None,
                             "session_id": self._session_id,
                         }
+                        # Annotate re-emitted STARTED with the idempotency source so
+                        # the append-only audit log explains why a STARTED-only entry
+                        # was promoted to re-execution (C3 fix).
+                        if _idempotent_source:
+                            request_data["assumed_idempotent_source"] = _idempotent_source
                         event = ctx.event_log.emit_started(
                             op="agent.call",
                             step_path=tuple(ctx.step_stack),
                             request=request_data,
+                            invocation_seq=inv_seq,
+                            step_local_seq=local_seq,
                             stream_path=new_stream_path,
                         )
 

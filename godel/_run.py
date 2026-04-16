@@ -202,6 +202,11 @@ async def run(cmd: str, *, cwd: str | None = None, timeout: float | None = None,
         if ctx:
             inv_seq, local_seq = ctx.next_op_position()
 
+        # Track which idempotency source (if any) promoted a STARTED-only entry
+        # here, so the re-emitted STARTED event can be annotated for audit-log
+        # traceability (C3 fix).
+        _promoted_source: str = ""
+
         # Replay guard
         if ctx and ctx.replay_walker:
             from godel._events import Event, EventStatus
@@ -222,15 +227,22 @@ async def run(cmd: str, *, cwd: str | None = None, timeout: float | None = None,
                     returncode=resp.get("returncode", 0),
                 )
             elif match.hit and match.status == EventStatus.STARTED:
-                # Determine effective idempotency: per-call flag, enclosing step
-                # flag, or global assume-idempotent override.
+                # Determine effective idempotency and WHICH source granted it.
+                # Precedence: per-call kwarg > enclosing @step flag > global
+                # resume override.  The source string is persisted on the
+                # re-emitted STARTED event below so postmortem can trace why
+                # a STARTED-only entry was promoted to re-execution.
                 from godel._replay import get_assume_idempotent_all
-                _effective_idempotent = (
-                    idempotent
-                    or _step_idempotent.get()
-                    or get_assume_idempotent_all()
-                )
-                if not _effective_idempotent:
+                if idempotent:
+                    _promoted_source = "idempotent_kwarg"
+                elif _step_idempotent.get():
+                    _promoted_source = "step_idempotent"
+                elif get_assume_idempotent_all():
+                    _promoted_source = "resume_flag"
+                else:
+                    _promoted_source = ""
+
+                if not _promoted_source:
                     from godel._exceptions import UnsafeResumeError
                     raise UnsafeResumeError(
                         f"run() has STARTED-only state and is not marked idempotent",
@@ -241,10 +253,16 @@ async def run(cmd: str, *, cwd: str | None = None, timeout: float | None = None,
 
         event = None
         if ctx and ctx.event_log:
+            _req_payload = {"cmd": cmd, "cwd": cwd, "timeout": timeout, "idempotent": idempotent}
+            # Annotate the re-emitted STARTED event with the idempotency source
+            # that promoted it.  Only set when we actually promoted a prior
+            # STARTED-only entry (not on fresh first executions) — C3 fix.
+            if _promoted_source:
+                _req_payload["assumed_idempotent_source"] = _promoted_source
             event = ctx.event_log.emit_started(
                 op="run",
                 step_path=tuple(ctx.step_stack),
-                request={"cmd": cmd, "cwd": cwd, "timeout": timeout, "idempotent": idempotent},
+                request=_req_payload,
                 invocation_seq=inv_seq,
                 step_local_seq=local_seq,
                 parent_event_id=ctx.current_parent_event_id,

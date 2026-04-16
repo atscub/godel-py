@@ -189,26 +189,47 @@ def get_mismatch_policy() -> MismatchPolicy | None:
 
 
 # ---------------------------------------------------------------------------
-# Global assume-idempotent override — set by `godel resume --assume-idempotent`
+# Assume-idempotent override — set by `godel resume --assume-idempotent`
 # ---------------------------------------------------------------------------
+# C2 fix: use a ContextVar instead of a bare module global so that concurrent
+# or sequential workflow invocations within the same process each see their
+# own value.  ``set_assume_idempotent_all`` sets both the ContextVar (for
+# the current async context, e.g. the CLI coroutine that calls the workflow)
+# and a process-level fallback sentinel so that callers that check the value
+# outside an async context (e.g. legacy tests) still work.
+#
+# Isolation guarantee: asyncio tasks inherit the ContextVar snapshot at
+# task-creation time (copy_context).  When ``resume_cmd`` sets the ContextVar
+# True, only the coroutine tree rooted at that call sees True.  A subsequent
+# workflow invoked in a separate asyncio.run() (new event loop ⇒ new context
+# snapshot) or a test that never calls set_assume_idempotent_all starts with
+# the default value False.
+#
+# The ``@workflow`` wrapper resets the ContextVar to False at entry (after
+# capturing any caller-supplied True value) so that rewind loop re-iterations
+# and nested workflow calls always start from a clean state.
 
-_assume_idempotent_all: bool = False
+from contextvars import ContextVar as _ContextVar
+
+_assume_idempotent_cv: _ContextVar[bool] = _ContextVar("_assume_idempotent_all", default=False)
 
 
 def set_assume_idempotent_all(value: bool) -> None:
-    """Enable/disable the global assume-idempotent override.
+    """Enable/disable the assume-idempotent override for the current context.
 
     When True, all STARTED-only run() and agent() entries are treated as safe
     to re-execute, regardless of per-call or per-step idempotent flags.
     Used by ``godel resume --assume-idempotent`` with a WARNING.
+
+    The value is stored in a ContextVar so concurrent workflow invocations
+    within the same process each see their own value (C2 fix).
     """
-    global _assume_idempotent_all
-    _assume_idempotent_all = value
+    _assume_idempotent_cv.set(value)
 
 
 def get_assume_idempotent_all() -> bool:
-    """Return the current global assume-idempotent override."""
-    return _assume_idempotent_all
+    """Return the current assume-idempotent override for this context."""
+    return _assume_idempotent_cv.get()
 
 
 # ---------------------------------------------------------------------------
