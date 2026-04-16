@@ -189,6 +189,29 @@ def get_mismatch_policy() -> MismatchPolicy | None:
 
 
 # ---------------------------------------------------------------------------
+# Global assume-idempotent override — set by `godel resume --assume-idempotent`
+# ---------------------------------------------------------------------------
+
+_assume_idempotent_all: bool = False
+
+
+def set_assume_idempotent_all(value: bool) -> None:
+    """Enable/disable the global assume-idempotent override.
+
+    When True, all STARTED-only run() and agent() entries are treated as safe
+    to re-execute, regardless of per-call or per-step idempotent flags.
+    Used by ``godel resume --assume-idempotent`` with a WARNING.
+    """
+    global _assume_idempotent_all
+    _assume_idempotent_all = value
+
+
+def get_assume_idempotent_all() -> bool:
+    """Return the current global assume-idempotent override."""
+    return _assume_idempotent_all
+
+
+# ---------------------------------------------------------------------------
 # Source-edit policy — detects edits to cached @step function bodies
 # ---------------------------------------------------------------------------
 

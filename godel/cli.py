@@ -475,13 +475,24 @@ def run_cmd(file, extra, no_strict, no_lint, watch, no_stream, plain, auto_check
         "Also: GODEL_AUTO_CHECKPOINT env var."
     ),
 )
-def resume_cmd(run_id, file, on_mismatch, on_source_edit, no_strict, no_lint, no_stream, auto_checkpoint):
+@click.option(
+    "--assume-idempotent",
+    is_flag=True,
+    default=False,
+    help=(
+        "Treat ALL STARTED-only run()/agent() entries as safe to re-execute. "
+        "Emits a WARNING for each promoted entry. "
+        "Use when you are certain the interrupted operations had no irreversible side effects."
+    ),
+)
+def resume_cmd(run_id, file, on_mismatch, on_source_edit, no_strict, no_lint, no_stream, auto_checkpoint, assume_idempotent):
     """Resume a workflow run from its audit log."""
     from pathlib import Path
     from godel._event_log import EventLog
     from godel._replay import (
         ReplayWalker, MismatchPolicy, set_mismatch_policy,
         SourceEditPolicy, set_source_edit_policy,
+        set_assume_idempotent_all,
     )
     from godel._context import _pending_replay
 
@@ -560,6 +571,23 @@ def resume_cmd(run_id, file, on_mismatch, on_source_edit, no_strict, no_lint, no
     set_source_edit_policy(SourceEditPolicy.WARN)
     if on_source_edit:
         set_source_edit_policy(SourceEditPolicy(on_source_edit))
+
+    # 3d. Reset assume-idempotent-all override (module-level global) and apply
+    # the CLI flag.  Always reset first to prevent test-suite bleed.
+    set_assume_idempotent_all(False)
+    if assume_idempotent:
+        # Emit a WARNING: the caller is opting into potentially unsafe re-execution.
+        click.echo(
+            click.style(
+                "[godel] WARNING: --assume-idempotent is set. All STARTED-only "
+                "run()/agent() entries will be re-executed without UnsafeResumeError. "
+                "Only use this when you are certain these operations had no "
+                "irreversible side effects.",
+                fg="yellow",
+            ),
+            err=True,
+        )
+        set_assume_idempotent_all(True)
 
     # 3b. Strict mode: AST scan first (Layer 1)
     if not no_strict:
@@ -674,6 +702,9 @@ def resume_cmd(run_id, file, on_mismatch, on_source_edit, no_strict, no_lint, no
     finally:
         _on_run_start.reset(start_token)
         _pending_replay.reset(token)
+        # Always reset global assume-idempotent-all to prevent bleed into
+        # subsequent calls in the same process (e.g. test suites).
+        set_assume_idempotent_all(False)
 
 
 @main.command("show")

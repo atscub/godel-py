@@ -135,6 +135,11 @@ _current_transcript: ContextVar = ContextVar(
 # set/reset around the run() call site using ContextVar.set() + .reset().
 _line_observer: ContextVar = ContextVar("godel_line_observer", default=None)
 
+# _step_idempotent is True when the enclosing @step was decorated with
+# idempotent=True.  run() and agent.__call__() read this to decide whether
+# a STARTED-only log entry is safe to re-execute.
+_step_idempotent: ContextVar[bool] = ContextVar("godel_step_idempotent", default=False)
+
 
 def get_event_log():
     """Retrieve the EventLog from the current workflow context."""

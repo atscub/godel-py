@@ -15,6 +15,7 @@ from godel._context import (
     _on_run_start,
     _current_stream_path,
     _current_transcript,
+    _step_idempotent,
 )
 from godel._exceptions import PauseSignal, RewindSignal
 
@@ -581,6 +582,13 @@ def step(fn=None, *, name=None, idempotent=False, capture_stdout: bool = False):
                 )
                 ctx.push_event_scope(event.event_id)
 
+            # Set _step_idempotent contextvar when this step is marked idempotent.
+            # This propagates to all run() and agent() calls within the step body
+            # so they treat STARTED-only log entries as safe to re-execute.
+            _idempotent_token = None
+            if idempotent:
+                _idempotent_token = _step_idempotent.set(True)
+
             try:
                 # When capture_stdout=True, wrap the step body in the fd-level
                 # stdout capture context manager so that print() output and child
@@ -688,6 +696,8 @@ def step(fn=None, *, name=None, idempotent=False, capture_stdout: bool = False):
                 if event:
                     ctx.pop_event_scope()
                 ctx.step_stack.pop()
+                if _idempotent_token is not None:
+                    _step_idempotent.reset(_idempotent_token)
 
         _opts = {"capture_stdout": capture_stdout}
 

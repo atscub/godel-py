@@ -214,9 +214,21 @@ class _BaseAgent:
     async def __call__(self, prompt: str) -> str: ...
     @overload
     async def __call__(self, prompt: str, *, schema: Type[T]) -> T: ...
+    @overload
+    async def __call__(self, prompt: str, *, assume_idempotent: bool) -> str: ...
 
-    async def __call__(self, prompt: str, *, schema=None):
-        from godel._context import _current_workflow, _current_stream_path
+    async def __call__(self, prompt: str, *, schema=None, assume_idempotent: bool = False):
+        """Invoke the agent.
+
+        Args:
+            prompt: The prompt to send to the agent.
+            schema: Optional Pydantic model class for structured output.
+            assume_idempotent: When True, treat a STARTED-only ``agent.call``
+                log entry as safe to re-execute on resume.  Use this for
+                read-only agent calls (e.g. code review, risk analysis) where
+                re-running produces the same observable effect.
+        """
+        from godel._context import _current_workflow, _current_stream_path, _step_idempotent
         from ulid import ULID
 
         ctx = _current_workflow.get()
@@ -230,6 +242,15 @@ class _BaseAgent:
         new_stream_path = parent_stream_path + [launch_id]
         stream_path_token = _current_stream_path.set(new_stream_path)
 
+        # Resolve effective idempotency: per-call kwarg, enclosing @step flag,
+        # or global assume-idempotent override (set by godel resume --assume-idempotent).
+        from godel._replay import get_assume_idempotent_all
+        _effective_idempotent = (
+            assume_idempotent
+            or _step_idempotent.get()
+            or get_assume_idempotent_all()
+        )
+
         # The system-prompt prepend + event emission + CLI invocation all
         # happen inside self._lock so that under concurrent gather()/PARALLEL
         # the briefing is prepended exactly once (whichever task acquires the
@@ -237,6 +258,15 @@ class _BaseAgent:
         # success — flips the flag; the rest see the flipped flag).
         event = None
         prepended_system_prompt = False
+
+        # Propagate effective idempotency to the internal run() call(s) via
+        # _step_idempotent contextvar.  This ensures the CLI subprocess run()
+        # inside _invoke() skips the UnsafeResumeError guard for STARTED-only
+        # entries when this agent call is marked idempotent by any mechanism.
+        _idempotent_token = None
+        if _effective_idempotent:
+            _idempotent_token = _step_idempotent.set(True)
+
         try:
             try:
                 async with self._lock:
@@ -320,6 +350,8 @@ class _BaseAgent:
 
             return result
         finally:
+            if _idempotent_token is not None:
+                _step_idempotent.reset(_idempotent_token)
             _current_stream_path.reset(stream_path_token)
 
     async def _execute(self, prompt: str, *, schema=None):

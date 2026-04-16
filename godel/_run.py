@@ -7,7 +7,7 @@ import signal
 import sys
 from dataclasses import dataclass
 
-from godel._context import _privileged, _current_stream_path, _line_observer
+from godel._context import _privileged, _current_stream_path, _line_observer, _step_idempotent
 from godel._decorators import WorkflowFail
 from godel._exceptions import _render_context_marker
 
@@ -221,14 +221,23 @@ async def run(cmd: str, *, cwd: str | None = None, timeout: float | None = None,
                     stderr=resp.get("stderr", ""),
                     returncode=resp.get("returncode", 0),
                 )
-            elif match.hit and match.status == EventStatus.STARTED and not idempotent:
-                from godel._exceptions import UnsafeResumeError
-                raise UnsafeResumeError(
-                    f"run() has STARTED-only state and is not marked idempotent",
-                    cmd=cmd,
-                    step_path=tuple(ctx.step_stack),
+            elif match.hit and match.status == EventStatus.STARTED:
+                # Determine effective idempotency: per-call flag, enclosing step
+                # flag, or global assume-idempotent override.
+                from godel._replay import get_assume_idempotent_all
+                _effective_idempotent = (
+                    idempotent
+                    or _step_idempotent.get()
+                    or get_assume_idempotent_all()
                 )
-            # STARTED + idempotent, or no match: fall through to execute
+                if not _effective_idempotent:
+                    from godel._exceptions import UnsafeResumeError
+                    raise UnsafeResumeError(
+                        f"run() has STARTED-only state and is not marked idempotent",
+                        cmd=cmd,
+                        step_path=tuple(ctx.step_stack),
+                    )
+            # STARTED + idempotent (any source), or no match: fall through to execute
 
         event = None
         if ctx and ctx.event_log:

@@ -267,9 +267,19 @@ async def repo_ctx() -> RepoCtx:
 - **`parallel()` for independent branches.** Two agent calls that don't depend
   on each other should run concurrently. See `parallel()` usage in
   [`examples/feature_factory.py`](../examples/feature_factory.py).
-- **Idempotent marking.** `@step(idempotent=True)` and `run(..., idempotent=True)`
-  let replay skip re-execution even when the prior attempt only recorded
-  `STARTED`. Use for pure reads.
+- **Idempotent marking.** Three levels of opt-in idempotency let resume
+  re-execute a STARTED-only operation instead of raising `UnsafeResumeError`:
+
+  | Level | Syntax | Scope | When to use |
+  |-------|--------|-------|-------------|
+  | Per-call | `run(cmd, idempotent=True)` | single `run()` call | Pure reads: `git log`, `gh api GET`, read-only scripts |
+  | Per-call | `agent(prompt, assume_idempotent=True)` | single agent call | Read-only agent calls: code review, plan critique, risk analysis |
+  | Per-step | `@step(idempotent=True)` | all `run()` and `agent()` within the step | Steps that only query state and have no write side-effects |
+  | Global | `godel resume --assume-idempotent` | every STARTED-only entry in the run | Emergency recovery when you are certain nothing wrote irreversibly; emits a WARNING |
+
+  The default is always safe: a STARTED-only entry raises `UnsafeResumeError`
+  until you explicitly opt in. Prefer the narrowest scope that fits.
+
 - **Trim prompt boilerplate.** Every call hashes the full prompt into
   `request_hash`. Shorter prompts = smaller cache keys = cheaper retries. Don't
   paste the schema into the prompt — `schema=` handles it.
