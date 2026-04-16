@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v3.3.0 (2026-04-16)
+
+### Bug Fixes
+
+- **io**: Defer non-TTY warning to live-read path + docs/help polish
+  ([`dfef7e0`](https://github.com/atscub/godel-py/commit/dfef7e0a00deb25bca87f10ef9725f27765b57e7))
+
+- **io**: Exclude auto_checkpoint from replay request_hash
+  ([`ec91067`](https://github.com/atscub/godel-py/commit/ec91067f226dabdafd7336de6e120943637a0fdc))
+
+### Features
+
+- **io**: Support programmatic checkpoint answers via stdin
+  ([`f5328b8`](https://github.com/atscub/godel-py/commit/f5328b8d68d921bddd0afb3abc54a124d93bdded))
+
+
 ## v3.2.0 (2026-04-16)
 
 ### Documentation
