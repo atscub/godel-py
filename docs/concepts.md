@@ -147,3 +147,10 @@ name = await input("your name: ")  # blocks, durable across resume
 
 Using the raw builtins in a `@workflow` context is a lint error (`PL004`), because their
 output is invisible to replay.
+
+## Where next
+
+- [Getting Started](getting-started.md) if you haven't run your first workflow.
+- [Best Practices](best-practices.md) for structuring non-trivial programs —
+  project layout, composable blocks, YAML config, deterministic-first.
+- [engineer](skills/godel-engineer.md) for authoring workflows step-by-step.

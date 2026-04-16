@@ -128,4 +128,6 @@ If you're adding tests, put them under `py-library/tests/` and use the helpers i
 
 - [API Reference](../api-reference.md) — every exported symbol.
 - [Concepts](../concepts.md) — audit log, strict mode, replay semantics.
+- [Best Practices](../best-practices.md) — project layout, composable blocks,
+  deterministic-first, cost/optimization. Architectural companion to this guide.
 - [`examples/pr_review.py`](../../examples/pr_review.py) — canonical workflow.

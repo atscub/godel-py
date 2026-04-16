@@ -47,6 +47,8 @@ def test_bundled_guides_match_docs_source():
         "concepts.md":        repo / "docs" / "concepts.md",
         "api-reference.md":   repo / "docs" / "api-reference.md",
         "getting-started.md": repo / "docs" / "getting-started.md",
+        "monitoring.md":      repo / "docs" / "monitoring.md",
+        "best-practices.md":  repo / "docs" / "best-practices.md",
     }
     guides_dir = repo / "godel" / "_guides"
     for bundled, source in mapping.items():

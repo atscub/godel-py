@@ -13,5 +13,6 @@ cp docs/concepts.md              godel/_guides/concepts.md
 cp docs/api-reference.md         godel/_guides/api-reference.md
 cp docs/getting-started.md       godel/_guides/getting-started.md
 cp docs/monitoring.md            godel/_guides/monitoring.md
+cp docs/best-practices.md        godel/_guides/best-practices.md
 
-echo "synced 7 guides from docs/ -> godel/_guides/"
+echo "synced 8 guides from docs/ -> godel/_guides/"

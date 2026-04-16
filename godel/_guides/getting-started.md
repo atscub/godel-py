@@ -110,3 +110,5 @@ If the agent replies with invalid JSON, Godel raises `SchemaValidationFailure`.
 - Read [Concepts](concepts.md) to understand the audit log, replay, and strict mode.
 - Browse the [API Reference](api-reference.md).
 - Study the real-world [PR-review example](../examples/pr_review.py).
+- Ready to scale past a single file? [Best Practices](best-practices.md) covers
+  project layout, composable blocks, YAML config, and deterministic-first design.
