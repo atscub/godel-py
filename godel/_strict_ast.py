@@ -7,6 +7,7 @@ from godel._exceptions import StrictViolation
 
 BANNED_ATTR_CALLS: set[tuple[str, str]] = {
     ("time", "time"), ("time", "monotonic"), ("time", "sleep"),
+    ("asyncio", "sleep"),
     ("datetime", "now"), ("datetime", "today"), ("datetime", "utcnow"),
     ("random", "random"), ("random", "choice"), ("random", "randint"),
     ("random", "uniform"), ("random", "shuffle"),
@@ -50,15 +51,23 @@ class _StrictVisitor(ast.NodeVisitor):
                 self._imported_names[name] = node.module
         self.generic_visit(node)
 
+    _SLEEP_PAIRS: frozenset[tuple[str, str]] = frozenset({
+        ("time", "sleep"), ("asyncio", "sleep"),
+    })
+
     def visit_Call(self, node: ast.Call):
         if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
             module_alias = node.func.value.id
             module_name = self._imported_names.get(module_alias, module_alias)
             pair = (module_name, node.func.attr)
             if pair in BANNED_ATTR_CALLS:
+                if pair in self._SLEEP_PAIRS:
+                    hint = "use godel.sleep instead"
+                else:
+                    hint = "use godel.det instead"
                 self.violations.append(StrictViolation(
                     file=self.filename, line=node.lineno, col=node.col_offset,
-                    message=f"banned call: {module_name}.{node.func.attr}() — use godel.det instead",
+                    message=f"banned call: {module_name}.{node.func.attr}() — {hint}",
                     layer="ast",
                 ))
         self.generic_visit(node)

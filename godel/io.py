@@ -1,6 +1,7 @@
-"""Async print/input shadows with audit event emission."""
+"""Async print/input/sleep shadows with audit event emission."""
 import asyncio
 import sys
+import time as _time
 
 from godel._context import _current_workflow
 
@@ -106,3 +107,48 @@ async def input(prompt: str = "", *, schema=None):
     if event:
         ctx.event_log.emit_finished(event.event_id, response={"value": result})
     return result
+
+
+async def sleep(seconds: float) -> None:
+    """Audited async sleep. Emits sleep event with requested and actual elapsed duration.
+
+    On replay, returns immediately without sleeping (cached event hit).
+    """
+    ctx = _current_workflow.get()
+
+    inv_seq, local_seq = (0, 0)
+    if ctx:
+        inv_seq, local_seq = ctx.next_op_position()
+
+    # Replay guard — skip the real sleep, return immediately
+    if ctx and ctx.replay_walker:
+        from godel._events import Event, EventStatus
+        req = {"seconds": seconds}
+        req_hash = Event.compute_request_hash(req)
+        match = ctx.replay_walker.try_match(
+            step_path=tuple(ctx.step_stack),
+            invocation_seq=inv_seq,
+            step_local_seq=local_seq,
+            op="sleep",
+            request_hash=req_hash,
+        )
+        if match.hit and match.status == EventStatus.FINISHED:
+            return
+
+    event = None
+    if ctx and ctx.event_log:
+        event = ctx.event_log.emit_started(
+            op="sleep",
+            step_path=tuple(ctx.step_stack),
+            request={"seconds": seconds},
+            invocation_seq=inv_seq,
+            step_local_seq=local_seq,
+            parent_event_id=ctx.current_parent_event_id,
+        )
+
+    t0 = _time.monotonic()
+    await asyncio.sleep(seconds)
+    elapsed = _time.monotonic() - t0
+
+    if event:
+        ctx.event_log.emit_finished(event.event_id, response={"elapsed": elapsed})

@@ -186,3 +186,42 @@ class TestRunReplay:
         # With idempotent=True, STARTED-only should fall through and actually execute
         result = asyncio.run(run("echo safe", idempotent=True))
         assert "safe" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# sleep() replay — returns immediately without sleeping
+# ---------------------------------------------------------------------------
+
+class TestSleepReplay:
+    def test_returns_immediately_on_cache_hit(self, tmp_path):
+        import time
+        from godel.io import sleep as godel_sleep
+
+        req = {"seconds": 60.0}
+        loaded = _make_log_with_events(tmp_path, [
+            {"op": "sleep", "finish": True, "request": req, "response": {"elapsed": 60.0}},
+        ])
+        _install_replay_ctx(loaded)
+
+        t0 = time.monotonic()
+        asyncio.run(godel_sleep(60.0))
+        elapsed = time.monotonic() - t0
+        # Should return near-instantly, definitely not 60s
+        assert elapsed < 1.0
+
+    def test_started_only_falls_through(self, tmp_path):
+        """STARTED-only sleep (incomplete run) falls through and actually sleeps."""
+        import time
+        from godel.io import sleep as godel_sleep
+
+        req = {"seconds": 0.05}
+        loaded = _make_log_with_events(tmp_path, [
+            {"op": "sleep", "finish": False, "request": req},
+        ])
+        _install_replay_ctx(loaded)
+
+        t0 = time.monotonic()
+        asyncio.run(godel_sleep(0.05))
+        elapsed = time.monotonic() - t0
+        # Falls through to real sleep since no FINISHED event
+        assert elapsed >= 0.04

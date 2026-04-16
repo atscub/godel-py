@@ -82,3 +82,23 @@ def test_scan_file_raises(tmp_path):
     with pytest.raises(GodelStrictError) as exc_info:
         scan_file(str(f))
     assert len(exc_info.value.violations) == 1
+
+
+def test_detects_asyncio_sleep():
+    vs = scan_source("import asyncio\nawait asyncio.sleep(1)")
+    assert len(vs) == 1
+    assert "asyncio.sleep()" in vs[0].message
+    assert "godel.sleep" in vs[0].message
+
+
+def test_detects_time_sleep_hint():
+    """time.sleep should also suggest godel.sleep."""
+    vs = scan_source("import time\ntime.sleep(1)")
+    assert len(vs) == 1
+    assert "godel.sleep" in vs[0].message
+
+
+def test_asyncio_sleep_aliased():
+    vs = scan_source("import asyncio as aio\nawait aio.sleep(1)")
+    assert len(vs) == 1
+    assert "asyncio.sleep()" in vs[0].message
