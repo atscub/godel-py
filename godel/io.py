@@ -53,18 +53,34 @@ def _maybe_warn_non_tty() -> None:
         pass  # Swallow — TTY detection is best-effort.
 
 
-# Maximum bytes of file content embedded in an audit-log snapshot. Content is
-# truncated for storage/display but the FULL content is hashed for replay
-# matching, so the truncation marker never affects determinism. Keeps the
-# JSONL manageable when workflows touch large files.
-_CONTENT_LOG_LIMIT = 64 * 1024
+# Maximum UTF-8 byte size of file content embedded in an audit-log snapshot.
+# Content is truncated for storage/display but the FULL content is hashed for
+# replay matching, so the truncation marker never affects determinism. Keeps
+# the JSONL manageable when workflows touch large files.
+#
+# Measured in BYTES (UTF-8-encoded), not characters, so that workflows
+# processing CJK / emoji text do not produce disproportionately large audit
+# entries — a char budget on CJK text can inflate the JSONL ~3x.
+_CONTENT_LOG_LIMIT_BYTES = 64 * 1024
+# Backwards-compatible alias; the byte-based name is canonical.
+_CONTENT_LOG_LIMIT = _CONTENT_LOG_LIMIT_BYTES
 
 
-def _truncate_for_log(s: str, limit: int = _CONTENT_LOG_LIMIT) -> str:
-    """Truncate *s* for audit-log embedding, preserving length info."""
-    if len(s) <= limit:
+def _truncate_for_log(s: str, limit_bytes: int = _CONTENT_LOG_LIMIT_BYTES) -> str:
+    """Truncate *s* for audit-log embedding by UTF-8 byte size.
+
+    The limit applies to the UTF-8 encoding; the truncation marker notes how
+    many source characters were dropped (easier for humans to reason about
+    than byte counts).
+    """
+    encoded = s.encode("utf-8", errors="replace")
+    if len(encoded) <= limit_bytes:
         return s
-    return s[:limit] + f"\n... [{len(s) - limit} chars truncated from audit log]"
+    # Decode the prefix, dropping the trailing partial codepoint that the
+    # byte-cut may have split.  errors="ignore" drops at most 3 trailing bytes.
+    kept = encoded[:limit_bytes].decode("utf-8", errors="ignore")
+    dropped_chars = len(s) - len(kept)
+    return kept + f"\n... [{dropped_chars} chars truncated from audit log]"
 
 
 def _normalize_path(path: str) -> str:
@@ -73,11 +89,44 @@ def _normalize_path(path: str) -> str:
     ``~`` is expanded. Missing intermediate components are tolerated (we do not
     require the target to exist yet for ``write_text``). This is the key stored
     in the audit log and used for request-hash computation.
+
+    ``Path.resolve(strict=False)`` raises ``RuntimeError`` on symlink cycles
+    (Python 3.10) rather than ``OSError`` — the former slips past
+    ``except OSError`` handlers and, crucially, fires BEFORE the audit event
+    is emitted, so the failure would go unaudited.  We normalise to
+    ``OSError`` so every pre-emit filesystem error surfaces identically.
     """
     p = Path(path).expanduser()
-    # Path.resolve(strict=False) collapses .. and absolutises even if the
-    # target doesn't exist yet — required for write_text to new files.
-    return str(p.resolve(strict=False))
+    try:
+        # Path.resolve(strict=False) collapses .. and absolutises even if the
+        # target doesn't exist yet — required for write_text to new files.
+        return str(p.resolve(strict=False))
+    except RuntimeError as exc:
+        # Symlink cycle (or other recursion inside pathlib). Re-raise as
+        # OSError so callers / audit hooks see a filesystem error.
+        raise OSError(f"failed to resolve path {path!r}: {exc}") from exc
+
+
+def _safe_emit_failed(event_log, event_id: str, exc: BaseException, step_path: tuple) -> None:
+    """Call ``event_log.emit_failed`` without masking the caller's exception.
+
+    Used from ``except BaseException`` in read_text / write_text.  If the
+    log-write itself fails (disk full, log file closed, DB contention), we
+    must NOT replace the original exception with the log failure — the
+    caller needs to see the real error.  Swallowing is correct here because
+    the caller is about to re-raise the original ``exc``.
+    """
+    try:
+        event_log.emit_failed(
+            event_id,
+            str(exc),
+            error_type=type(exc).__name__,
+            step_path=step_path,
+        )
+    except Exception:
+        # Best-effort audit — never let a log-write failure replace the
+        # real exception.  The original error is re-raised by the caller.
+        pass
 
 
 def _warn(message: str) -> None:
@@ -231,9 +280,29 @@ def _write_text_atomic(path: str, content: str, encoding: str) -> None:
     on POSIX when the target filesystem is a single device), fsyncs, then
     ``os.replace``s into place. SIGKILL/OOM/disk-full mid-write leaves the
     original file untouched.
+
+    Permission preservation: ``mkstemp`` creates the temp file with mode
+    ``0o600`` for security.  If the target already exists we capture its
+    mode via ``os.stat`` and ``os.chmod`` the temp file to match BEFORE
+    ``os.replace``, so an existing ``0o644`` / ``0o755`` file does not
+    silently lose group/world read+execute bits on overwrite.  A missing
+    or unstat-able target leaves the default ``0o600`` in place (matches
+    the security posture of a fresh write).
     """
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
+
+    # Snapshot the existing file's mode (if any) so we can preserve it across
+    # the replace.  Use os.stat (follows symlinks) because os.replace also
+    # follows the final target semantics on POSIX.
+    existing_mode: int | None = None
+    try:
+        existing_mode = os.stat(str(target)).st_mode & 0o7777
+    except (FileNotFoundError, NotADirectoryError):
+        existing_mode = None  # fresh write — keep the secure default 0o600
+    except OSError:
+        existing_mode = None  # permission denied to stat → fall back
+
     # delete=False so the file survives the contextmanager exit; we rename it
     # into place and clean up on error.
     fd, tmp_name = tempfile.mkstemp(
@@ -244,6 +313,16 @@ def _write_text_atomic(path: str, content: str, encoding: str) -> None:
             f.write(content)
             f.flush()
             os.fsync(f.fileno())
+        if existing_mode is not None:
+            # Restore the previous file's permission bits on the new inode.
+            try:
+                os.chmod(tmp_name, existing_mode)
+            except OSError:
+                # Non-fatal: filesystems like FAT, or restricted sandboxes,
+                # may refuse chmod.  Proceed with the rename — preserving
+                # content integrity matters more than permission fidelity
+                # on such exotic backends.
+                pass
         os.replace(tmp_name, target)
     except BaseException:
         # Best-effort cleanup of the temp file if the rename never happened.
@@ -340,11 +419,14 @@ async def read_text(path: str, *, encoding: str = "utf-8") -> str:
     except BaseException as exc:
         _privileged.reset(token)
         if event:
-            ctx.event_log.emit_failed(
+            # _safe_emit_failed swallows any log-write failure so that the
+            # original exception (exc) is what ultimately propagates — never
+            # masked by an audit-log side effect.
+            _safe_emit_failed(
+                ctx.event_log,
                 event.event_id,
-                str(exc),
-                error_type=type(exc).__name__,
-                step_path=tuple(ctx.step_stack) if ctx else (),
+                exc,
+                tuple(ctx.step_stack) if ctx else (),
             )
         raise
     _privileged.reset(token)
@@ -441,27 +523,49 @@ async def write_text(path: str, content: str, *, encoding: str = "utf-8") -> Non
 
     event = None
     if ctx and ctx.event_log:
-        # Truncate content for the STARTED snapshot as well — a huge STARTED
-        # entry lingering in the log (crash before FINISHED) should also be
-        # bounded. The request_hash must be computed from the FULL req so
-        # that replay matching is stable, regardless of the display truncation
-        # applied to the stored request dict.
+        # Single-write STARTED emit with the CORRECT full-content hash.
+        # We compute the hash from the full ``req`` (including untruncated
+        # content) BEFORE emitting, so the first — and only — JSONL
+        # snapshot for this STARTED state already carries the hash that
+        # replay will compare against.  The stored ``request`` field is
+        # the truncated form so the log stays bounded even if we crash
+        # before FINISHED.
+        #
+        # We use ``emit_started`` with the truncated request (cheap hash
+        # input) and then override ``event.request_hash`` in place.  The
+        # ``_append_event`` inside ``emit_started`` has already written
+        # one snapshot with the truncated-input hash; that would leave a
+        # misleading hash on the wire until FINISHED overwrites it
+        # (W4).  To avoid the stale snapshot, we suppress the internal
+        # append via ``_replay_suppress`` for the duration of the
+        # ``emit_started`` call, then manually append once with the
+        # corrected hash.
         from godel._events import Event as _Event
         full_hash = _Event.compute_request_hash(req)
         started_req = dict(req)
         started_req["content"] = _truncate_for_log(content)
-        event = ctx.event_log.emit_started(
-            op="write_text",
-            step_path=tuple(ctx.step_stack),
-            request=started_req,
-            invocation_seq=inv_seq,
-            step_local_seq=local_seq,
-            parent_event_id=ctx.current_parent_event_id,
-        )
-        # Override the hash: emit_started used the truncated request. Swap
-        # in the full-content hash so replay matching is deterministic.
+
+        log = ctx.event_log
+        # Suppress the JSONL write inside emit_started so only our single
+        # corrected-hash snapshot is persisted.  The in-memory Event is
+        # still created & registered in _events_by_id (required for
+        # FINISHED/FAILED to find it later).
+        prev_suppress = log._replay_suppress
+        log._replay_suppress = True
+        try:
+            event = log.emit_started(
+                op="write_text",
+                step_path=tuple(ctx.step_stack),
+                request=started_req,
+                invocation_seq=inv_seq,
+                step_local_seq=local_seq,
+                parent_event_id=ctx.current_parent_event_id,
+            )
+        finally:
+            log._replay_suppress = prev_suppress
+        # Patch the hash to the FULL-content hash, then append once.
         event.request_hash = full_hash
-        ctx.event_log._append_event(event)
+        log._append_event(event)
 
     token = _privileged.set(True)
     try:
@@ -474,11 +578,11 @@ async def write_text(path: str, content: str, *, encoding: str = "utf-8") -> Non
     except BaseException as exc:
         _privileged.reset(token)
         if event:
-            ctx.event_log.emit_failed(
+            _safe_emit_failed(
+                ctx.event_log,
                 event.event_id,
-                str(exc),
-                error_type=type(exc).__name__,
-                step_path=tuple(ctx.step_stack) if ctx else (),
+                exc,
+                tuple(ctx.step_stack) if ctx else (),
             )
         raise
     _privileged.reset(token)
