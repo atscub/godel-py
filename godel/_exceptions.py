@@ -441,12 +441,11 @@ class StepTimeout(GodelError):
     """Raised when a ``@step(timeout=N)`` body exceeds N seconds.
 
     The step is cancelled via ``asyncio.wait_for``; its event log entry is
-    emitted as FAILED with ``error_type='StepTimeout'`` and
-    ``reason='timeout'``.
+    emitted as FAILED with ``error_type='StepTimeout'``.
 
     Compose with ``@retry`` to automatically retry timed-out steps::
 
-        @retry(max_attempts=3)
+        @retry(times=3)
         @step(timeout=10)
         async def fetch_data():
             ...

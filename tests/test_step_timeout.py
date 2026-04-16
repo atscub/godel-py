@@ -184,3 +184,109 @@ def test_step_timeout_exported_from_godel():
     import godel
     assert hasattr(godel, "StepTimeout")
     assert godel.StepTimeout is StepTimeout
+
+
+# ---------------------------------------------------------------------------
+# CRITICAL-1: inner @step must emit FAILED (not stay STARTED) on outer timeout
+# ---------------------------------------------------------------------------
+
+def test_timeout_cancels_inner_step_emits_failed(tmp_path, monkeypatch):
+    """Outer @step(timeout=0.1) cancels inner @step(sleep=1s); inner step must
+    have a FAILED event in the log — not an orphaned STARTED entry."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GODEL_RUNS_DIR", str(tmp_path / "runs"))
+
+    @step
+    async def inner_step():
+        await asyncio.sleep(1.0)
+
+    @step(timeout=0.1)
+    async def outer_step():
+        await inner_step()
+
+    @workflow
+    async def wf():
+        await outer_step()
+
+    with pytest.raises(StepTimeout):
+        asyncio.run(wf())
+
+    import json
+    runs_dir = tmp_path / "runs"
+    log_files = list(runs_dir.glob("*.jsonl"))
+    assert log_files, "Expected at least one .jsonl log file"
+
+    events = []
+    for log_file in log_files:
+        for line in log_file.read_text().splitlines():
+            if line.strip():
+                events.append(json.loads(line))
+
+    # Find all step.enter events for the inner step.
+    # The request field uses "name" (not "step_name") for step events.
+    inner_events = [
+        e for e in events
+        if e.get("op") == "step.enter"
+        and e.get("request", {}).get("name") == "inner_step"
+    ]
+    assert inner_events, "Expected step.enter events for inner_step"
+
+    # The inner step must NOT be left with only a STARTED status —
+    # it must have a corresponding FAILED event.
+    failed_inner = [e for e in inner_events if e.get("status") == "FAILED"]
+    assert failed_inner, (
+        "inner_step must emit a FAILED event when cancelled by outer timeout; "
+        f"got statuses: {[e.get('status') for e in inner_events]}"
+    )
+    assert failed_inner[0].get("response", {}).get("error_type") == "Cancelled"
+
+
+# ---------------------------------------------------------------------------
+# CRITICAL-2: run() must emit FAILED on CancelledError from outer timeout
+# ---------------------------------------------------------------------------
+
+def test_timeout_cancels_run_emits_failed(tmp_path, monkeypatch):
+    """@step(timeout=0.1) that calls run(['sleep', '5']) must emit a FAILED
+    event for the run() with error_type='Cancelled'."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GODEL_RUNS_DIR", str(tmp_path / "runs"))
+
+    from godel._run import run
+
+    @step(timeout=0.1)
+    async def step_with_run():
+        await run("sleep 5")
+
+    @workflow
+    async def wf():
+        await step_with_run()
+
+    with pytest.raises(StepTimeout):
+        asyncio.run(wf())
+
+    import json
+    runs_dir = tmp_path / "runs"
+    log_files = list(runs_dir.glob("*.jsonl"))
+    assert log_files, "Expected at least one .jsonl log file"
+
+    events = []
+    for log_file in log_files:
+        for line in log_file.read_text().splitlines():
+            if line.strip():
+                events.append(json.loads(line))
+
+    # Find run events
+    run_events = [e for e in events if e.get("op") == "run"]
+    assert run_events, "Expected at least one run event"
+
+    # The run() call must have a FAILED event with error_type='Cancelled'
+    failed_run_events = [
+        e for e in run_events
+        if e.get("status") == "FAILED"
+        and e.get("response", {}).get("error_type") == "Cancelled"
+    ]
+    assert failed_run_events, (
+        "run() must emit FAILED with error_type='Cancelled' when cancelled by "
+        f"outer step timeout; got run event statuses: "
+        f"{[e.get('status') for e in run_events]}"
+    )

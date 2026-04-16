@@ -443,8 +443,8 @@ def step(fn=None, *, name=None, idempotent=False, capture_stdout: bool = False, 
         timeout: Wall-clock time limit in seconds for the step body.  If the
             body does not finish within ``timeout`` seconds it is cancelled and
             ``StepTimeout`` is raised.  The step's event log entry is emitted
-            as FAILED with ``error_type='StepTimeout'`` and
-            ``reason='timeout'``.  Defaults to ``None`` (no limit).
+            as FAILED with ``error_type='StepTimeout'``.
+            Defaults to ``None`` (no limit).
     """
     def decorator(fn):
         if not asyncio.iscoroutinefunction(fn):
@@ -682,13 +682,27 @@ def step(fn=None, *, name=None, idempotent=False, capture_stdout: bool = False, 
                     )
                     ctx._step_event_history.append(history_id)
                 return result
-            except Exception as exc:
+            except (Exception, asyncio.CancelledError) as exc:
                 # PauseSignal and RewindSignal are control-flow signals, not step
                 # failures.  Re-raise immediately so the outer @workflow handler
                 # catches them cleanly.  Emitting emit_failed here would mark the
                 # enclosing step as FAILED in the audit log even though the step was
                 # only paused (WARN-2 fix).
                 if isinstance(exc, (PauseSignal, RewindSignal)):
+                    raise
+
+                # CancelledError means an outer @step(timeout=N) cancelled this
+                # inner step via asyncio.wait_for.  Emit FAILED so the event log
+                # is not left with an orphaned STARTED entry, then re-raise so
+                # the outer timeout handler can complete its own cleanup.
+                if isinstance(exc, asyncio.CancelledError):
+                    if event:
+                        ctx.event_log.emit_failed(
+                            event.event_id,
+                            "step cancelled by parent timeout",
+                            error_type="Cancelled",
+                            step_path=list(step_path),
+                        )
                     raise
 
                 # Extract source location from traceback, preferring user-code frames

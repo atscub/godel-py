@@ -338,6 +338,13 @@ async def run(cmd: str, *, cwd: str | None = None, timeout: float | None = None,
                 await asyncio.wait_for(proc.wait(), timeout=5.0)
             except asyncio.CancelledError:
                 await asyncio.shield(_kill_process_group(proc))
+                if event:
+                    ctx.event_log.emit_failed(
+                        event.event_id,
+                        "run() cancelled by parent step timeout",
+                        error_type="Cancelled",
+                        step_path=tuple(ctx.step_stack) if ctx else (),
+                    )
                 raise
             except asyncio.TimeoutError:
                 await asyncio.shield(_kill_process_group(proc))
