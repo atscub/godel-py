@@ -92,7 +92,14 @@ class Event:
     # (env-var mode, e.g. "pipe"/"file"/"fifo"/"1").  It's execution-context
     # metadata, not part of the workflow's logical request identity, so a
     # resume that changes or drops the mode must not trigger a hash mismatch.
-    _HASH_EXCLUDE_KEYS: frozenset[str] = frozenset({"source_hash", "auto_checkpoint"})
+    # assumed_idempotent_source and idempotent are replay-safety metadata, not
+    # semantic inputs — they must not participate in request_hash, or (a) a
+    # STARTED-only entry retroactively promoted on resume would fail to match
+    # itself on a second resume (C4), and (b) retroactively adding
+    # run(..., idempotent=True) would trip --on-mismatch=abort (C5).
+    _HASH_EXCLUDE_KEYS: frozenset[str] = frozenset({
+        "source_hash", "auto_checkpoint", "assumed_idempotent_source", "idempotent",
+    })
 
     @staticmethod
     def compute_request_hash(request: dict) -> str:
