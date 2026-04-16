@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import math
 import secrets
+import time as _time
 import uuid as _uuid
 from datetime import datetime, timezone
 
@@ -164,6 +165,7 @@ async def sleep(seconds: float) -> None:
     inv_seq, local_seq = ctx.next_op_position()
 
     # Replay guard — on a finished cache hit, skip the actual sleep entirely.
+    resume_remaining: float | None = None
     if ctx.replay_walker:
         from godel._events import Event, EventStatus
         req = {"seconds": seconds}
@@ -177,6 +179,26 @@ async def sleep(seconds: float) -> None:
         )
         if match.hit and match.status == EventStatus.FINISHED:
             return
+        # STARTED-only: workflow was interrupted mid-sleep.  The STARTED event
+        # was written but FINISHED was never recorded.  We must:
+        #   1. Clear _replay_suppress so the new FINISHED is persisted to disk.
+        #   2. Sleep only the *remaining* duration (time not yet elapsed).
+        # This mirrors the same pattern used by godel.io.sleep for consistency.
+        if match.hit and match.status == EventStatus.STARTED and match.event is not None:
+            # Clear replay-suppress so the FINISHED we emit below reaches disk.
+            if ctx.event_log is not None:
+                ctx.event_log._replay_suppress = False
+            ctx._local_replay_suppress = False
+            # Compute remaining sleep duration from the original ts_start.
+            ts_start = match.event.ts_start
+            if ts_start:
+                try:
+                    started_at = datetime.fromisoformat(ts_start)
+                    now_dt = datetime.now(started_at.tzinfo)
+                    already = (now_dt - started_at).total_seconds()
+                    resume_remaining = max(0.0, seconds - already)
+                except (ValueError, TypeError):
+                    resume_remaining = None
 
     if ctx.event_log:
         event = ctx.event_log.emit_started(
@@ -187,7 +209,23 @@ async def sleep(seconds: float) -> None:
             step_local_seq=local_seq,
             parent_event_id=ctx.current_parent_event_id,
         )
-        await asyncio.sleep(seconds)
-        ctx.event_log.emit_finished(event.event_id, response={"seconds": seconds})
+        sleep_for = resume_remaining if resume_remaining is not None else seconds
+        t0 = _time.monotonic()
+        try:
+            await asyncio.sleep(sleep_for)
+        except BaseException as exc:
+            ctx.event_log.emit_failed(
+                event.event_id,
+                error=f"sleep interrupted: {type(exc).__name__}",
+                error_type=type(exc).__name__,
+            )
+            raise
+        elapsed = _time.monotonic() - t0
+        response: dict = {"seconds": seconds, "elapsed": elapsed}
+        if resume_remaining is not None:
+            response["resumed"] = True
+            response["remaining_slept"] = elapsed
+        ctx.event_log.emit_finished(event.event_id, response=response)
     else:
-        await asyncio.sleep(seconds)
+        sleep_for = resume_remaining if resume_remaining is not None else seconds
+        await asyncio.sleep(sleep_for)

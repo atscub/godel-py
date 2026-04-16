@@ -1001,11 +1001,26 @@ def retry(
             Defaults to ``0.0`` (no delay — preserves existing behaviour).
         backoff_multiplier: Multiplier applied to each successive wait.
             Defaults to ``2.0`` (doubles the wait on each retry).
+            Must be >= 0.
+
+            **Note on ``backoff_multiplier=0``:** Due to Python's ``0**0 == 1``
+            identity, the *first* retry waits ``backoff_seconds * 1 = backoff_seconds``
+            and every subsequent retry waits ``backoff_seconds * 0 = 0``.  This
+            behaviour is surprising. Use ``backoff_multiplier=1`` for a fixed
+            delay on every retry instead.
+
+    Raises:
+        ValueError: if ``backoff_seconds < 0`` or ``backoff_multiplier < 0``.
 
     The backoff sleep is recorded via ``godel.det.sleep()`` so that replay
     skips the actual wait entirely — replayed runs return cached results
     at full speed.
     """
+    if backoff_seconds < 0:
+        raise ValueError(f"retry(backoff_seconds={backoff_seconds}) must be >= 0")
+    if backoff_multiplier < 0:
+        raise ValueError(f"retry(backoff_multiplier={backoff_multiplier}) must be >= 0")
+
     def decorator(fn):
         @functools.wraps(fn)
         async def wrapper(*args, **kwargs):
