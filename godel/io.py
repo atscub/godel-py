@@ -1,8 +1,45 @@
 """Async print/input shadows with audit event emission."""
 import asyncio
+import os
 import sys
 
 from godel._context import _current_workflow
+
+# Sentinel so we warn only once per process about non-TTY stdin with no
+# GODEL_AUTO_CHECKPOINT declaration.
+_tty_warned: bool = False
+
+
+def _auto_checkpoint_mode() -> str | None:
+    """Return the GODEL_AUTO_CHECKPOINT value, or None if unset/empty."""
+    v = os.environ.get("GODEL_AUTO_CHECKPOINT", "").strip()
+    return v if v else None
+
+
+def _maybe_warn_non_tty() -> None:
+    """Emit a one-shot stderr warning when stdin is not a TTY and the caller
+    has not declared ``GODEL_AUTO_CHECKPOINT``.
+
+    This surfaces the situation where a workflow that calls ``godel.input()``
+    is run non-interactively (e.g. in CI or via a detached process) without
+    explicitly opting in, which can cause the run to hang on EOF.
+    """
+    global _tty_warned
+    if _tty_warned:
+        return
+    if _auto_checkpoint_mode() is not None:
+        return  # Caller declared intent — no warning needed.
+    try:
+        if not sys.stdin.isatty():
+            sys.stderr.write(
+                "[godel] warning: godel.input() called but stdin is not a TTY. "
+                "To script checkpoint answers, pipe answers or set "
+                "GODEL_AUTO_CHECKPOINT=1 to suppress this warning.\n"
+            )
+            sys.stderr.flush()
+            _tty_warned = True
+    except Exception:
+        pass  # Swallow — TTY detection is best-effort.
 
 
 async def print(*values: object, sep: str = " ", end: str = "\n") -> None:
@@ -63,17 +100,38 @@ async def print(*values: object, sep: str = " ", end: str = "\n") -> None:
 
 
 async def input(prompt: str = "", *, schema=None):
-    """Async blocking read from caller stdin. Emits input event."""
+    """Async blocking read from caller stdin. Emits input event.
+
+    ``godel.input()`` reads ``sys.stdin.readline()`` and is therefore
+    scriptable from any standard UNIX mechanism:
+
+    - **Pipe**: ``yes '' | godel run wf.py`` or ``echo "yes" | godel run wf.py``
+    - **File redirect**: ``godel run wf.py < answers.txt``
+    - **FIFO**: ``mkfifo /tmp/ctl && godel run wf.py < /tmp/ctl``
+
+    When running non-interactively set ``GODEL_AUTO_CHECKPOINT=1`` (or any
+    non-empty value) to declare intent and suppress the "stdin is not a TTY"
+    warning that Godel emits as a safety reminder.  The value is recorded in
+    the event's ``request.auto_checkpoint`` field so the audit log reflects
+    the scripted mode.
+    """
+    _maybe_warn_non_tty()
+
     ctx = _current_workflow.get()
 
     inv_seq, local_seq = (0, 0)
     if ctx:
         inv_seq, local_seq = ctx.next_op_position()
 
+    # Build request dict; annotate with auto_checkpoint mode when declared.
+    auto_cp = _auto_checkpoint_mode()
+    req: dict = {"prompt": prompt}
+    if auto_cp is not None:
+        req["auto_checkpoint"] = auto_cp
+
     # Replay guard
     if ctx and ctx.replay_walker:
         from godel._events import Event, EventStatus
-        req = {"prompt": prompt}
         req_hash = Event.compute_request_hash(req)
         match = ctx.replay_walker.try_match(
             step_path=tuple(ctx.step_stack),
@@ -90,7 +148,7 @@ async def input(prompt: str = "", *, schema=None):
         event = ctx.event_log.emit_started(
             op="input",
             step_path=tuple(ctx.step_stack),
-            request={"prompt": prompt},
+            request=req,
             invocation_seq=inv_seq,
             step_local_seq=local_seq,
             parent_event_id=ctx.current_parent_event_id,

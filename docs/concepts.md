@@ -148,6 +148,52 @@ name = await input("your name: ")  # blocks, durable across resume
 Using the raw builtins in a `@workflow` context is a lint error (`PL004`), because their
 output is invisible to replay.
 
+### Scripting checkpoint answers
+
+`godel.input()` reads `sys.stdin.readline()`.  That means checkpoints can be
+driven from any standard UNIX mechanism without changing your workflow code:
+
+```bash
+# Pipe a single canned answer
+echo "yes" | godel run review.py
+
+# Supply multiple answers from a file (one per input() call, in order)
+godel run review.py < answers.txt
+
+# Feed answers from a FIFO so another process controls timing
+mkfifo /tmp/ctl
+godel run review.py < /tmp/ctl &
+echo "approve" > /tmp/ctl
+```
+
+When running non-interactively, declare your intent with `--auto-checkpoint`
+or the `GODEL_AUTO_CHECKPOINT` env var:
+
+```bash
+# Using the flag (value is recorded in the audit log)
+godel run review.py --auto-checkpoint=pipe < answers.txt
+
+# Using the env var (equivalent)
+GODEL_AUTO_CHECKPOINT=pipe godel run review.py < answers.txt
+```
+
+**Why declare intent?**  When Godel detects that `stdin` is not a TTY and
+`GODEL_AUTO_CHECKPOINT` is not set, it emits a one-shot warning:
+
+```
+[godel] warning: godel.input() called but stdin is not a TTY.
+To script checkpoint answers, pipe answers or set
+GODEL_AUTO_CHECKPOINT=1 to suppress this warning.
+```
+
+Setting `GODEL_AUTO_CHECKPOINT` suppresses the warning and records the value
+in each `input` event's `request.auto_checkpoint` field, making the audit log
+self-documenting about how answers were supplied.
+
+**Replay is unaffected.**  A run scripted with piped stdin can still be
+resumed normally — the recorded answers are replayed from the audit log, so
+the new run does not need stdin to be re-piped.
+
 ## Where next
 
 - [Getting Started](getting-started.md) if you haven't run your first workflow.

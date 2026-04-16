@@ -47,6 +47,11 @@ class GodelConfig(BaseModel):
     redact: list[str] = Field(default_factory=list)
     capture_stdout: bool = False
     transcript_max_bytes: int = 10 * 1024 * 1024
+    # Declare that checkpoint answers arrive programmatically (not from a human
+    # at a terminal).  When set to a non-empty string, godel.input() records the
+    # value in the event's request.auto_checkpoint field and suppresses the
+    # "stdin is not a TTY" warning.  Equivalent env var: GODEL_AUTO_CHECKPOINT.
+    auto_checkpoint: str = ""
 
 
 @dataclass(frozen=True)
@@ -144,6 +149,7 @@ _BOOL_ENV_KEYS = {
 _STR_ENV_KEYS = {
     "GODEL_RUNS_DIR": "runs_dir",
     "GODEL_WORKFLOWS_DIR": "workflows_dir",
+    "GODEL_AUTO_CHECKPOINT": "auto_checkpoint",
 }
 
 

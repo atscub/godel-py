@@ -213,7 +213,19 @@ def main():
     default=False,
     help="Force plain line-log output in the watcher subprocess (implies --watch; also: GODEL_WATCH_PLAIN=1).",
 )
-def run_cmd(file, extra, no_strict, no_lint, watch, no_stream, plain):
+@click.option(
+    "--auto-checkpoint",
+    default=None,
+    metavar="MODE",
+    help=(
+        "Declare that checkpoint answers arrive programmatically, not from a "
+        "human terminal.  Sets GODEL_AUTO_CHECKPOINT=<MODE> so godel.input() "
+        "tags events and suppresses the 'stdin is not a TTY' warning.  "
+        "Use '1' for generic scripting, or a descriptive value such as "
+        "'pipe', 'file', or 'fifo'.  Also: GODEL_AUTO_CHECKPOINT env var."
+    ),
+)
+def run_cmd(file, extra, no_strict, no_lint, watch, no_stream, plain, auto_checkpoint):
     """Execute a @workflow-decorated function from FILE.
 
     Pass arguments to the workflow after a '--' separator:
@@ -245,6 +257,8 @@ def run_cmd(file, extra, no_strict, no_lint, watch, no_stream, plain):
         watch = True
     if no_stream:
         os.environ["GODEL_STREAM_AGENTS"] = "0"
+    if auto_checkpoint:
+        os.environ["GODEL_AUTO_CHECKPOINT"] = auto_checkpoint
     if watch:
         try:
             from godel import _watch  # noqa: F401 — triggers import-time guard
@@ -445,7 +459,17 @@ def run_cmd(file, extra, no_strict, no_lint, watch, no_stream, plain):
 @click.option("--no-lint", is_flag=True, help="Skip lint pre-flight check")
 @click.option("--no-stream", is_flag=True, default=False,
               help="Disable agent-response streaming for this run (default: streaming enabled).")
-def resume_cmd(run_id, file, on_mismatch, on_source_edit, no_strict, no_lint, no_stream):
+@click.option(
+    "--auto-checkpoint",
+    default=None,
+    metavar="MODE",
+    help=(
+        "Declare that checkpoint answers arrive programmatically.  "
+        "Sets GODEL_AUTO_CHECKPOINT=<MODE>.  Use '1' for generic scripting.  "
+        "Also: GODEL_AUTO_CHECKPOINT env var."
+    ),
+)
+def resume_cmd(run_id, file, on_mismatch, on_source_edit, no_strict, no_lint, no_stream, auto_checkpoint):
     """Resume a workflow run from its audit log."""
     from pathlib import Path
     from godel._event_log import EventLog
@@ -457,6 +481,8 @@ def resume_cmd(run_id, file, on_mismatch, on_source_edit, no_strict, no_lint, no
 
     if no_stream:
         os.environ["GODEL_STREAM_AGENTS"] = "0"
+    if auto_checkpoint:
+        os.environ["GODEL_AUTO_CHECKPOINT"] = auto_checkpoint
 
     # 1. Find JSONL by prefix
     runs_dir = _resolve_runs_dir()
