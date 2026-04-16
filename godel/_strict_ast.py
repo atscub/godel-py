@@ -24,7 +24,10 @@ class _StrictVisitor(ast.NodeVisitor):
     def __init__(self, filename: str):
         self.filename = filename
         self.violations: list[StrictViolation] = []
-        self._imported_names: dict[str, str] = {}
+        # For ``import X`` / ``import X as Y``: local_name -> module_name (str)
+        # For ``from M import attr`` / ``from M import attr as local``:
+        #   local_name -> (source_module, original_attr) (tuple[str, str])
+        self._imported_names: dict[str, str | tuple[str, str]] = {}
 
     def visit_Import(self, node: ast.Import):
         for alias in node.names:
@@ -34,8 +37,8 @@ class _StrictVisitor(ast.NodeVisitor):
                     message=f"banned module import: {alias.name}",
                     layer="ast",
                 ))
-            name = alias.asname or alias.name
-            self._imported_names[name] = alias.name
+            local_name = alias.asname or alias.name
+            self._imported_names[local_name] = alias.name
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node: ast.ImportFrom):
@@ -47,8 +50,12 @@ class _StrictVisitor(ast.NodeVisitor):
             ))
         if node.module:
             for alias in node.names:
-                name = alias.asname or alias.name
-                self._imported_names[name] = node.module
+                local_name = alias.asname or alias.name
+                original_attr = alias.name
+                # Store the (source_module, original_attr) tuple so that aliased
+                # bare-name calls like ``aio_sleep(1)`` can be resolved back to
+                # (asyncio, sleep) and checked against BANNED_ATTR_CALLS.
+                self._imported_names[local_name] = (node.module, original_attr)
         self.generic_visit(node)
 
     def _record_banned(self, node: ast.Call, module_name: str, attr: str) -> None:
@@ -63,20 +70,24 @@ class _StrictVisitor(ast.NodeVisitor):
         # Module.attr form: e.g. ``time.sleep(1)`` or ``aio.sleep(1)`` (aliased).
         if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
             module_alias = node.func.value.id
-            module_name = self._imported_names.get(module_alias, module_alias)
+            entry = self._imported_names.get(module_alias, module_alias)
+            # entry is a plain module name string for ``import X [as Y]``
+            module_name = entry if isinstance(entry, str) else module_alias
             pair = (module_name, node.func.attr)
             if pair in BANNED_ATTR_CALLS:
                 self._record_banned(node, module_name, node.func.attr)
-        # Bare-Name form: e.g. ``sleep(1)`` after ``from asyncio import sleep``.
-        # _imported_names maps the bound local name back to its source module
-        # (populated by visit_ImportFrom).  Without this branch, ``from X import Y``
-        # followed by ``Y(...)`` would silently bypass the ban.
+        # Bare-Name form: e.g. ``sleep(1)`` after ``from asyncio import sleep``
+        # or ``aio_sleep(1)`` after ``from asyncio import sleep as aio_sleep``.
+        # _imported_names stores (source_module, original_attr) tuples for
+        # from-imports, so we always check against the canonical attr name even
+        # when the user has introduced a local alias.
         elif isinstance(node.func, ast.Name):
-            source_module = self._imported_names.get(node.func.id)
-            if source_module is not None:
-                pair = (source_module, node.func.id)
+            entry = self._imported_names.get(node.func.id)
+            if isinstance(entry, tuple):
+                source_module, original_attr = entry
+                pair = (source_module, original_attr)
                 if pair in BANNED_ATTR_CALLS:
-                    self._record_banned(node, source_module, node.func.id)
+                    self._record_banned(node, source_module, original_attr)
         self.generic_visit(node)
 
 

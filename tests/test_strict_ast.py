@@ -132,3 +132,33 @@ def test_bare_name_unrelated_calls_not_flagged():
     """Bare calls to non-banned names must not be false-flagged."""
     vs = scan_source("from json import dumps\ndumps({'a': 1})")
     assert len(vs) == 0
+
+
+def test_from_asyncio_import_sleep_aliased_bare_call():
+    """`from asyncio import sleep as aio_sleep; await aio_sleep(1)` must be flagged."""
+    vs = scan_source("from asyncio import sleep as aio_sleep\nawait aio_sleep(1)")
+    assert len(vs) == 1
+    assert "asyncio.sleep()" in vs[0].message
+    assert "godel.sleep" in vs[0].message
+
+
+def test_from_time_import_sleep_aliased_bare_call():
+    """`from time import sleep as t_sleep; t_sleep(1)` must be flagged."""
+    vs = scan_source("from time import sleep as t_sleep\nt_sleep(1)")
+    assert len(vs) == 1
+    assert "time.sleep()" in vs[0].message
+    assert "godel.sleep" in vs[0].message
+
+
+def test_from_random_import_aliased_bare_call():
+    """`from random import randint as ri; ri(1, 10)` must be flagged."""
+    vs = scan_source("from random import randint as ri\nri(1, 10)")
+    assert len(vs) == 1
+    assert "random.randint()" in vs[0].message
+    assert "godel.det" in vs[0].message
+
+
+def test_aliased_from_import_unrelated_not_flagged():
+    """Aliased import of a non-banned name must not be false-flagged."""
+    vs = scan_source("from json import dumps as d\nd({'a': 1})")
+    assert len(vs) == 0
