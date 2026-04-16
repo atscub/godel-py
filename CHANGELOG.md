@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v3.9.0 (2026-04-16)
+
+### Bug Fixes
+
+- **retry**: Pass-1 CRITICAL + WARN fixes for det.sleep replay + backoff validation
+  ([`268af5f`](https://github.com/atscub/godel-py/commit/268af5f504947e05f257e478b34beec111adad5c))
+
+### Features
+
+- **retry**: Add exponential backoff via backoff_seconds and backoff_multiplier
+  ([`68e3b8f`](https://github.com/atscub/godel-py/commit/68e3b8f7d4bd8ff0f377160315f77a12ce367831))
+
+
 ## v3.8.0 (2026-04-16)
 
 ### Bug Fixes
