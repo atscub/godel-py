@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v3.7.0 (2026-04-16)
+
+### Bug Fixes
+
+- **idempotency**: Apply C1/C2/C3 critical fixes for opt-in idempotency
+  ([`2c5fae8`](https://github.com/atscub/godel-py/commit/2c5fae825d1ac59c5ac76667325d8e5e5f84b603))
+
+- **idempotency**: Pass-2 C4/C5/C6 — request_hash exclusions + system_prompt restore
+  ([`c85433c`](https://github.com/atscub/godel-py/commit/c85433c587b87320f2503d501afe53bd6541d2e6))
+
+### Features
+
+- **idempotency**: Opt-in idempotency at step, call, and run levels
+  ([`2593050`](https://github.com/atscub/godel-py/commit/2593050fc7d6c8bd845675e155f99b110ce52363))
+
+
 ## v3.6.0 (2026-04-16)
 
 ### Bug Fixes
