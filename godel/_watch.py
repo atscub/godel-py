@@ -61,6 +61,43 @@ from godel._watch_model import WatchModel, StreamPanel, StepNode, reduce, reduce
 
 
 # ---------------------------------------------------------------------------
+# Verbosity configuration
+# ---------------------------------------------------------------------------
+
+from dataclasses import dataclass, field
+
+
+@dataclass
+class VerbosityConfig:
+    """Controls the level of detail shown by the watcher.
+
+    Attributes
+    ----------
+    show_tools:
+        When ``True``, ``agent.tool_call`` and ``agent.tool_result`` events
+        are rendered.  When ``False`` (the default) they are silently dropped
+        to reduce noise.
+    max_agent_lines:
+        Maximum number of lines to stream for a single ``agent.response``
+        block.  ``0`` means no cap (unlimited).  The default (20) keeps
+        responses readable without flooding the terminal.
+    """
+
+    show_tools: bool = False
+    max_agent_lines: int = 20
+
+    @classmethod
+    def verbose(cls) -> "VerbosityConfig":
+        """Return a config equivalent to ``--verbose``: show tools + no line cap."""
+        return cls(show_tools=True, max_agent_lines=0)
+
+    @classmethod
+    def default(cls) -> "VerbosityConfig":
+        """Return the default (quiet) config."""
+        return cls()
+
+
+# ---------------------------------------------------------------------------
 # Coalescing constants
 # ---------------------------------------------------------------------------
 
@@ -363,10 +400,19 @@ class _PlainLineLog:
     :func:`run_watch` so the main loop can treat both uniformly.
     """
 
-    def __init__(self, *, file: IO | None = None) -> None:
+    def __init__(self, *, file: IO | None = None, verbosity: VerbosityConfig | None = None) -> None:
         self._file = file or sys.stdout
         self._model = WatchModel.empty()
         self._use_color = bool(getattr(self._file, "isatty", lambda: False)())
+        self._verbosity = verbosity if verbosity is not None else VerbosityConfig.default()
+        # Per-stream line counter for agent.response line capping.
+        # Maps stream_path → number of lines emitted so far for the current
+        # agent.response block.  Reset when a new agent.prompt arrives.
+        self._response_lines: dict[tuple, int] = {}
+        # Per-stream truncation flag: once we've emitted the "… +N lines" tail
+        # for a given stream, subsequent chunks on that stream are silently
+        # dropped until the next agent.prompt resets the counter.
+        self._response_truncated: dict[tuple, bool] = {}
         # (step_path, stream_path) keys we've already printed a header for.
         # Each parallel branch prints its header once; re-entering the branch
         # after interleaving with a sibling does not reprint.
@@ -590,6 +636,68 @@ class _PlainLineLog:
             pass
         self._emitted_any = True
 
+    def _append_response_chunk(
+        self,
+        cont: str,
+        text: str,
+        *,
+        stream_path: tuple = (),
+        _branch_prefix: str | None = None,
+    ) -> None:
+        """Write a streaming ``agent.response`` chunk with optional line capping.
+
+        When ``_verbosity.max_agent_lines > 0`` and the cumulative newline
+        count for this response block would exceed the cap, the chunk is split
+        at the cap boundary.  The portion that fits is rendered normally via
+        :meth:`_append_chunk`; the remainder is counted but not rendered.
+        Instead a single ``… +N lines truncated`` indicator is emitted and the
+        stream is marked as truncated so all subsequent chunks are dropped
+        silently.
+        """
+        cap = self._verbosity.max_agent_lines
+        if cap <= 0:
+            # No cap — delegate directly.
+            self._append_chunk(cont, text, op="agent.response", stream_path=stream_path, _branch_prefix=_branch_prefix)
+            return
+
+        if self._response_truncated.get(stream_path):
+            # Already truncated — count lines but don't render.
+            return
+
+        lines_so_far = self._response_lines.get(stream_path, 0)
+        # Count the newlines in this chunk to see if we'll exceed the cap.
+        newlines_in_chunk = text.count("\n")
+        if lines_so_far + newlines_in_chunk < cap:
+            # No truncation needed — render the whole chunk.
+            self._append_chunk(cont, text, op="agent.response", stream_path=stream_path, _branch_prefix=_branch_prefix)
+            self._response_lines[stream_path] = lines_so_far + newlines_in_chunk
+        else:
+            # Split the chunk at the cap boundary.
+            remaining_lines = cap - lines_so_far
+            parts = text.split("\n")
+            # Render only the first `remaining_lines` newlines worth.
+            visible_parts = parts[:remaining_lines + 1]
+            hidden_parts = parts[remaining_lines + 1:]
+            visible_text = "\n".join(visible_parts)
+            hidden_count = len(hidden_parts)
+            # Count actual newlines skipped (including ones in hidden_parts).
+            total_newlines = newlines_in_chunk
+            # Render the visible portion.
+            if visible_text:
+                self._append_chunk(cont, visible_text, op="agent.response", stream_path=stream_path, _branch_prefix=_branch_prefix)
+            # Emit the truncation indicator as a new line.
+            self._file.write("\n")
+            pad_prefix = self._branch_prefix(stream_path) if _branch_prefix is None else _branch_prefix
+            extra = hidden_count + (total_newlines - remaining_lines - len(hidden_parts))
+            indicator = cont + self._c("dim", f"… +{hidden_count} lines truncated")
+            self._file.write(pad_prefix + indicator)
+            try:
+                self._file.flush()
+            except Exception:
+                pass
+            self._response_lines[stream_path] = cap
+            self._response_truncated[stream_path] = True
+
     def _term_width(self) -> int:
         try:
             import shutil
@@ -675,6 +783,11 @@ class _PlainLineLog:
         elif op == "run.finish" and stream_path:
             self._active_roots.discard(stream_path[0])
 
+        # Tool-call noise filter: hide agent.tool_call / agent.tool_result
+        # unless --show-tools (or --verbose) was requested.
+        if op in ("agent.tool_call", "agent.tool_result") and not self._verbosity.show_tools:
+            return
+
         # Dedupe the final full-text echo from ``_invoke``.  When streaming
         # is on we've already rendered the answer as chunks; the accumulated
         # text lives in ``_stream_accum``.  The post-call agent.response
@@ -700,6 +813,9 @@ class _PlainLineLog:
         if op == "agent.prompt":
             self._last_response.pop(stream_path, None)
             self._stream_accum.pop(stream_path, None)
+            # Reset the per-stream line counters for the new response.
+            self._response_lines.pop(stream_path, None)
+            self._response_truncated.pop(stream_path, None)
 
     def _render(self, event: dict) -> None:
         op = event.get("op", "?")
@@ -717,9 +833,14 @@ class _PlainLineLog:
         if cur_burst is not None and cur_burst[0] == op and op in ("agent.response", "agent.thought"):
             text = event.get("text", "")
             if text:
-                self._append_chunk(cur_burst[1], text, op=op, stream_path=stream_path)
+                # Always accumulate for dedup purposes, even if truncated.
                 accum = self._stream_accum.setdefault(stream_path, {})
                 accum[op] = accum.get(op, "") + text
+                # Only render if we haven't hit the line cap yet.
+                if op == "agent.response" and not self._response_truncated.get(stream_path):
+                    self._append_response_chunk(cur_burst[1], text, stream_path=stream_path)
+                elif op != "agent.response":
+                    self._append_chunk(cur_burst[1], text, op=op, stream_path=stream_path)
             return
 
         # Any visible output must first wipe any in-progress spinner line
@@ -755,8 +876,11 @@ class _PlainLineLog:
             branch_prefix = self._branch_prefix(stream_path)
             self._file.write(branch_prefix + cont)
             self._burst_col[stream_path] = self._BRANCH_SLOT_WIDTH + len(cont)
+            # Initialise line counter for this new response block.
+            self._response_lines[stream_path] = 0
+            self._response_truncated[stream_path] = False
             if text:
-                self._append_chunk(cont, text, op=op, stream_path=stream_path, _branch_prefix=branch_prefix)
+                self._append_response_chunk(cont, text, stream_path=stream_path, _branch_prefix=branch_prefix)
             self._burst[stream_path] = (op, cont)
             accum = self._stream_accum.setdefault(stream_path, {})
             accum[op] = accum.get(op, "") + text
@@ -1254,6 +1378,7 @@ def run_watch(
     runs_dir: str = "./runs",
     plain: bool = False,
     stdout: IO | None = None,
+    verbosity: VerbosityConfig | None = None,
     _burst_threshold: int = _BURST_THRESHOLD,
     _timer_interval: float = _TIMER_INTERVAL,
     _queue_maxsize: int = _EVENT_QUEUE_MAXSIZE,
@@ -1271,10 +1396,14 @@ def run_watch(
         setting ``GODEL_WATCH_PLAIN=1`` in the environment.
     stdout:
         Output stream override (used by tests to capture output).
+    verbosity:
+        Verbosity configuration controlling tool-call visibility and
+        agent-response line cap.  ``None`` uses :meth:`VerbosityConfig.default`.
     _burst_threshold, _timer_interval, _queue_maxsize:
         Coalescing / back-pressure knobs — exposed for testing only.
     """
     plain = plain or _use_plain_fallback(stdout) or os.environ.get("GODEL_WATCH_PLAIN") == "1"
+    cfg = verbosity if verbosity is not None else VerbosityConfig.default()
 
     # Reset the producer-error cell at the start of every invocation so that
     # stale errors from a prior run do not leak into this one.
@@ -1293,7 +1422,7 @@ def run_watch(
 
     if plain:
         fh = stdout or sys.stdout
-        plain_log = _PlainLineLog(file=fh)
+        plain_log = _PlainLineLog(file=fh, verbosity=cfg)
         with plain_log:
             _plain_loop(plain_log, event_q, timer_interval=_timer_interval)
     else:
@@ -1382,7 +1511,32 @@ if __name__ == "__main__":
         default=False,
         help="Force plain line-log output instead of the Rich TUI.",
     )
+    ap.add_argument(
+        "--show-tools",
+        action="store_true",
+        default=False,
+        help="Show agent tool-call and tool-result events (hidden by default).",
+    )
+    ap.add_argument(
+        "--max-agent-lines",
+        type=int,
+        default=20,
+        metavar="N",
+        help="Cap streamed agent responses to N lines (0 = no cap; default 20).",
+    )
+    ap.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        default=False,
+        help="Show everything: implies --show-tools and --max-agent-lines 0.",
+    )
     ns = ap.parse_args()
+
+    # Build verbosity config from flags.
+    if ns.verbose:
+        verbosity = VerbosityConfig.verbose()
+    else:
+        verbosity = VerbosityConfig(show_tools=ns.show_tools, max_agent_lines=ns.max_agent_lines)
 
     # Discoverability hint: if the transcript directory does not exist within
     # --hint-timeout seconds, streaming is likely disabled.  Show the hint on
@@ -1400,7 +1554,7 @@ if __name__ == "__main__":
         _time.sleep(0.1)
 
     try:
-        run_watch(ns.run_id, runs_dir=ns.runs_dir, plain=ns.plain)
+        run_watch(ns.run_id, runs_dir=ns.runs_dir, plain=ns.plain, verbosity=verbosity)
     except KeyboardInterrupt:
         sys.exit(0)
     except SystemExit:

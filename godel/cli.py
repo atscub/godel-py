@@ -62,7 +62,14 @@ def parse_workflow_args(extra: tuple[str, ...]) -> tuple[list[str], dict[str, st
     return args, kwargs
 
 
-def _spawn_watch_subprocess(run_id: str, runs_dir: str, plain: bool = False) -> "subprocess.Popen":
+def _spawn_watch_subprocess(
+    run_id: str,
+    runs_dir: str,
+    plain: bool = False,
+    show_tools: bool = False,
+    max_agent_lines: int = 20,
+    verbose: bool = False,
+) -> "subprocess.Popen":
     """Spawn ``python -m godel._watch <run_id>`` as an isolated subprocess.
 
     The subprocess is started in a **new process group** (``start_new_session``
@@ -79,6 +86,12 @@ def _spawn_watch_subprocess(run_id: str, runs_dir: str, plain: bool = False) -> 
     plain:
         When ``True``, append ``--plain`` to the watcher command so the
         subprocess renders in plain line-log mode instead of the Rich TUI.
+    show_tools:
+        When ``True``, forward ``--show-tools`` to the watcher subprocess.
+    max_agent_lines:
+        Forward ``--max-agent-lines N`` to the watcher subprocess.
+    verbose:
+        When ``True``, forward ``--verbose`` (implies show_tools + no cap).
 
     Returns
     -------
@@ -87,6 +100,12 @@ def _spawn_watch_subprocess(run_id: str, runs_dir: str, plain: bool = False) -> 
     cmd = [sys.executable, "-m", "godel._watch", run_id, "--runs-dir", runs_dir]
     if plain:
         cmd.append("--plain")
+    if verbose:
+        cmd.append("--verbose")
+    elif show_tools:
+        cmd.append("--show-tools")
+    if not verbose:
+        cmd.extend(["--max-agent-lines", str(max_agent_lines)])
     # Isolate the watcher from the parent's console-control signals so a
     # terminal Ctrl+C (or a crashing renderer) cannot affect the underlying
     # run.  On POSIX ``start_new_session=True`` starts the child in a new
@@ -214,6 +233,27 @@ def main():
     help="Force plain line-log output in the watcher subprocess (implies --watch; also: GODEL_WATCH_PLAIN=1).",
 )
 @click.option(
+    "--show-tools",
+    is_flag=True,
+    default=False,
+    help="Show agent tool-call and tool-result events in the watcher (hidden by default).",
+)
+@click.option(
+    "--max-agent-lines",
+    type=int,
+    default=20,
+    metavar="N",
+    show_default=True,
+    help="Cap streamed agent responses to N lines in the watcher (0 = no cap).",
+)
+@click.option(
+    "--verbose", "-v",
+    "watch_verbose",
+    is_flag=True,
+    default=False,
+    help="Watcher verbose mode: show tools + unlimited agent-response lines.",
+)
+@click.option(
     "--auto-checkpoint",
     default=None,
     metavar="MODE",
@@ -227,7 +267,7 @@ def main():
         "re-enables the warning.  Also: GODEL_AUTO_CHECKPOINT env var."
     ),
 )
-def run_cmd(file, extra, no_strict, no_lint, watch, no_stream, plain, auto_checkpoint):
+def run_cmd(file, extra, no_strict, no_lint, watch, no_stream, plain, show_tools, max_agent_lines, watch_verbose, auto_checkpoint):
     """Execute a @workflow-decorated function from FILE.
 
     Pass arguments to the workflow after a '--' separator:
@@ -383,7 +423,12 @@ def run_cmd(file, extra, no_strict, no_lint, watch, no_stream, plain, auto_check
             from pathlib import Path as _Path
             _runs_dir = str(_Path(log_path).parent)
             _watch_proc[0] = _spawn_watch_subprocess(
-                rid, runs_dir=_runs_dir, plain=plain,
+                rid,
+                runs_dir=_runs_dir,
+                plain=plain,
+                show_tools=show_tools,
+                max_agent_lines=max_agent_lines,
+                verbose=watch_verbose,
             )
 
     def _drain_watcher() -> None:
@@ -1114,7 +1159,28 @@ def repair_cmd(run_id, agent_spec, model, max_iterations, dry_run):
     is_flag=True,
     help="Fail immediately if the log file does not exist yet",
 )
-def tail_cmd(run_id, output_format, no_follow, no_wait):
+@click.option(
+    "--show-tools",
+    is_flag=True,
+    default=False,
+    help="(Reserved for watch-style output; accepted for flag parity with godel watch.)",
+)
+@click.option(
+    "--max-agent-lines",
+    type=int,
+    default=20,
+    metavar="N",
+    show_default=True,
+    help="(Reserved for watch-style output; accepted for flag parity with godel watch.)",
+)
+@click.option(
+    "--verbose", "-v",
+    "tail_verbose",
+    is_flag=True,
+    default=False,
+    help="(Reserved for watch-style output; accepted for flag parity with godel watch.)",
+)
+def tail_cmd(run_id, output_format, no_follow, no_wait, show_tools, max_agent_lines, tail_verbose):
     """Follow a workflow's audit log in real time."""
     import json as json_mod
     from pathlib import Path
@@ -1205,7 +1271,28 @@ def _check_stream_agents_disabled(run_id: str, runs_dir: str) -> bool:
     default=False,
     help="Force plain line-log output instead of the Rich TUI (also: GODEL_WATCH_PLAIN=1).",
 )
-def watch_cmd(run_id, runs_dir, plain):
+@click.option(
+    "--show-tools",
+    is_flag=True,
+    default=False,
+    help="Show agent tool-call and tool-result events (hidden by default).",
+)
+@click.option(
+    "--max-agent-lines",
+    type=int,
+    default=20,
+    metavar="N",
+    show_default=True,
+    help="Cap streamed agent responses to N lines (0 = no cap).",
+)
+@click.option(
+    "--verbose", "-v",
+    "watch_verbose",
+    is_flag=True,
+    default=False,
+    help="Verbose mode: show tools + unlimited agent-response lines.",
+)
+def watch_cmd(run_id, runs_dir, plain, show_tools, max_agent_lines, watch_verbose):
     """Attach a live TUI renderer to a running or completed workflow.
 
     Replays history from archived transcript files then follows the live
@@ -1262,8 +1349,14 @@ def watch_cmd(run_id, runs_dir, plain):
         # No transcript to follow — exit immediately rather than hanging.
         sys.exit(0)
 
+    from godel._watch import VerbosityConfig
+    if watch_verbose:
+        verbosity = VerbosityConfig.verbose()
+    else:
+        verbosity = VerbosityConfig(show_tools=show_tools, max_agent_lines=max_agent_lines)
+
     try:
-        run_watch(run_id, runs_dir=runs_dir, plain=plain)
+        run_watch(run_id, runs_dir=runs_dir, plain=plain, verbosity=verbosity)
     except KeyboardInterrupt:
         sys.exit(0)
 
