@@ -22,9 +22,9 @@ An **agent** is any async callable of the form `agent(prompt: str, *, schema=Non
 Godel ships with two built-in agent factories, both thin closures over the audited
 `run()` primitive:
 
-- `godel.agents.claude_code(model=..., skip_permissions=..., tools=...)` — wraps the
+- `godel.agents.claude_code(model=..., skip_permissions=..., tools=..., system_prompt=..., session_id=...)` — wraps the
   `claude` CLI.
-- `godel.agents.copilot(model=..., skip_permissions=..., tools=...)` — wraps the
+- `godel.agents.copilot(model=..., skip_permissions=..., tools=..., system_prompt=..., session_id=...)` — wraps the
   `copilot` CLI (from `@github/copilot-cli`).
 
 The two agents are interchangeable — same call signature, same event shape, same
