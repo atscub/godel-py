@@ -289,8 +289,10 @@ class EventLog:
                         response_chunks.append(text)
                     if model is None and evt.get("model"):
                         model = evt["model"]
-        except TranscriptTailError:
-            pass
+        except TranscriptTailError as exc:
+            raise FileNotFoundError(
+                f"Transcript read error for run {run_id!r}: {exc}"
+            ) from exc
 
         full_response: str | None = "".join(response_chunks) if response_chunks else None
 
