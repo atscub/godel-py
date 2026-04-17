@@ -26,10 +26,14 @@ import pytest
 
 pytest.importorskip("rich")
 
+import queue
+
 from godel._watch import (
     VerbosityConfig,
     _PlainLineLog,
+    _drain_queue,
 )
+from godel._watch_model import WatchModel
 
 # ---------------------------------------------------------------------------
 # Subprocess helpers — ensure worktree source is used, not site-packages.
@@ -515,3 +519,89 @@ def test_response_no_truncation_exact_cap():
     assert "truncated" not in output, (
         f"Response with exactly cap lines should not truncate; got:\n{output!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# TUI mode: _drain_queue verbosity filtering (CRITICAL fix)
+# ---------------------------------------------------------------------------
+
+def test_drain_queue_filters_tool_events_with_default_verbosity():
+    """TUI mode _drain_queue must skip tool events when show_tools=False."""
+    cfg = VerbosityConfig()  # show_tools=False
+    model = WatchModel.empty()
+    q: queue.Queue = queue.Queue()
+
+    # Enqueue a tool_call and a tool_result — both should be skipped
+    q.put({"op": "agent.tool_call", "step_path": ["s"], "stream_path": ["x"],
+           "tool": "bash", "input": "{}"})
+    q.put({"op": "agent.tool_result", "step_path": ["s"], "stream_path": ["x"],
+           "tool": "bash", "output": "ok"})
+    q.put(None)  # EOS
+
+    new_model, did_update, eos = _drain_queue(q, model, verbosity=cfg)
+    # Model should not have changed because tool events were filtered out
+    assert new_model is model, "Tool events should be filtered; model should be unchanged"
+    assert eos is True
+
+
+def test_drain_queue_passes_tool_events_when_verbose():
+    """TUI mode _drain_queue must pass tool events when show_tools=True."""
+    cfg = VerbosityConfig.verbose()
+    model = WatchModel.empty()
+    q: queue.Queue = queue.Queue()
+
+    q.put({"op": "agent.tool_call", "step_path": ["s"], "stream_path": ["x"],
+           "tool": "bash", "input": "{}"})
+    q.put(None)
+
+    new_model, did_update, eos = _drain_queue(q, model, verbosity=cfg)
+    # Tool event should have been processed by reduce() → _handle_stream_line
+    assert did_update is True
+
+
+# ---------------------------------------------------------------------------
+# Parallel agents + line capping
+# ---------------------------------------------------------------------------
+
+def test_parallel_agents_line_capping_independent():
+    """Line cap works independently per stream_path in parallel agents."""
+    cfg = VerbosityConfig(max_agent_lines=3)
+    log, buf = _make_log(cfg)
+
+    # Two parallel branches with different stream_paths
+    for branch, root in [("branch_a", "01JX_A"), ("branch_b", "01JX_B")]:
+        log.print_event({
+            "op": "agent.prompt",
+            "step_path": [branch],
+            "stream_path": [root],
+            "prompt": f"prompt for {branch}",
+            "model": "test",
+            "ts": "2026-04-14T00:00:01+00:00",
+        })
+
+    # Both branches emit responses exceeding the cap
+    for i in range(6):
+        log.print_event({
+            "op": "agent.response",
+            "step_path": ["branch_a"],
+            "stream_path": ["01JX_A"],
+            "text": f"A-line-{i}\n",
+            "ts": "2026-04-14T00:00:02+00:00",
+        })
+        log.print_event({
+            "op": "agent.response",
+            "step_path": ["branch_b"],
+            "stream_path": ["01JX_B"],
+            "text": f"B-line-{i}\n",
+            "ts": "2026-04-14T00:00:02+00:00",
+        })
+
+    output = buf.getvalue()
+    # Both branches should show truncation
+    assert "truncated" in output, f"Expected truncation indicator; got:\n{output!r}"
+    # Early lines should be present
+    assert "A-line-0" in output
+    assert "B-line-0" in output
+    # Lines past the cap should not
+    assert "A-line-5" not in output
+    assert "B-line-5" not in output

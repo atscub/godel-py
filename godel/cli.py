@@ -251,7 +251,7 @@ def main():
     "watch_verbose",
     is_flag=True,
     default=False,
-    help="Watcher verbose mode: show tools + unlimited agent-response lines.",
+    help="Watcher verbose mode: show tools + unlimited agent-response lines. Overrides --show-tools and --max-agent-lines.",
 )
 @click.option(
     "--auto-checkpoint",
@@ -1290,7 +1290,7 @@ def _check_stream_agents_disabled(run_id: str, runs_dir: str) -> bool:
     "watch_verbose",
     is_flag=True,
     default=False,
-    help="Verbose mode: show tools + unlimited agent-response lines.",
+    help="Verbose mode: show tools + unlimited agent-response lines. Overrides --show-tools and --max-agent-lines.",
 )
 def watch_cmd(run_id, runs_dir, plain, show_tools, max_agent_lines, watch_verbose):
     """Attach a live TUI renderer to a running or completed workflow.

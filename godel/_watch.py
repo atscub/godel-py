@@ -1055,6 +1055,7 @@ def _drain_queue(
     model: WatchModel,
     *,
     burst_threshold: int = _BURST_THRESHOLD,
+    verbosity: VerbosityConfig | None = None,
 ) -> tuple[WatchModel, bool, bool]:
     """Drain *q* into *model* using burst coalescing.
 
@@ -1097,6 +1098,15 @@ def _drain_queue(
             _last_producer_error = item
             drained += 1
             continue
+
+        # Apply verbosity filtering before feeding the event to the reducer.
+        # When tools are hidden, skip tool events entirely so the TUI model
+        # never sees them.
+        if verbosity is not None and not verbosity.show_tools:
+            ev_op = item.get("op", "") if isinstance(item, dict) else ""
+            if ev_op in ("agent.tool_call", "agent.tool_result"):
+                drained += 1
+                continue
 
         old_model = model
         # TranscriptTail yields unwrapped inner event dicts (already stripped of
@@ -1241,6 +1251,7 @@ def _render_loop(
     timer_interval: float = _TIMER_INTERVAL,
     burst_threshold: int = _BURST_THRESHOLD,
     pending_signal: list | None = None,
+    verbosity: VerbosityConfig | None = None,
 ) -> None:
     """Main loop: drain queue, coalesce bursts, update renderer.
 
@@ -1279,7 +1290,8 @@ def _render_loop(
             return
 
         model, did_update, end_of_stream = _drain_queue(
-            q, model, burst_threshold=burst_threshold
+            q, model, burst_threshold=burst_threshold,
+            verbosity=verbosity,
         )
 
         if did_update:
@@ -1440,6 +1452,7 @@ def run_watch(
                     timer_interval=_timer_interval,
                     burst_threshold=_burst_threshold,
                     pending_signal=pending_signal,
+                    verbosity=cfg,
                 )
         finally:
             _restore_signals(previous_signals)
