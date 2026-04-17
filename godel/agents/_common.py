@@ -572,6 +572,8 @@ class _BaseAgent:
                 model=model_id,
                 text=text,
             )
+        # Only update when CLI returns a new id; never clear to None — a None
+        # return means the CLI reused the existing session, not that it ended.
         if persist_session and new_session_id:
             self._session_id = new_session_id
         return text

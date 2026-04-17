@@ -99,6 +99,7 @@ class Event:
     # run(..., idempotent=True) would trip --on-mismatch=abort (C5).
     _HASH_EXCLUDE_KEYS: frozenset[str] = frozenset({
         "source_hash", "auto_checkpoint", "assumed_idempotent_source", "idempotent",
+        "session_id",  # ctor-supplied session_id must not affect replay hash matching
     })
 
     @staticmethod

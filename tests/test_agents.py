@@ -660,3 +660,48 @@ def test_replay_overrides_ctor_session_id():
             )
 
     asyncio.run(wf())
+
+
+def test_session_id_shell_metachar_is_quoted():
+    """session_id with shell metacharacters must be shlex-quoted in the command."""
+    import shlex
+    cmds: list[str] = []
+
+    async def capture_run(cmd, **kwargs):
+        cmds.append(cmd)
+        return CommandResult(
+            stdout='{"result": "ok", "session_id": "safe-id"}',
+            stderr="", returncode=0,
+        )
+
+    @workflow
+    async def wf():
+        with patch("godel.agents._common.run", new=capture_run):
+            agent = claude_code(session_id="abc; rm -rf /")
+            await agent("prompt")
+
+    asyncio.run(wf())
+    assert len(cmds) == 1
+    assert shlex.quote("abc; rm -rf /") in cmds[0], (
+        f"Expected quoted session_id in command, got: {cmds[0]!r}"
+    )
+
+
+def test_session_id_excluded_from_request_hash():
+    """session_id must be excluded from request hash so replay matches regardless of ctor value."""
+    from godel._events import Event
+
+    req_with = {"model": "claude-sonnet-4-6", "prompt": "hi", "has_schema": False,
+                "schema_name": None, "session_id": "some-id"}
+    req_without = {"model": "claude-sonnet-4-6", "prompt": "hi", "has_schema": False,
+                   "schema_name": None, "session_id": None}
+    req_absent = {"model": "claude-sonnet-4-6", "prompt": "hi", "has_schema": False,
+                  "schema_name": None}
+
+    h1 = Event.compute_request_hash(req_with)
+    h2 = Event.compute_request_hash(req_without)
+    h3 = Event.compute_request_hash(req_absent)
+
+    assert h1 == h2 == h3, (
+        f"Hash must be identical regardless of session_id value: {h1}, {h2}, {h3}"
+    )

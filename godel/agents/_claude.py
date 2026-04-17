@@ -58,7 +58,7 @@ class _ClaudeCodeAgent(_BaseAgent):
         if tools == []:
             cmd_parts += ["--tools", '""']
         if session_id:
-            cmd_parts += ["--resume", session_id]
+            cmd_parts += ["--resume", shlex.quote(session_id)]
         cmd_parts += ["-p", shlex.quote(prompt), "--model", model_id]
         if tools:
             for tool in tools:
