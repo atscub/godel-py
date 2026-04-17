@@ -98,6 +98,30 @@ Async shadow of `print`. Records a `print` event and writes to stdout.
 Async shadow of `input`. Blocks for human input, writes a `SUSPENDED` → `FINISHED`
 `input` event pair. Durable: on resume, returns the recorded answer without re-prompting.
 
+### `godel.read_text(path, *, encoding="utf-8") -> str`
+Async audited file read. Resolves `path` to an absolute form (so replay matches are
+cwd-independent), reads the file, and emits a `read_text` event. On replay, returns the
+cached content without touching the filesystem. The full content is hashed for replay
+matching; the stored snapshot is truncated at 64 KB for log efficiency (truncation never
+affects determinism). A partial `STARTED`-only event (crash between open and finish)
+causes a re-read on resume — reads are idempotent so this is safe.
+
+```python
+content = await godel.read_text("data/input.json")
+```
+
+### `godel.write_text(path, content, *, encoding="utf-8") -> None`
+Async audited atomic file write. Writes via a sibling temp-file + `os.replace`, so
+SIGKILL / OOM / disk-full mid-write never leaves the destination partially written. Emits
+a `write_text` event. On replay, the filesystem write is skipped entirely. A
+`STARTED`-only event on resume raises `UnsafeResumeError` because a partial write may
+have corrupted the target — use `godel rewind` to invalidate and re-execute if needed.
+Parent directories are created automatically.
+
+```python
+await godel.write_text("output/result.txt", content)
+```
+
 ## Determinism escape hatches (`godel.det`)
 
 - `godel.det.now() -> datetime` — wall-clock time, recorded.

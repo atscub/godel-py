@@ -332,7 +332,9 @@ agents.
 
 | Don't                                      | Do                                          |
 |--------------------------------------------|---------------------------------------------|
-| Direct I/O in a `@step` body               | Wrap in `run()` or use `godel.print/input`  |
+| Direct I/O in a `@step` body               | Wrap in `run()` or use `godel.print/input/read_text/write_text` |
+| `Path(...).read_text()` inside a `@step`   | `await godel.read_text(path)` — audited, replay-safe            |
+| `Path(...).write_text()` inside a `@step`  | `await godel.write_text(path, content)` — atomic, replay-skipped |
 | Construct agents at module scope           | Use factories called inside `@workflow`     |
 | `except Exception: pass`                   | Catch specific types; never swallow signals |
 | Non-deterministic imports (network/file at import time) | Move into a `@step`               |
