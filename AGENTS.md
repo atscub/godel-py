@@ -34,6 +34,16 @@ godel-py/
 - Conventional commits are required — version bumps and releases are automated.
 - Use `bd` (beads) for task tracking. See `AGENTS.md`.
 
+## Updating docs
+
+`docs/` is the authoritative copy. `godel/_guides/` is a bundled duplicate used by `godel guide` inside installed wheels. **After editing any file in `docs/`, run:**
+
+```bash
+bash scripts/sync_guides.sh
+```
+
+Then commit both `docs/` and `godel/_guides/` together.
+
 ## Release
 
 Pushes to `master` run `.github/workflows/publish.yml`:
