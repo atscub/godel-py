@@ -128,7 +128,7 @@ Server maintains a `WatchModel` per subscribed run and ships `{type: "patch", op
 |----------|-----|
 | `godel/_watch_model.py` (285 LOC) | Pure frozen-dataclass model + `reduce()` / `reduce_header()`. Zero rendering logic. Reused unchanged by any renderer. |
 | `godel/_watch_model.py`: `WatchModel`, `StepNode`, `StreamPanel`, `reduce`, `reduce_header` | Source of truth for the observable state shape. |
-| `godel/_watch.py`: `_PlainLineLog` (lines 319–368, ~50 LOC) | SSH/CI plain line-log; survives as the non-web, non-TTY fallback. |
+| `godel/_watch.py`: `_PlainLineLog` (lines 319–368, ~50 LOC) | SSH/CI plain line-log; survives as the non-web, non-TTY fallback. Note: lacks `update(model)` method — does not satisfy the full renderer interface used by `WatchApp`; it only appends new lines. |
 | `godel/_watch.py`: `_use_plain_fallback()` (lines 80–100, ~21 LOC) | Fallback detection logic; still needed to decide between plain and web mode. |
 | `godel/_watch.py`: `_producer_thread()` (lines 513–618, ~106 LOC) | Transcript-reading background thread with back-pressure. Reused by the SSE endpoint (or replaced by an equivalent async reader built on `TranscriptTail`). |
 | `godel/_tail.py` (986 LOC) | `TranscriptTail` rotation-chain reader. The SSE server uses this directly. |
@@ -144,7 +144,7 @@ Server maintains a `WatchModel` per subscribed run and ships `{type: "patch", op
 | `godel/_watch.py`: `_build_panels_renderable()` (lines 169–211, ~43 LOC) | ~43 | Rich panel stacker; replaced by React panels |
 | `godel/_watch.py`: `_step_label()` (lines 122–134, ~13 LOC) | ~13 | Rich Text label builder; replaced by React component |
 | `godel/_watch.py`: `_panel_title()` (lines 165–166, ~2 LOC) | ~2 | Trivial helper; inlined or removed |
-| `godel/_watch.py`: `_STATUS_STYLE`, `_STATUS_ICON` dicts (lines 107–119, ~12 LOC) | ~12 | Terminal colour/icon tables; replaced by CSS |
+| `godel/_watch.py`: `_STATUS_STYLE`, `_STATUS_ICON` dicts (lines 107–119, ~13 LOC) | ~13 | Terminal colour/icon tables; replaced by CSS |
 | `godel/_watch.py`: `_render_loop()` (lines 624–713, ~90 LOC) | ~90 | Rich-specific render loop with timer coalescing; SSE push replaces polling |
 | `godel/_watch.py`: `_install_terminal_restore_signals()` + `_restore_signals()` (lines 374–432, ~59 LOC) | ~59 | Terminal signal handling for Rich Live; not needed in web server |
 | `godel/_watch.py`: `_drain_queue()` (lines 440–499, ~60 LOC) | ~60 | Queue drainer for render coalescing; SSE uses async iterator directly |
@@ -154,12 +154,12 @@ Server maintains a `WatchModel` per subscribed run and ships `{type: "patch", op
 
 | Category | LOC |
 |----------|-----|
-| Deleted from `godel/_watch.py` | −501 |
+| Deleted from `godel/_watch.py` | −401 |
 | Kept in `godel/_watch.py` (plain log + fallback + producer thread) | +177 |
 | New `godel/_web.py` (FastAPI server + SSE endpoint) | +~350 |
 | New TypeScript reducer port (`src/watchModel.ts`) | +~200 |
 | New React UI components | +~600 |
-| **Net change** | **+~826 LOC total** (Python: −151 net, TS: +800) |
+| **Net change** | **+~926 LOC total** (Python: +~126 net, TS: +800) |
 
 **Hybrid variant:** `WatchApp`, `_render_loop`, signal handlers, and related functions are kept as-is (−0 LOC from `_watch.py`). The web server and frontend are added on top. Net addition: +~1 150 LOC.
 
@@ -225,7 +225,7 @@ Clicking a row opens that run in the main run view.
 
 **Deliverable:** `godel watch --web` spawns a FastAPI server. Frontend is a single `web.html` file served inline (no build pipeline, no npm). Raw events arrive as SSE and are appended to a `<pre>` log — effectively a browser-native version of `_PlainLineLog`. `_PlainLineLog` is kept for SSH/CI.
 
-**Replaces:** `godel watch --plain` (which does not currently exist as a flag; this is a new entry point for browser users).
+**New capability:** `godel watch --web` is a brand-new entry point for browser users; no prior `--plain` flag existed. `_PlainLineLog` remains as the SSH/CI fallback and is not replaced.
 
 **LOC:** ~200 Python (FastAPI + SSE + static HTML) + ~100 vanilla JS.
 
