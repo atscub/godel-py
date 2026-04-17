@@ -20,13 +20,29 @@ returns its recorded result without executing. Arguments must be JSON-serializab
 
 ## Agent factories
 
-### `godel.agents.claude_code(*, model="sonnet", cwd=None, tools=None, skip_permissions=False)`
+### `godel.agents.claude_code(*, model="sonnet", cwd=None, tools=None, skip_permissions=False, system_prompt=None, session_id=None)`
 Returns an async callable wrapping the `claude` CLI.
 
 - `model` — `"sonnet"` (default), `"opus"`, `"haiku"`, or a full model ID.
 - `cwd` — working directory for the subprocess (default: workflow CWD).
 - `tools` — list of tool names to allow (default: claude's defaults).
 - `skip_permissions` — pass `--dangerously-skip-permissions`.
+- `system_prompt` — briefing text prepended to the first prompt. Not repeated on subsequent calls. Ignored if `session_id` is supplied (assumed already delivered in that session).
+- `session_id` — resume a prior CLI session across process boundaries. Passes `--resume <id>` on the first call. Empty/whitespace normalised to `None`.
+
+**Retrieving the session id** for later resumption:
+
+```python
+eng = claude_code(system_prompt="You are the engineer for ticket X.")
+await eng("implement feature A")
+sid = eng.session_id   # persist this string externally
+
+# --- later process ---
+eng = claude_code(session_id=sid)
+await eng("implement feature B")   # continues same session
+```
+
+> **Replay note.** When a `@workflow` replays from its event log the stored session id overwrites any ctor-supplied value — deterministic replay is always preserved.
 
 Call signature:
 ```python
@@ -45,13 +61,14 @@ Raises `SchemaValidationFailure` if `schema=` is set and the reply cannot be par
 > repeatedly fails to produce valid JSON, simplify the schema before
 > reaching for retries.
 
-### `godel.agents.copilot(*, model="default", cwd=None, tools=None, skip_permissions=False)`
+### `godel.agents.copilot(*, model="default", cwd=None, tools=None, skip_permissions=False, system_prompt=None, session_id=None)`
 Returns an async callable wrapping the `copilot` CLI (from the `@github/copilot-cli` npm
 package, v0.0.337+).
 
 - `model` — `"default"` (→ `gpt-5`), `"gpt-5"`, `"sonnet"` (→ `claude-sonnet-4.5`),
   `"sonnet-4"` (→ `claude-sonnet-4`), or a full Copilot model ID.
 - `cwd`, `tools`, `skip_permissions` — same semantics as `claude_code`.
+- `system_prompt`, `session_id` — same semantics as `claude_code`.
 
 Call signature and `SchemaValidationFailure` behavior are identical to `claude_code`, so
 the two agents are interchangeable in workflows.
