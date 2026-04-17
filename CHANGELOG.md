@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v3.13.0 (2026-04-17)
+
+### Bug Fixes
+
+- **agents**: Shlex-quote session_id in --resume flag + exclude from replay hash
+  ([`545a68b`](https://github.com/atscub/godel-py/commit/545a68bc30053bdf4e4e261e7feff1e2e7043cf2))
+
+### Features
+
+- **agents**: Add session_id ctor param and accessor to resume CLI sessions across processes
+  ([`e23579d`](https://github.com/atscub/godel-py/commit/e23579d6576aa1738d24198acb71b579c246fdbf))
+
+
 ## v3.12.0 (2026-04-17)
 
 ### Bug Fixes
