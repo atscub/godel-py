@@ -2,6 +2,30 @@
 
 <!-- version list -->
 
+## v3.11.0 (2026-04-17)
+
+### Bug Fixes
+
+- **show**: Propagate TranscriptTailError instead of silently swallowing
+  ([`313607c`](https://github.com/atscub/godel-py/commit/313607cf09b5a9b3822ce941cfb7d28186091867))
+
+- **watch**: Suppress [bN] branch prefix for sequential single-agent streams
+  ([`00aaaa8`](https://github.com/atscub/godel-py/commit/00aaaa84df978a2c02436d94f92c497e29afae0b))
+
+- **watch**: Use step_path→root mapping for active-root cleanup on step.exit
+  ([`9c97311`](https://github.com/atscub/godel-py/commit/9c973117cf9ec6b0620d26414f16ce644a62abcb))
+
+### Documentation
+
+- **web-gui**: Fix Section 4 LOC arithmetic and Phase A framing
+  ([`98f12aa`](https://github.com/atscub/godel-py/commit/98f12aa2444bad12b89356593caddf6c4ad88543))
+
+### Features
+
+- **show**: Add --full flag to retrieve untruncated agent request/response
+  ([`1e958df`](https://github.com/atscub/godel-py/commit/1e958df98be02b8121740c9973521ff1345ad0ef))
+
+
 ## v3.10.1 (2026-04-16)
 
 ### Bug Fixes
