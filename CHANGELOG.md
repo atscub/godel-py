@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v3.12.0 (2026-04-17)
+
+### Bug Fixes
+
+- **watch**: Apply verbosity filtering in TUI mode + parallel line-cap test
+  ([`cbc5ca1`](https://github.com/atscub/godel-py/commit/cbc5ca1b39e30a022567c4c2288cf4316ad91a5a))
+
+### Features
+
+- **watch**: High-level-by-default output with verbosity controls
+  ([`5699216`](https://github.com/atscub/godel-py/commit/56992160b227540d32b98420ef00be8176a7c084))
+
+
 ## v3.11.0 (2026-04-17)
 
 ### Bug Fixes
