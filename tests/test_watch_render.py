@@ -808,3 +808,186 @@ class TestNarrowTerminalRender:
         WatchApp._render(model, console)  # must not raise
         output = console.export_text()
         assert output.strip(), "Expected non-empty output with overflow panels on narrow terminal"
+
+
+# ---------------------------------------------------------------------------
+# Branch-prefix suppression tests (godel-py-7kd fix)
+# ---------------------------------------------------------------------------
+
+class TestBranchPrefixSuppression:
+    """[bN] prefix must only appear when 2+ streams are concurrently active.
+
+    Acceptance criteria:
+    - Single sequential agent stream → no [bN] prefix.
+    - Sequential agents run one after another → no [bN] prefix.
+    - parallel() with 2+ branches → [b1], [b2] prefixes appear.
+    """
+
+    def _make_single_stream_events(self) -> list[dict]:
+        """Events for a single non-parallel agent step."""
+        return [
+            {
+                "op": "step.enter",
+                "step_path": ["risk_review"],
+                "stream_path": [],
+                "ts": "2026-04-14T00:00:01+00:00",
+            },
+            {
+                "op": "agent.prompt",
+                "step_path": ["risk_review"],
+                "stream_path": ["risk_review"],
+                "prompt": "Assess the risk.",
+                "ts": "2026-04-14T00:00:02+00:00",
+            },
+            {
+                "op": "agent.response",
+                "step_path": ["risk_review"],
+                "stream_path": ["risk_review"],
+                "text": "The risk is low.",
+                "ts": "2026-04-14T00:00:03+00:00",
+            },
+            {
+                "op": "step.exit",
+                "step_path": ["risk_review"],
+                "stream_path": [],
+                "status": "done",
+                "ts": "2026-04-14T00:00:04+00:00",
+            },
+        ]
+
+    def test_single_agent_stream_no_branch_prefix(self):
+        """Single non-parallel agent step must not emit any [b1] prefix."""
+        buf = io.StringIO()
+        log = _PlainLineLog(file=buf)
+        for ev in self._make_single_stream_events():
+            log.print_event(ev)
+        out = buf.getvalue()
+        assert "[b1]" not in out, (
+            f"[b1] prefix should not appear for a single-agent stream; got:\n{out}"
+        )
+        assert "[b2]" not in out
+
+    def test_single_agent_stream_content_still_rendered(self):
+        """Content must still be rendered even when the branch prefix is suppressed."""
+        buf = io.StringIO()
+        log = _PlainLineLog(file=buf)
+        for ev in self._make_single_stream_events():
+            log.print_event(ev)
+        out = buf.getvalue()
+        assert "risk_review" in out
+        assert "response" in out
+
+    def test_sequential_agents_no_branch_prefix(self):
+        """Two agents running one after another (not concurrently) must not get [bN]."""
+        buf = io.StringIO()
+        log = _PlainLineLog(file=buf)
+        for step_name in ("step_a", "step_b"):
+            log.print_event({
+                "op": "step.enter",
+                "step_path": [step_name],
+                "stream_path": [],
+                "ts": "2026-04-14T00:00:01+00:00",
+            })
+            log.print_event({
+                "op": "stdout",
+                "step_path": [step_name],
+                "stream_path": [step_name],
+                "line": f"output from {step_name}",
+                "ts": "2026-04-14T00:00:02+00:00",
+            })
+            log.print_event({
+                "op": "step.exit",
+                "step_path": [step_name],
+                "stream_path": [],
+                "status": "done",
+                "ts": "2026-04-14T00:00:03+00:00",
+            })
+        out = buf.getvalue()
+        assert "[b1]" not in out, (
+            f"[b1] prefix should not appear for sequential steps; got:\n{out}"
+        )
+        assert "[b2]" not in out
+
+    def test_parallel_branches_get_branch_prefix(self):
+        """Two concurrently active streams (parallel branches) must show [b1]/[b2]."""
+        buf = io.StringIO()
+        log = _PlainLineLog(file=buf)
+
+        # Simulate two parallel branches interleaved: both active simultaneously.
+        # branch_a starts, branch_b starts (now 2 active roots), both emit output.
+        log.print_event({
+            "op": "stdout",
+            "step_path": ["branch_a"],
+            "stream_path": ["branch_a"],
+            "line": "branch A output",
+            "ts": "2026-04-14T00:00:01+00:00",
+        })
+        log.print_event({
+            "op": "stdout",
+            "step_path": ["branch_b"],
+            "stream_path": ["branch_b"],
+            "line": "branch B output",
+            "ts": "2026-04-14T00:00:02+00:00",
+        })
+        # At this point both roots are active — branch prefix should appear
+        log.print_event({
+            "op": "stdout",
+            "step_path": ["branch_a"],
+            "stream_path": ["branch_a"],
+            "line": "branch A more output",
+            "ts": "2026-04-14T00:00:03+00:00",
+        })
+        out = buf.getvalue()
+        assert "[b1]" in out, f"Expected [b1] for parallel branch A; got:\n{out}"
+        assert "[b2]" in out, f"Expected [b2] for parallel branch B; got:\n{out}"
+
+    def test_branch_prefix_cleared_after_parallel_ends(self):
+        """After parallel branches exit, a subsequent sequential step has no prefix."""
+        buf = io.StringIO()
+        log = _PlainLineLog(file=buf)
+
+        # Run two parallel branches
+        log.print_event({
+            "op": "stdout",
+            "step_path": ["branch_a"],
+            "stream_path": ["branch_a"],
+            "line": "parallel A",
+            "ts": "2026-04-14T00:00:01+00:00",
+        })
+        log.print_event({
+            "op": "stdout",
+            "step_path": ["branch_b"],
+            "stream_path": ["branch_b"],
+            "line": "parallel B",
+            "ts": "2026-04-14T00:00:02+00:00",
+        })
+        # Both branches exit
+        log.print_event({
+            "op": "step.exit",
+            "step_path": ["branch_a"],
+            "stream_path": [],
+            "status": "done",
+            "ts": "2026-04-14T00:00:03+00:00",
+        })
+        log.print_event({
+            "op": "step.exit",
+            "step_path": ["branch_b"],
+            "stream_path": [],
+            "status": "done",
+            "ts": "2026-04-14T00:00:04+00:00",
+        })
+        # Sequential step after parallel
+        log.print_event({
+            "op": "stdout",
+            "step_path": ["final_step"],
+            "stream_path": ["final_step"],
+            "line": "sequential output",
+            "ts": "2026-04-14T00:00:05+00:00",
+        })
+        out = buf.getvalue()
+        # Check that "sequential output" line has no branch prefix
+        for line in out.splitlines():
+            if "sequential output" in line:
+                assert "[b" not in line, (
+                    f"sequential step line should have no branch prefix; got: {line!r}"
+                )

@@ -400,10 +400,16 @@ class _PlainLineLog:
         self._burst_col: dict[tuple, int] = {}
         # Branch correlation — parallel() branches are tagged "[b1]", "[b2]",
         # ... derived from the outermost stream_path element.  A small color
-        # palette cycles so each branch also gets a stable color.  Sequential
-        # (non-parallel) agent calls also get tags, which is harmless and
-        # preserves consistent alignment.
+        # palette cycles so each branch also gets a stable color.  The [bN]
+        # prefix is only shown when 2+ stream roots are concurrently active
+        # (i.e. inside a parallel() block).  Sequential single-agent streams
+        # are silently suppressed.
         self._branch_index: dict[str, int] = {}
+        # Currently active stream_path roots (stream_path[0] values).
+        # A root is added on the first event that carries it and removed when
+        # the corresponding step exits.  When len <= 1 the branch prefix is
+        # suppressed so sequential single-agent output is never tagged [b1].
+        self._active_roots: set[str] = set()
         # Muted 256-colour backgrounds paired with white foreground.  The bg
         # codes picked here are low-saturation / mid-luminance so the tag
         # reads cleanly on both light and dark terminal themes and doesn't
@@ -443,8 +449,17 @@ class _PlainLineLog:
     _BRANCH_SLOT_WIDTH = 6
 
     def _branch_tag_raw(self, stream_path: tuple) -> str | None:
-        """Return ``"b<n>"`` for *stream_path* or ``None`` if unbranched."""
+        """Return ``"b<n>"`` for *stream_path* or ``None`` if unbranched.
+
+        A branch tag is only emitted when 2+ stream roots are concurrently
+        active — i.e. inside a ``parallel()`` block.  Single sequential
+        agent streams return ``None`` so no ``[b1]`` prefix appears.
+        """
         if not stream_path:
+            return None
+        # Suppress prefix when only one (or zero) roots are active: this is a
+        # sequential single-agent stream, not a parallel branch.
+        if len(self._active_roots) < 2:
             return None
         root = stream_path[0]
         idx = self._branch_index.get(root)
@@ -635,6 +650,24 @@ class _PlainLineLog:
     def print_event(self, event: dict) -> None:
         op = event.get("op", "?")
         stream_path = tuple(event.get("stream_path") or [])
+
+        # ── Active-root tracking ──────────────────────────────────────────
+        # Maintain the set of concurrently active stream roots so that
+        # _branch_tag_raw() can suppress [bN] for sequential single-agent
+        # streams (len < 2) and only show it inside parallel() blocks.
+        if stream_path:
+            self._active_roots.add(stream_path[0])
+        if op in ("step.exit", "run.finish"):
+            # Remove the root for this step/run so the count drops back to 0
+            # once the step is done.  step.exit uses step_path; run.finish
+            # carries a stream_path we can use directly.
+            if op == "step.exit":
+                step_path_ev = event.get("step_path") or []
+                if step_path_ev:
+                    self._active_roots.discard(step_path_ev[0])
+            else:
+                if stream_path:
+                    self._active_roots.discard(stream_path[0])
 
         # Dedupe the final full-text echo from ``_invoke``.  When streaming
         # is on we've already rendered the answer as chunks; the accumulated
