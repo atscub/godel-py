@@ -410,6 +410,10 @@ class _PlainLineLog:
         # the corresponding step exits.  When len <= 1 the branch prefix is
         # suppressed so sequential single-agent output is never tagged [b1].
         self._active_roots: set[str] = set()
+        # Map step_path[0] → set of stream_path[0] roots seen under that step,
+        # so step.exit (which only carries step_path, not stream_path) can
+        # clean up the correct roots.
+        self._step_roots: dict[str, set[str]] = {}
         # Muted 256-colour backgrounds paired with white foreground.  The bg
         # codes picked here are low-saturation / mid-luminance so the tag
         # reads cleanly on both light and dark terminal themes and doesn't
@@ -655,19 +659,21 @@ class _PlainLineLog:
         # Maintain the set of concurrently active stream roots so that
         # _branch_tag_raw() can suppress [bN] for sequential single-agent
         # streams (len < 2) and only show it inside parallel() blocks.
+        step_path = tuple(event.get("step_path") or [])
         if stream_path:
-            self._active_roots.add(stream_path[0])
-        if op in ("step.exit", "run.finish"):
-            # Remove the root for this step/run so the count drops back to 0
-            # once the step is done.  step.exit uses step_path; run.finish
-            # carries a stream_path we can use directly.
-            if op == "step.exit":
-                step_path_ev = event.get("step_path") or []
-                if step_path_ev:
-                    self._active_roots.discard(step_path_ev[0])
-            else:
-                if stream_path:
-                    self._active_roots.discard(stream_path[0])
+            root = stream_path[0]
+            self._active_roots.add(root)
+            # Track which roots belong to which step so step.exit (which
+            # carries step_path but empty stream_path) can clean up.
+            if step_path:
+                self._step_roots.setdefault(step_path[0], set()).add(root)
+        if op == "step.exit":
+            # step.exit has empty stream_path; use _step_roots mapping.
+            if step_path:
+                for root in self._step_roots.pop(step_path[0], set()):
+                    self._active_roots.discard(root)
+        elif op == "run.finish" and stream_path:
+            self._active_roots.discard(stream_path[0])
 
         # Dedupe the final full-text echo from ``_invoke``.  When streaming
         # is on we've already rendered the answer as chunks; the accumulated

@@ -878,10 +878,20 @@ class TestBranchPrefixSuppression:
         assert "response" in out
 
     def test_sequential_agents_no_branch_prefix(self):
-        """Two agents running one after another (not concurrently) must not get [bN]."""
+        """Two agents running one after another (not concurrently) must not get [bN].
+
+        Uses realistic ULID-style stream_path roots (different namespace from
+        step_path names) to verify that root cleanup works correctly via the
+        step_path → roots mapping.
+        """
         buf = io.StringIO()
         log = _PlainLineLog(file=buf)
-        for step_name in ("step_a", "step_b"):
+        # stream_path roots are ULIDs in real events, not step names
+        steps = [
+            ("step_a", "01JX0001"),
+            ("step_b", "01JX0002"),
+        ]
+        for step_name, stream_root in steps:
             log.print_event({
                 "op": "step.enter",
                 "step_path": [step_name],
@@ -891,7 +901,7 @@ class TestBranchPrefixSuppression:
             log.print_event({
                 "op": "stdout",
                 "step_path": [step_name],
-                "stream_path": [step_name],
+                "stream_path": [stream_root],
                 "line": f"output from {step_name}",
                 "ts": "2026-04-14T00:00:02+00:00",
             })
@@ -914,18 +924,18 @@ class TestBranchPrefixSuppression:
         log = _PlainLineLog(file=buf)
 
         # Simulate two parallel branches interleaved: both active simultaneously.
-        # branch_a starts, branch_b starts (now 2 active roots), both emit output.
+        # Use ULID-style roots (different from step_path names).
         log.print_event({
             "op": "stdout",
             "step_path": ["branch_a"],
-            "stream_path": ["branch_a"],
+            "stream_path": ["01JX_A"],
             "line": "branch A output",
             "ts": "2026-04-14T00:00:01+00:00",
         })
         log.print_event({
             "op": "stdout",
             "step_path": ["branch_b"],
-            "stream_path": ["branch_b"],
+            "stream_path": ["01JX_B"],
             "line": "branch B output",
             "ts": "2026-04-14T00:00:02+00:00",
         })
@@ -933,7 +943,7 @@ class TestBranchPrefixSuppression:
         log.print_event({
             "op": "stdout",
             "step_path": ["branch_a"],
-            "stream_path": ["branch_a"],
+            "stream_path": ["01JX_A"],
             "line": "branch A more output",
             "ts": "2026-04-14T00:00:03+00:00",
         })
@@ -946,22 +956,23 @@ class TestBranchPrefixSuppression:
         buf = io.StringIO()
         log = _PlainLineLog(file=buf)
 
-        # Run two parallel branches
+        # Run two parallel branches with ULID-style stream roots
         log.print_event({
             "op": "stdout",
             "step_path": ["branch_a"],
-            "stream_path": ["branch_a"],
+            "stream_path": ["01JX_A"],
             "line": "parallel A",
             "ts": "2026-04-14T00:00:01+00:00",
         })
         log.print_event({
             "op": "stdout",
             "step_path": ["branch_b"],
-            "stream_path": ["branch_b"],
+            "stream_path": ["01JX_B"],
             "line": "parallel B",
             "ts": "2026-04-14T00:00:02+00:00",
         })
-        # Both branches exit
+        # Both branches exit — step.exit has empty stream_path, cleanup
+        # uses step_path → roots mapping.
         log.print_event({
             "op": "step.exit",
             "step_path": ["branch_a"],
@@ -980,7 +991,7 @@ class TestBranchPrefixSuppression:
         log.print_event({
             "op": "stdout",
             "step_path": ["final_step"],
-            "stream_path": ["final_step"],
+            "stream_path": ["01JX_FINAL"],
             "line": "sequential output",
             "ts": "2026-04-14T00:00:05+00:00",
         })
