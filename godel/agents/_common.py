@@ -188,12 +188,19 @@ class _BaseAgent:
         tools: list[str] | None,
         skip_permissions: bool,
         system_prompt: str | None = None,
+        session_id: str | None = None,
     ):
         self._model = model
         self._cwd = cwd
         self._tools = tools
         self._skip_permissions = skip_permissions
-        self._session_id: str | None = None
+        # Normalise session_id: strip whitespace and treat empty / all
+        # whitespace as "no session" so callers can safely pass empty strings.
+        if session_id is not None:
+            stripped_sid = session_id.strip()
+            self._session_id: str | None = stripped_sid or None
+        else:
+            self._session_id = None
         # Normalise the system prompt: strip whitespace and treat empty / all
         # whitespace as "no system prompt at all" so we never prepend bare
         # whitespace into the first user prompt.
@@ -205,10 +212,22 @@ class _BaseAgent:
         # Tracks whether the system_prompt has been successfully sent to the
         # CLI. Flipped to True only AFTER a successful agent call returns, so
         # a first-call failure leaves the prompt available for retry.
-        self._system_prompt_sent: bool = False
+        # When a session_id is supplied at construction time the prior CLI
+        # session already received the briefing, so mark it delivered now.
+        self._system_prompt_sent: bool = self._session_id is not None
         # Agents are conversational: a single instance must serialize its
         # calls so session state stays coherent under PARALLEL / gather().
         self._lock = asyncio.Lock()
+
+    @property
+    def session_id(self) -> str | None:
+        """The current CLI session id.
+
+        Returns the value supplied at construction time before the first call,
+        and the session id returned by the CLI after each successful call.
+        ``None`` when no session has been established yet.
+        """
+        return self._session_id
 
     @overload
     async def __call__(self, prompt: str) -> str: ...

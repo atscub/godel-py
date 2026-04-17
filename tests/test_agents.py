@@ -510,3 +510,153 @@ def test_claude_code_system_prompt_not_prepended_when_session_already_set():
         f"got: {cmds[0]!r}"
     )
     assert "post-resume call" in cmds[0]
+
+
+# ---------------------------------------------------------------------------
+# godel-py-7nq: session_id ctor param + accessor
+# ---------------------------------------------------------------------------
+
+def test_claude_code_session_id_ctor_emits_resume_on_first_call():
+    """claude_code(session_id='abc') passes --resume abc on the very first call."""
+    cmds: list[str] = []
+
+    async def capture_run(cmd, **kwargs):
+        cmds.append(cmd)
+        return CommandResult(
+            stdout='{"result": "ok", "session_id": "abc"}',
+            stderr="", returncode=0,
+        )
+
+    @workflow
+    async def wf():
+        with patch("godel.agents._common.run", new=capture_run):
+            agent = claude_code(session_id="abc")
+            await agent("continue the task")
+
+    asyncio.run(wf())
+    assert len(cmds) == 1
+    assert "--resume abc" in cmds[0], (
+        f"Expected '--resume abc' in command, got: {cmds[0]!r}"
+    )
+
+
+def test_session_id_property_pre_and_post_call():
+    """agent.session_id returns ctor value pre-call and updated id post-call."""
+    async def capture_run(cmd, **kwargs):
+        return CommandResult(
+            stdout='{"result": "ok", "session_id": "new-sess"}',
+            stderr="", returncode=0,
+        )
+
+    @workflow
+    async def wf():
+        with patch("godel.agents._common.run", new=capture_run):
+            agent = claude_code(session_id="initial-sess")
+            assert agent.session_id == "initial-sess"
+            await agent("do something")
+            assert agent.session_id == "new-sess"
+
+    asyncio.run(wf())
+
+
+def test_session_id_property_none_before_any_call():
+    """agent.session_id is None when no session_id supplied and no call made."""
+    agent = claude_code()
+    assert agent.session_id is None
+
+
+def test_system_prompt_not_prepended_when_session_id_supplied_at_ctor():
+    """When session_id is set at ctor time, system_prompt is NOT prepended."""
+    cmds: list[str] = []
+
+    async def capture_run(cmd, **kwargs):
+        cmds.append(cmd)
+        return CommandResult(
+            stdout='{"result": "ok", "session_id": "s99"}',
+            stderr="", returncode=0,
+        )
+
+    @workflow
+    async def wf():
+        with patch("godel.agents._common.run", new=capture_run):
+            agent = claude_code(system_prompt="SECRET-BRIEF", session_id="s99")
+            # _system_prompt_sent must be True already because session carries it
+            assert agent._system_prompt_sent is True
+            await agent("task prompt")
+
+    asyncio.run(wf())
+    assert len(cmds) == 1
+    assert "SECRET-BRIEF" not in cmds[0], (
+        f"system_prompt must not be prepended when session_id is supplied; "
+        f"got: {cmds[0]!r}"
+    )
+    assert "task prompt" in cmds[0]
+
+
+def test_empty_string_session_id_normalised_to_none():
+    """Empty and whitespace-only session_id values are normalised to None."""
+    agent_empty = claude_code(session_id="")
+    assert agent_empty.session_id is None
+    assert agent_empty._system_prompt_sent is False  # no session → not pre-sent
+
+    agent_ws = claude_code(session_id="   \t  ")
+    assert agent_ws.session_id is None
+    assert agent_ws._system_prompt_sent is False
+
+
+def test_copilot_session_id_ctor_emits_resume_on_first_call():
+    """copilot(session_id='cp-sess') passes --resume=cp-sess on the first call."""
+    from godel.agents._copilot import copilot
+
+    cmds: list[str] = []
+
+    async def capture_run(cmd, **kwargs):
+        cmds.append(cmd)
+        # Minimal copilot JSONL response
+        return CommandResult(
+            stdout='{"type":"result","sessionId":"cp-sess"}',
+            stderr="", returncode=0,
+        )
+
+    @workflow
+    async def wf():
+        with patch("godel.agents._common.run", new=capture_run):
+            agent = copilot(session_id="cp-sess")
+            assert agent.session_id == "cp-sess"
+            await agent("continue")
+
+    asyncio.run(wf())
+    assert len(cmds) == 1
+    assert "--resume=" in cmds[0], (
+        f"Expected '--resume=...' in copilot command, got: {cmds[0]!r}"
+    )
+    assert "cp-sess" in cmds[0]
+
+
+def test_replay_overrides_ctor_session_id():
+    """Workflow replay post-call overwrites the ctor-supplied session_id.
+
+    When the inner run() call replays a FINISHED event it returns the cached
+    CLI stdout; _parse_output extracts the session_id from that cached response
+    and _invoke stores it on self._session_id — overwriting the ctor value.
+    This confirms replay-vs-ctor precedence without a full event-log replay.
+    """
+    async def capture_run(cmd, **kwargs):
+        # CLI returns a different session_id than what was supplied at ctor time
+        return CommandResult(
+            stdout='{"result": "replayed", "session_id": "replay-sess"}',
+            stderr="", returncode=0,
+        )
+
+    @workflow
+    async def wf():
+        with patch("godel.agents._common.run", new=capture_run):
+            agent = claude_code(session_id="ctor-sess")
+            assert agent.session_id == "ctor-sess"
+            await agent("prompt")
+            # After the call the CLI-returned id takes precedence
+            assert agent.session_id == "replay-sess", (
+                f"Expected 'replay-sess' after call, got: {agent.session_id!r}"
+            )
+
+    asyncio.run(wf())

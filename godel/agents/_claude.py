@@ -101,6 +101,7 @@ def claude_code(
     tools: list[str] | None = None,
     skip_permissions: bool = False,
     system_prompt: str | None = None,
+    session_id: str | None = None,
 ) -> _ClaudeCodeAgent:
     """Return an async callable that dispatches prompts to the Claude CLI.
 
@@ -143,6 +144,36 @@ def claude_code(
             session id is restored from the replayed events.  The runtime
             detects an existing session id and skips re-prepending, so the
             briefing is delivered exactly once even across a pause/resume.
+    session_id:
+        Resume a prior CLI session across process boundaries.  When supplied,
+        the first call will pass ``--resume <session_id>`` to the Claude CLI
+        so the conversation history is preserved without a full workflow
+        replay.
+
+        The ``system_prompt`` (if any) is assumed to have been delivered in
+        that prior session, so it will *not* be re-prepended.
+
+        Empty / whitespace-only strings are treated as *no session* and
+        normalised to ``None``.
+
+        Use ``agent.session_id`` to retrieve the current id (useful for
+        persisting across process restarts)::
+
+            # --- process A ---
+            eng = claude_code(system_prompt="You are a senior engineer.")
+            await eng("implement feature A")
+            sid = eng.session_id          # persist this string
+
+            # --- process B ---
+            eng = claude_code(session_id=sid)
+            await eng("now implement feature B")   # continues same session
+
+        Precedence:
+            Workflow replay always takes precedence over the ctor-supplied
+            value.  When a ``@workflow`` replays from its event log it
+            overwrites ``_session_id`` with the value stored in the log,
+            so deterministic replay is preserved regardless of what was
+            passed here.
     """
     return _ClaudeCodeAgent(
         model=model,
@@ -150,4 +181,5 @@ def claude_code(
         tools=tools,
         skip_permissions=skip_permissions,
         system_prompt=system_prompt,
+        session_id=session_id,
     )
