@@ -711,7 +711,14 @@ def resume_cmd(run_id, file, on_mismatch, on_source_edit, no_strict, no_lint, no
 @click.argument("run_id")
 @click.option("--graph", is_flag=True, help="Render DAG as ASCII tree")
 @click.option("--all", "show_all", is_flag=True, help="Show failed retries and invalidated events")
-def show_cmd(run_id, graph, show_all):
+@click.option(
+    "--full",
+    "full_event_id",
+    default=None,
+    metavar="EVENT_ID",
+    help="Pretty-print untruncated request/response for EVENT_ID from transcript.jsonl",
+)
+def show_cmd(run_id, graph, show_all, full_event_id):
     """Display the audit log for a workflow run."""
     from pathlib import Path
     from godel._event_log import EventLog
@@ -732,7 +739,9 @@ def show_cmd(run_id, graph, show_all):
 
     log = EventLog.load(matches[0].stem, runs_dir=str(runs_dir))
 
-    if graph:
+    if full_event_id:
+        _show_full_payload(log, full_event_id, runs_dir)
+    elif graph:
         from godel._dag_render import render_dag
         for text, color, dim in render_dag(log.all_events(), show_all=show_all):
             if color:
@@ -743,6 +752,42 @@ def show_cmd(run_id, graph, show_all):
         _show_list(log.all_events(), show_all)
 
     log.close()
+
+
+def _show_full_payload(log, event_id: str, runs_dir) -> None:
+    """Retrieve and pretty-print the full request/response for *event_id*."""
+    try:
+        payload = log.get_full_payload(event_id, runs_dir=str(runs_dir))
+    except KeyError:
+        click.echo(f'Event not found: "{event_id}"', err=True)
+        sys.exit(1)
+    except FileNotFoundError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(1)
+
+    click.echo(click.style("═" * 60, fg="cyan"))
+    click.echo(click.style(f"Event:      {payload['event_id']}", fg="cyan", bold=True))
+    click.echo(click.style(f"Op:         {payload['op']}", fg="cyan"))
+    click.echo(click.style(f"Step:       {' › '.join(payload['step_path']) or '(root)'}", fg="cyan"))
+    if payload.get("model"):
+        click.echo(click.style(f"Model:      {payload['model']}", fg="cyan"))
+    click.echo(click.style("═" * 60, fg="cyan"))
+
+    if payload["request"] is not None:
+        click.echo(click.style("── REQUEST ──", fg="yellow", bold=True))
+        click.echo(payload["request"])
+    else:
+        click.echo(click.style("── REQUEST ──", fg="yellow", bold=True))
+        click.echo(click.style("(no agent.prompt found in transcript)", dim=True))
+
+    click.echo()
+
+    if payload["response"] is not None:
+        click.echo(click.style("── RESPONSE ──", fg="green", bold=True))
+        click.echo(payload["response"])
+    else:
+        click.echo(click.style("── RESPONSE ──", fg="green", bold=True))
+        click.echo(click.style("(no agent.response chunks found in transcript)", dim=True))
 
 
 _STATUS_COLOR = {

@@ -214,6 +214,96 @@ class EventLog:
             _privileged.reset(token)
         return log
 
+    def get_full_payload(
+        self, event_id: str, runs_dir: str | None = None
+    ) -> dict:
+        """Retrieve untruncated request prompt and full response for *event_id*.
+
+        Reads ``agent.prompt`` and ``agent.response`` events from the run's
+        ``transcript.jsonl`` rotation chain, matching by the event's
+        ``stream_path``.
+
+        Parameters
+        ----------
+        event_id:
+            ID of the audit log event whose full payload is requested.
+        runs_dir:
+            Parent directory of per-run directories.  If ``None``, derived
+            from ``self._file_path.parent``.
+
+        Returns
+        -------
+        dict with keys:
+            ``event_id``, ``op``, ``step_path``, ``stream_path``,
+            ``request`` (full prompt string or ``None``),
+            ``response`` (assembled response string or ``None``),
+            ``model`` (from transcript if available).
+
+        Raises
+        ------
+        KeyError
+            If *event_id* is not found in the loaded log.
+        FileNotFoundError
+            If the transcript.jsonl does not exist for this run.
+        """
+        from pathlib import Path
+        from godel._tail import TranscriptTail, TranscriptTailError
+
+        event = self._events_by_id.get(event_id)
+        if event is None:
+            raise KeyError(f"Event not found: {event_id}")
+
+        run_id = event.run_id
+        target_stream_path = list(event.stream_path)
+
+        # Locate transcript directory
+        if runs_dir is None:
+            transcript_dir = self._file_path.parent / run_id
+        else:
+            transcript_dir = Path(runs_dir) / run_id
+
+        transcript_file = transcript_dir / "transcript.jsonl"
+        if not transcript_file.exists():
+            raise FileNotFoundError(
+                f"No transcript found for run {run_id!r}: {transcript_file}"
+            )
+
+        full_prompt: str | None = None
+        response_chunks: list[str] = []
+        model: str | None = None
+
+        reader = TranscriptTail.from_run(run_id, runs_dir=transcript_dir.parent, follow=False)
+        try:
+            for evt in reader:
+                evt_stream = evt.get("stream_path", [])
+                if evt_stream != target_stream_path:
+                    continue
+                op = evt.get("op")
+                if op == "agent.prompt":
+                    full_prompt = evt.get("prompt")
+                    if model is None and evt.get("model"):
+                        model = evt["model"]
+                elif op == "agent.response":
+                    text = evt.get("text")
+                    if text:
+                        response_chunks.append(text)
+                    if model is None and evt.get("model"):
+                        model = evt["model"]
+        except TranscriptTailError:
+            pass
+
+        full_response: str | None = "".join(response_chunks) if response_chunks else None
+
+        return {
+            "event_id": event_id,
+            "op": event.op,
+            "step_path": list(event.step_path),
+            "stream_path": target_stream_path,
+            "model": model,
+            "request": full_prompt,
+            "response": full_response,
+        }
+
     def close(self) -> None:
         """Flush and close the JSONL file."""
         if self._file and not self._file.closed:
