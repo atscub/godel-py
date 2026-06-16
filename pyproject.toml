@@ -8,7 +8,7 @@ version = "3.13.0"
 description = "Deterministic orchestrator for AI agent workflows"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "Proprietary" }
+license = { text = "BSL-1.1" }
 authors = [{ name = "atscub" }]
 dependencies = [
     "pydantic>=2",
