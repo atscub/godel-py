@@ -1,5 +1,5 @@
 """Godel — deterministic orchestrator for AI agent workflows."""
-__version__ = "3.13.2"
+__version__ = "3.14.0"
 
 import sys
 from pathlib import Path

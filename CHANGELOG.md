@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v3.14.0 (2026-06-17)
+
+### Chores
+
+- Remove outdated godel-lang references
+  ([`633efa5`](https://github.com/atscub/godel-py/commit/633efa5e661e8a4f9d262c530b3848135e0f6e8f))
+
+- **license**: Reduce BSL change date from 6 to 3 years
+  ([`6442192`](https://github.com/atscub/godel-py/commit/6442192db6f0c709db8f9b2a956662234d432ff6))
+
+### Documentation
+
+- Rewrite README for public launch
+  ([`19998b7`](https://github.com/atscub/godel-py/commit/19998b72b25f754082886fcceb6d3bd85d2c9166))
+
+### Features
+
+- **examples**: Add codebase audit workflow
+  ([`450c7ff`](https://github.com/atscub/godel-py/commit/450c7ff6e9b30cabd56ac1bfb36c99f2ba5da265))
+
+
 ## v3.13.2 (2026-06-17)
 
 ### Bug Fixes
