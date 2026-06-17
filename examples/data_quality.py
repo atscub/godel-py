@@ -56,6 +56,10 @@ class FixProposal(BaseModel):
     details: str
 
 
+class FixProposalList(BaseModel):
+    proposals: list[FixProposal]
+
+
 # ---------------------------------------------------------------------------
 # Phase 1: Deterministic schema validation (no AI)
 # ---------------------------------------------------------------------------
@@ -218,9 +222,9 @@ async def diagnose_issues(
         "values, 'coerce' converts types, 'flag' adds a quality column. "
         "Be conservative — don't drop data unless it's clearly garbage.\n\n"
         "Return a list of fix proposals, one per issue category.",
-        schema=list[FixProposal],
+        schema=FixProposalList,
     )
-    return proposals
+    return proposals.proposals
 
 
 # ---------------------------------------------------------------------------
@@ -281,14 +285,14 @@ async def apply_fixes(raw_csv: str, proposals: list[FixProposal]) -> str:
 # ---------------------------------------------------------------------------
 
 @workflow
-async def data_quality(input_file: str = "data/raw.csv", output: str = "data/clean.csv"):
+async def data_quality(source: str = "data/raw.csv", output: str = "data/clean.csv"):
     timestamp = det.now()
     await print(f"[pipeline] data quality pipeline started at {timestamp}")
-    await print(f"[pipeline] input: {input_file}")
+    await print(f"[pipeline] input: {source}")
 
     # Phase 1 — read and validate
     await print("\n[pipeline] === phase 1: reading and validating ===")
-    raw_csv = await read_text(input_file)
+    raw_csv = await read_text(source)
     schema = await validate_schema(raw_csv)
     if not schema.valid:
         await print(f"[pipeline] SCHEMA ERRORS: {schema.errors}")

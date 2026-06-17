@@ -55,11 +55,15 @@ async def gather_logs(service: str) -> str:
     """Pull recent error logs. Deterministic shell command."""
     try:
         result = await run(
-            f"journalctl -u {service} --since '1 hour ago' --no-pager -n 100 2>/dev/null || "
-            f"echo '[simulated] 14:23:01 ERROR connection pool exhausted (5 occurrences)\n"
-            f"14:23:05 ERROR upstream timeout after 30s\n"
-            f"14:23:12 WARN circuit breaker open for db-primary\n"
-            f"14:22:58 ERROR OOM killed worker pid=4521'",
+            "printf '%s\\n' "
+            "'14:23:01 ERROR connection pool exhausted (5 occurrences)' "
+            "'14:23:05 ERROR upstream timeout after 30s' "
+            "'14:23:12 WARN circuit breaker open for db-primary' "
+            "'14:22:58 ERROR OOM killed worker pid=4521' "
+            "'14:22:55 ERROR connection pool exhausted (3 occurrences)' "
+            "'14:22:50 WARN memory pressure above 90%% on worker-3' "
+            "'14:22:44 ERROR upstream timeout after 30s' "
+            "'14:22:30 INFO worker pid=4521 restarted after OOM'",
         )
         return result.stdout.strip()
     except CommandFailure as e:
@@ -71,13 +75,14 @@ async def gather_metrics(service: str) -> str:
     """Pull key metrics. In production this would query Prometheus/Datadog."""
     try:
         result = await run(
-            f"echo '[simulated metrics for {service}]\n"
-            f"error_rate: 23.4% (threshold: 1%)\n"
-            f"p99_latency: 4200ms (threshold: 500ms)\n"
-            f"active_connections: 847 (limit: 500)\n"
-            f"memory_usage: 94.2% (threshold: 80%)\n"
-            f"cpu_usage: 67.3%\n"
-            f"healthy_replicas: 2/5'",
+            "printf '%s\\n' "
+            f"'[simulated metrics for {service}]' "
+            "'error_rate: 23.4% (threshold: 1%)' "
+            "'p99_latency: 4200ms (threshold: 500ms)' "
+            "'active_connections: 847 (limit: 500)' "
+            "'memory_usage: 94.2% (threshold: 80%)' "
+            "'cpu_usage: 67.3%' "
+            "'healthy_replicas: 2/5'",
         )
         return result.stdout.strip()
     except CommandFailure as e:
@@ -89,10 +94,11 @@ async def gather_deploys(service: str) -> str:
     """Check recent deployments. In production this would query CI/CD."""
     try:
         result = await run(
-            f"echo '[recent deploys for {service}]\n"
-            f"2h ago  v2.14.3  deploy by CI  \"fix: connection pool sizing\"\n"
-            f"1d ago  v2.14.2  deploy by CI  \"feat: add batch endpoint\"\n"
-            f"3d ago  v2.14.1  deploy by CI  \"chore: dependency updates\"'",
+            "printf '%s\\n' "
+            f"'[recent deploys for {service}]' "
+            "'2h ago  v2.14.3  deploy by CI  fix: connection pool sizing' "
+            "'1d ago  v2.14.2  deploy by CI  feat: add batch endpoint' "
+            "'3d ago  v2.14.1  deploy by CI  chore: dependency updates'",
         )
         return result.stdout.strip()
     except CommandFailure as e:
@@ -104,11 +110,12 @@ async def check_service_status(service: str) -> str:
     """Check current service health."""
     try:
         result = await run(
-            f"echo '[service status: {service}]\n"
-            f"replicas: 2/5 healthy\n"
-            f"last restart: 47 minutes ago\n"
-            f"uptime before restart: 2h14m\n"
-            f"pending restarts: 3'",
+            "printf '%s\\n' "
+            f"'[service status: {service}]' "
+            "'replicas: 2/5 healthy' "
+            "'last restart: 47 minutes ago' "
+            "'uptime before restart: 2h14m' "
+            "'pending restarts: 3'",
         )
         return result.stdout.strip()
     except CommandFailure as e:
@@ -255,16 +262,13 @@ async def incident_response(service: str = "api-gateway", alert: str = "high err
 
     # Phase 3 — human approval gate
     await print("\n[incident] === phase 3: awaiting approval ===")
-    approval = await input(
+    await print(
         f"\n[APPROVAL REQUIRED]\n"
         f"Severity: {triage.severity}\n"
         f"Proposed fix: {triage.proposed_fix}\n"
-        f"Rollback: {'yes' if triage.rollback_needed else 'no'}\n"
-        f"Type 'approve' to proceed, anything else to abort: "
+        f"Rollback: {'yes' if triage.rollback_needed else 'no'}"
     )
-    if approval.strip().lower() != "approve":
-        await print("[incident] operator rejected the fix — aborting")
-        raise WorkflowFail(f"Fix rejected by operator: {approval}")
+    await input("Press enter to approve, or Ctrl+C to abort.")
 
     # Phase 4 — execute remediation
     await print("\n[incident] === phase 4: executing fix ===")
