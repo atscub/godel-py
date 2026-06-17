@@ -200,7 +200,7 @@ async def content_pipeline(topic: str = "event sourcing for AI agents", output: 
     await print("\n[pipeline] === phase 4: compiling results ===")
     results = await compile_results(draft, verdicts)
 
-    # Phase 5 — human editorial checkpoint
+    # Phase 5 — summary
     await print(f"\n{'='*60}")
     await print(f"ARTICLE: {draft.title}")
     await print(f"{'='*60}")
@@ -209,13 +209,6 @@ async def content_pipeline(topic: str = "event sourcing for AI agents", output: 
 
     if results["unsupported_count"] > 0:
         await print(f"\n⚠ {results['unsupported_count']} unsupported claims found.")
-        await print("Consider: `godel rewind <research-step-id>` to redo research,")
-        await print("or edit the draft manually and `godel resume`.")
-
-    await input(
-        f"\nCheckpoint — review the article and fact-check results above.\n"
-        f"Press enter to publish, or Ctrl+C to abort and edit."
-    )
 
     # Phase 6 — write final article with fact-check appendix
     final = f"{draft.body}\n\n---\n\n{results['fact_check_table']}\n"
