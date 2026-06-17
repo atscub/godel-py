@@ -115,8 +115,8 @@ async def collect_metrics(project_path: str) -> dict:
     try:
         lint = await run("ruff check . --statistics --quiet", cwd=project_path)
         lint_output = lint.stdout.strip()
-    except CommandFailure:
-        lint_output = "(ruff not available)"
+    except CommandFailure as e:
+        lint_output = e.stderr.strip() if e.stderr else e.stdout.strip() if e.stdout else "(ruff not available)"
 
     try:
         git_log = await run("git log --oneline -20", cwd=project_path)
