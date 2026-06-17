@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v3.13.2 (2026-06-17)
+
+### Bug Fixes
+
+- **ci**: Add contents:read permission to pypi job
+  ([`d654c80`](https://github.com/atscub/godel-py/commit/d654c80d06d8e95d1315154f4ed87e64697078b3))
+
+
 ## v3.13.1 (2026-06-17)
 
 ### Bug Fixes
