@@ -10,6 +10,17 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "BSL-1.1" }
 authors = [{ name = "Abraham Toledo", email = "godel@abrahamtoledo.dev" }]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+keywords = ["ai", "agents", "orchestration", "workflow", "deterministic", "replay"]
 dependencies = [
     "pydantic>=2",
     "click",
@@ -22,18 +33,6 @@ watch = ["rich>=13.0,<15"]
 
 [project.scripts]
 godel = "godel.cli:main"
-
-classifiers = [
-    "Development Status :: 4 - Beta",
-    "Intended Audience :: Developers",
-    "Topic :: Software Development :: Libraries :: Application Frameworks",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
-]
-keywords = ["ai", "agents", "orchestration", "workflow", "deterministic", "replay"]
 
 [project.urls]
 Homepage = "https://github.com/atscub/godel-py"
