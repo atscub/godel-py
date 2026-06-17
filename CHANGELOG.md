@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v3.15.1 (2026-06-17)
+
+### Bug Fixes
+
+- **examples**: Capture ruff output on non-zero exit
+  ([`9c717e3`](https://github.com/atscub/godel-py/commit/9c717e3b43d6559de45e832b09c66b6f3236158a))
+
+
 ## v3.15.0 (2026-06-17)
 
 ### Features
