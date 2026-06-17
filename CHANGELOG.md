@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v3.13.1 (2026-06-17)
+
+### Bug Fixes
+
+- **tests**: Fix flaky late-attach test on slow CI runners
+  ([`a111748`](https://github.com/atscub/godel-py/commit/a1117480f4791596b8a832697426ba1a6648bc4e))
+
+### Continuous Integration
+
+- Retrigger release after tag realignment
+  ([`d60e3c6`](https://github.com/atscub/godel-py/commit/d60e3c6966064b350b743d3d2a820ff774146705))
+
+
 ## v3.13.0 (2026-04-17)
 
 ### Bug Fixes
