@@ -63,7 +63,7 @@ jobs:
       id-token: write
     environment:
       name: pypi
-      url: https://pypi.org/p/godel
+      url: https://pypi.org/p/godel-py
     steps:
       - uses: actions/checkout@v4
         with:

@@ -7,7 +7,7 @@ The language spec and design docs live in the companion repo: [atscub/godel-lang
 ## Install
 
 ```bash
-pip install git+https://github.com/atscub/godel-py.git@main
+pip install godel-py
 ```
 
 ## Quick start
