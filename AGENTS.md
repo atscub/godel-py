@@ -1,7 +1,7 @@
 # Agent Instructions
 This repository is the **Python implementation** of Godel — a deterministic orchestrator for AI agent workflows. Users write workflows as plain Python, decorated with `@workflow` and `@step`; the runtime handles event logging, pause/resume, rewind, and deterministic replay.
 
-The language spec, grammar, and design docs live in [atscub/godel-lang](https://github.com/atscub/godel-lang). This repo only contains the Python library and its CLI.
+This repo contains the Python library and its CLI.
 
 ## Project structure
 

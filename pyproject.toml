@@ -38,7 +38,6 @@ godel = "godel.cli:main"
 Homepage = "https://github.com/atscub/godel-py"
 Repository = "https://github.com/atscub/godel-py"
 Documentation = "https://github.com/atscub/godel-py/tree/main/docs"
-Spec = "https://github.com/atscub/godel-lang"
 
 [tool.hatch.build.targets.wheel]
 packages = ["godel"]

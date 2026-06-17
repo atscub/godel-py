@@ -76,7 +76,6 @@ Crash at any point. `godel resume` picks up where it left off — no re-running 
         -> resume / rewind / repair
 ```
 
-The [language spec](https://github.com/atscub/godel-lang) defines the formal model. This repo is the Python runtime.
 
 ## Documentation
 
