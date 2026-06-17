@@ -22,7 +22,7 @@ Usage:
     godel run examples/codebase_audit.py -- path=./my-project report=audit.md
 """
 from pydantic import BaseModel
-from godel import workflow, step, parallel, run, print, input, write_text, det
+from godel import workflow, step, parallel, run, print, input, write_text, det, CommandFailure
 
 
 AUDIT_AXES = [
@@ -93,15 +93,13 @@ async def collect_metrics(project_path: str) -> dict:
     await print(f"[metrics] scanning {project_path}")
 
     loc = await run(
-        ["find", ".", "-name", "*.py", "-not", "-path", "./.venv/*",
-         "-not", "-path", "./.git/*", "-exec", "cat", "{}", "+"],
+        "find . -name '*.py' -not -path './.venv/*' -not -path './.git/*' -exec cat {} +",
         cwd=project_path,
     )
     line_count = len(loc.stdout.splitlines())
 
     file_list = await run(
-        ["find", ".", "-name", "*.py", "-not", "-path", "./.venv/*",
-         "-not", "-path", "./.git/*"],
+        "find . -name '*.py' -not -path './.venv/*' -not -path './.git/*'",
         cwd=project_path,
     )
     files = [f for f in file_list.stdout.strip().splitlines() if f]
@@ -109,27 +107,21 @@ async def collect_metrics(project_path: str) -> dict:
     test_files = [f for f in files if "/test_" in f or f.endswith("_test.py")]
 
     try:
-        deps = await run(["pip", "list", "--format=columns"], cwd=project_path)
+        deps = await run("pip list --format=columns", cwd=project_path)
         dep_count = max(0, len(deps.stdout.strip().splitlines()) - 2)
-    except Exception:
+    except CommandFailure:
         dep_count = -1
 
     try:
-        lint = await run(
-            ["ruff", "check", ".", "--statistics", "--quiet"],
-            cwd=project_path,
-        )
+        lint = await run("ruff check . --statistics --quiet", cwd=project_path)
         lint_output = lint.stdout.strip()
-    except Exception:
+    except CommandFailure:
         lint_output = "(ruff not available)"
 
     try:
-        git_log = await run(
-            ["git", "log", "--oneline", "-20"],
-            cwd=project_path,
-        )
+        git_log = await run("git log --oneline -20", cwd=project_path)
         recent_commits = git_log.stdout.strip()
-    except Exception:
+    except CommandFailure:
         recent_commits = "(not a git repo)"
 
     metrics = {
@@ -247,8 +239,8 @@ async def write_narrative(aggregate: dict, project_path: str) -> str:
 
 @workflow
 async def codebase_audit(path: str = ".", report: str = "audit-report.md"):
-    timestamp = await det.now()
-    await print(f"[audit] starting codebase audit at {timestamp.isoformat()}")
+    timestamp = det.now()
+    await print(f"[audit] starting codebase audit at {timestamp}")
     await print(f"[audit] target: {path}")
 
     # Phase 1 — deterministic metric collection
