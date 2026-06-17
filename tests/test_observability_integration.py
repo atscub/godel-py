@@ -376,6 +376,7 @@ def test_c_late_attach_catches_up_from_file(tmp_path):
     )
 
     results: list[dict] = []
+    seen_seqs: set[int] = set()
     reader_errors: list[Exception] = []
     reader_started = threading.Event()  # signals: first non-rotate event consumed
     done_event = threading.Event()
@@ -387,9 +388,10 @@ def test_c_late_attach_catches_up_from_file(tmp_path):
                 if evt.get("op") == "rotate":
                     continue
                 results.append(evt)
+                seen_seqs.add(evt["seq"])
                 if not reader_started.is_set():
                     reader_started.set()
-                if len(results) >= n_total:
+                if len(seen_seqs) >= n_total:
                     done_event.set()
                     break
                 if time.monotonic() > deadline:
@@ -422,13 +424,14 @@ def test_c_late_attach_catches_up_from_file(tmp_path):
     assert not writer_errors, f"Writer errors: {writer_errors}"
     assert not reader_errors, f"Reader errors: {reader_errors}"
 
-    got = len(results)
-    assert got == n_total, (
-        f"Late-attach: expected {n_total} events, got {got}. "
+    got_seqs = {e["seq"] for e in results}
+    expected_seqs = set(writer_seqs)
+    missing = expected_seqs - got_seqs
+    assert not missing, (
+        f"Late-attach: missing {len(missing)} sequences out of {n_total}. "
         f"Writer produced seqs: first={writer_seqs[0] if writer_seqs else 'none'}, "
         f"last={writer_seqs[-1] if writer_seqs else 'none'}, count={len(writer_seqs)}. "
-        f"Reader got: first_seq={results[0].get('seq') if results else 'none'}, "
-        f"last_seq={results[-1].get('seq') if results else 'none'}."
+        f"Reader got {len(got_seqs)} unique seqs. Missing: {sorted(missing)[:10]}..."
     )
 
     seqs = [e["seq"] for e in results]
