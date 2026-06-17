@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v3.16.0 (2026-06-17)
+
+### Features
+
+- **examples**: Add incident response, content pipeline, and data quality workflows
+  ([`c78a256`](https://github.com/atscub/godel-py/commit/c78a256e3ca959dc5800236a191fea4d703727c6))
+
+
 ## v3.15.1 (2026-06-17)
 
 ### Bug Fixes
