@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v3.16.2 (2026-06-17)
+
+### Bug Fixes
+
+- **examples**: Remove human checkpoint from content_pipeline
+  ([`d0d334f`](https://github.com/atscub/godel-py/commit/d0d334fdd012fc17df6350f174318187310cc53c))
+
+
 ## v3.16.1 (2026-06-17)
 
 ### Bug Fixes
