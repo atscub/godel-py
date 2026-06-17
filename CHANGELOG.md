@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v3.14.1 (2026-06-17)
+
+### Bug Fixes
+
+- **examples**: Fix codebase_audit run() signature and det.now() usage
+  ([`a6430ad`](https://github.com/atscub/godel-py/commit/a6430adc3697a864c858f90ada78c7f9212c47a9))
+
+
 ## v3.14.0 (2026-06-17)
 
 ### Chores
