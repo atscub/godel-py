@@ -60,6 +60,7 @@ jobs:
     if: needs.release.outputs.released == 'true'
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       id-token: write
     environment:
       name: pypi
