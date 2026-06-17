@@ -170,66 +170,155 @@ async def audit_axis(axis_config: dict, metrics: dict, project_path: str) -> Axi
 
 
 # ---------------------------------------------------------------------------
-# Phase 3: Deterministic aggregation (no AI)
+# Phase 3: Deterministic report assembly (no AI)
 # ---------------------------------------------------------------------------
 
+def _score_bar(score: int, max_score: int = 10) -> str:
+    filled = score
+    empty = max_score - score
+    return f"{'█' * filled}{'░' * empty}"
+
+
 @step
-async def aggregate_verdicts(verdicts: list[AxisVerdict]) -> dict:
-    """Compute aggregate score and organize results. Pure logic, no AI."""
+async def build_structured_report(
+    verdicts: list[AxisVerdict], metrics: dict, timestamp: str,
+) -> dict:
+    """Assemble the data-driven sections of the report. Pure deterministic logic."""
     total = sum(v.score for v in verdicts)
     max_possible = len(verdicts) * 10
     pct = round(total / max_possible * 100)
+    sorted_v = sorted(verdicts, key=lambda v: v.score)
 
-    sorted_verdicts = sorted(verdicts, key=lambda v: v.score)
-    weakest = sorted_verdicts[0]
-    strongest = sorted_verdicts[-1]
+    lines = []
+
+    lines.append("# Codebase Audit Report\n")
+    lines.append(f"**Date:** {timestamp}  ")
+    lines.append(f"**Overall Score: {total}/{max_possible} ({pct}%)**\n")
+
+    lines.append("## Project Metrics\n")
+    lines.append("| Metric | Value |")
+    lines.append("|--------|-------|")
+    lines.append(f"| Python lines | {metrics['python_lines']:,} |")
+    lines.append(f"| Python files | {metrics['python_files']} |")
+    lines.append(f"| Test files | {metrics['test_files']} |")
+    lines.append(f"| Dependencies | {metrics['dependency_count']} |")
+    lines.append("")
+
+    lines.append("## Score Summary\n")
+    lines.append("| Axis | Score | |")
+    lines.append("|------|-------|-|")
+    for v in sorted_v:
+        label = next(
+            (a["label"] for a in AUDIT_AXES if a["axis"] == v.axis),
+            v.axis,
+        )
+        lines.append(f"| {label} | **{v.score}/10** | {_score_bar(v.score)} |")
+    lines.append("")
+
+    lines.append("---\n")
+    lines.append("## Executive Summary\n")
+    lines.append("{{EXECUTIVE_SUMMARY}}\n")
+    lines.append("---\n")
+
+    for v in sorted_v:
+        label = next(
+            (a["label"] for a in AUDIT_AXES if a["axis"] == v.axis),
+            v.axis,
+        )
+        lines.append(f"## {label} — {v.score}/10\n")
+        lines.append(f"_{v.summary}_\n")
+
+        if v.strengths:
+            lines.append("### Strengths\n")
+            for s in v.strengths:
+                lines.append(f"- {s}")
+            lines.append("")
+
+        if v.issues:
+            lines.append("### Issues\n")
+            for i, issue in enumerate(v.issues, 1):
+                lines.append(f"{i}. {issue}")
+            lines.append("")
+
+        if v.recommendations:
+            lines.append("### Recommendations\n")
+            for r in v.recommendations:
+                lines.append(f"- {r}")
+            lines.append("")
+
+        lines.append("---\n")
 
     all_issues = []
-    for v in verdicts:
+    for v in sorted_v:
         for issue in v.issues:
-            all_issues.append({"axis": v.axis, "issue": issue})
+            all_issues.append((v.axis, issue))
+
+    if all_issues:
+        lines.append("## All Issues\n")
+        lines.append("| # | Axis | Issue |")
+        lines.append("|---|------|-------|")
+        for i, (axis, issue) in enumerate(all_issues, 1):
+            label = next(
+                (a["label"] for a in AUDIT_AXES if a["axis"] == axis),
+                axis,
+            )
+            issue_escaped = issue.replace("|", "\\|").replace("\n", " ")
+            lines.append(f"| {i} | {label} | {issue_escaped} |")
+        lines.append("")
+
+    if metrics.get("lint_output") and metrics["lint_output"] != "(ruff not available)":
+        lines.append("## Lint Output\n")
+        lines.append("```")
+        lines.append(metrics["lint_output"])
+        lines.append("```\n")
+
+    structured = "\n".join(lines)
 
     await print(
         f"[aggregate] overall: {total}/{max_possible} ({pct}%) | "
-        f"weakest: {weakest.axis} ({weakest.score}) | "
-        f"strongest: {strongest.axis} ({strongest.score})"
+        f"weakest: {sorted_v[0].axis} ({sorted_v[0].score}) | "
+        f"strongest: {sorted_v[-1].axis} ({sorted_v[-1].score})"
     )
 
     return {
         "total_score": total,
         "max_score": max_possible,
         "percentage": pct,
-        "weakest_axis": weakest.axis,
-        "strongest_axis": strongest.axis,
-        "verdicts": [v.model_dump() for v in verdicts],
+        "weakest_axis": sorted_v[0].axis,
+        "strongest_axis": sorted_v[-1].axis,
+        "structured_report": structured,
         "all_issues_count": len(all_issues),
     }
 
 
 # ---------------------------------------------------------------------------
-# Phase 4: AI synthesis — one agent writes the narrative report
+# Phase 4: AI executive summary only
 # ---------------------------------------------------------------------------
 
 @step
-async def write_narrative(aggregate: dict, project_path: str) -> str:
-    """Synthesize structured verdicts into a readable audit report."""
+async def write_executive_summary(verdicts: list[AxisVerdict], metrics: dict) -> str:
+    """AI writes only the executive summary — everything else is data-driven."""
     from godel.agents import claude_code
+
+    verdict_summary = "\n".join(
+        f"- {v.axis} ({v.score}/10): {v.summary}" for v in verdicts
+    )
+    issue_summary = "\n".join(
+        f"- [{v.axis}] {issue}"
+        for v in verdicts
+        for issue in v.issues
+    )
 
     writer = claude_code(model="sonnet", skip_permissions=True)
     return await writer(
-        f"You are a technical writer. Synthesize these audit results into a "
-        f"concise, actionable markdown report for the project at {project_path}.\n\n"
-        f"Aggregate: {aggregate['total_score']}/{aggregate['max_score']} "
-        f"({aggregate['percentage']}%)\n\n"
-        f"Verdicts by axis:\n"
-        + "\n".join(
-            f"- **{v['axis']}** ({v['score']}/10): {v['summary']}"
-            for v in aggregate["verdicts"]
-        )
-        + "\n\nStructure: Executive summary (3 sentences), per-axis breakdown "
-        "(strengths + top issues), prioritized action plan (top 5 items). "
-        "Be direct — no filler. Cite specific files/patterns from the verdicts. "
-        "Output ONLY the markdown report content, no wrapping."
+        f"Write an executive summary (3-5 sentences) for a codebase audit.\n\n"
+        f"Project metrics: {metrics['python_lines']} lines, "
+        f"{metrics['python_files']} files, {metrics['test_files']} test files.\n\n"
+        f"Axis scores:\n{verdict_summary}\n\n"
+        f"Key issues found:\n{issue_summary}\n\n"
+        "Be direct and specific. Mention the most critical findings by name. "
+        "State what must be fixed before the project can be trusted. "
+        "Output ONLY the summary paragraph(s), no headers or markdown formatting."
     )
 
 
@@ -255,20 +344,24 @@ async def codebase_audit(path: str = ".", report: str = "audit-report.md"):
     for v in verdicts:
         await print(f"  [{v.axis}] {v.score}/10 — {v.summary[:80]}")
 
-    # Phase 3 — deterministic aggregation
-    await print("\n[audit] === phase 3: aggregating results ===")
-    aggregate = await aggregate_verdicts(verdicts)
+    # Phase 3 — deterministic report assembly + AI executive summary (parallel)
+    await print("\n[audit] === phase 3: assembling report ===")
+    aggregate, executive = await parallel(
+        build_structured_report(verdicts, metrics, timestamp),
+        write_executive_summary(verdicts, metrics),
+    )
 
-    # Phase 4 — AI narrative synthesis
-    await print("\n[audit] === phase 4: writing report ===")
-    narrative = await write_narrative(aggregate, path)
+    # Phase 4 — combine structured report with AI summary
+    final_report = aggregate["structured_report"].replace(
+        "{{EXECUTIVE_SUMMARY}}", executive
+    )
 
     # Phase 5 — human checkpoint
-    await print(f"\n[audit] report preview:\n{narrative[:500]}...")
-    await input("\nCheckpoint — review the report above. Press enter to save, or Ctrl+C to abort.")
+    await print(f"\n[audit] report preview:\n{final_report[:800]}...")
+    await input("\nCheckpoint — review above. Press enter to save, or Ctrl+C to abort.")
 
     # Phase 6 — audited file write
-    await write_text(report, narrative)
+    await write_text(report, final_report)
     await print(f"\n[audit] report saved to {report}")
     await print(f"[audit] overall score: {aggregate['percentage']}%")
 
@@ -277,4 +370,5 @@ async def codebase_audit(path: str = ".", report: str = "audit-report.md"):
         "report_path": report,
         "weakest": aggregate["weakest_axis"],
         "strongest": aggregate["strongest_axis"],
+        "issues_found": aggregate["all_issues_count"],
     }
