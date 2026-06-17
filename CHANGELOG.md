@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v3.15.0 (2026-06-17)
+
+### Features
+
+- **examples**: Richer audit report with structured data sections
+  ([`873e004`](https://github.com/atscub/godel-py/commit/873e0042740f73fbc8b7bf0a0e0e8f7732f935e0))
+
+
 ## v3.14.1 (2026-06-17)
 
 ### Bug Fixes
