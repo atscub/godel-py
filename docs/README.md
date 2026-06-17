@@ -18,7 +18,7 @@ intervention.
 5. [CLI Reference](cli.md) — the `godel` command-line tool
 6. [Examples](examples.md) — annotated walkthroughs
 7. [Agent Skills](skills/README.md) — `godel-runner` and `godel-engineer` for Claude Code
-8. [Strategy notes](strategy/README.md) — internal positioning, business model, roadmap vision
+8. [Best Practices](best-practices.md) — conventions and patterns for production workflows
 
 ## Observability
 
@@ -50,7 +50,7 @@ agent calls.
 
 ## Status
 
-Released — current version 3.0.0 (semantic-release, auto-published from `master`).
+Released — current version 3.0.0 (semantic-release, auto-published from `main`).
 Core primitives (workflow/step/agent, audit log, strict mode, replay, pause, rewind,
 repair) plus the two-tier `.godel/` + `~/.godel/` config and live `godel watch`
 renderer are implemented and covered by tests. Breaking changes are reflected in

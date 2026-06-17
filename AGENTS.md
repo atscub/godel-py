@@ -15,7 +15,7 @@ godel-py/
 ├── .agents/HANDOFF.md  # Technical handoff / milestone context
 ├── .agents/MONITORING.md # How to monitor a live workflow run efficiently
 ├── pyproject.toml      # Package metadata + semantic-release config
-└── .github/workflows/  # CI: tests + release on merge to master
+└── .github/workflows/  # CI: tests + release on merge to main
 ```
 
 ## Key modules
@@ -46,11 +46,11 @@ Then commit both `docs/` and `godel/_guides/` together.
 
 ## Release
 
-Pushes to `master` run `.github/workflows/publish.yml`:
+Pushes to `main` run `.github/workflows/publish.yml`:
 1. Install deps + run `pytest`
 2. `python-semantic-release` inspects commits, bumps version, creates a tag + GitHub Release, and uploads `.whl` + `.tar.gz` assets.
 
-Private repo → releases are authenticated.
+Releases are published as GitHub Releases.
 
 
 ## Non-Interactive Shell Commands

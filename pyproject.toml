@@ -37,7 +37,7 @@ testpaths = ["tests"]
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
 version_variables = ["godel/__init__.py:__version__"]
-branch = "master"
+branch = "main"
 build_command = "python -m build"
 upload_to_vcs_release = true
 upload_to_pypi = false

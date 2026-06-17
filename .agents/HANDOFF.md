@@ -21,7 +21,7 @@ Implement the M0 milestone for the Godel Python library — the minimal package 
 **30 tests** across 5 test files, all passing.
 
 ## Current State
-- All committed and pushed to `origin/master`
+- All committed and pushed to `origin/main`
 - Tests pass, `pip install -e .` works
 - `requires-python` is `>=3.10` (system has 3.10.12, tickets spec'd 3.11)
 - Beads tickets all closed, dolt pushed

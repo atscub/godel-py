@@ -7,7 +7,7 @@ The language spec and design docs live in the companion repo: [atscub/godel-lang
 ## Install
 
 ```bash
-pip install git+https://github.com/atscub/godel-py.git@master
+pip install git+https://github.com/atscub/godel-py.git@main
 ```
 
 ## Quick start
@@ -41,7 +41,7 @@ Requires Python 3.10+.
 
 ## Release process
 
-Merges to `master` trigger `.github/workflows/publish.yml`, which runs tests and then `python-semantic-release`. Conventional commits (`feat:`, `fix:`, `feat!:`) drive version bumps, tag creation, changelog generation, and wheel+sdist upload to a GitHub Release.
+Merges to `main` trigger `.github/workflows/publish.yml`, which runs tests and then `python-semantic-release`. Conventional commits (`feat:`, `fix:`, `feat!:`) drive version bumps, tag creation, changelog generation, and wheel+sdist upload to a GitHub Release.
 
 ## License
 

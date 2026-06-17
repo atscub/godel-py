@@ -15,7 +15,7 @@ bd close <id>         # Complete work
 
 - Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
 - Run `bd prime` for detailed command reference and session close protocol
-- Never work directly over master, create a worktree for your work.
+- Never work directly over main, create a worktree for your work.
 
 ## Definition of DONE (CLOSED)
 - A ticket can be marked as done (closed), once it has been merged.
