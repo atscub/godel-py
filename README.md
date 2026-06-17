@@ -98,4 +98,4 @@ Python 3.10+. Conventional commits. CI runs on every push to `main`.
 
 ## License
 
-Business Source License 1.1 — see [LICENSE](LICENSE). Use Godel freely as a library in your applications, including commercially. The only restriction is offering Godel itself as a competing hosted orchestration service. Each version converts to Apache 2.0 after six years.
+Business Source License 1.1 — see [LICENSE](LICENSE). Use Godel freely as a library in your applications, including commercially. The only restriction is offering Godel itself as a competing hosted orchestration service. Each version converts to Apache 2.0 after three years.
