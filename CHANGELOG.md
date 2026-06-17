@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v3.16.1 (2026-06-17)
+
+### Bug Fixes
+
+- **examples**: Tested end-to-end, add examples README
+  ([`f650d04`](https://github.com/atscub/godel-py/commit/f650d042dc068b12ee518c3edfcf4b3975d19378))
+
+### Chores
+
+- **examples**: Remove trivial demo workflows
+  ([`eddc4f1`](https://github.com/atscub/godel-py/commit/eddc4f147b96bee34f5a4c7367f4f2802b0a57b1))
+
+
 ## v3.16.0 (2026-06-17)
 
 ### Features
