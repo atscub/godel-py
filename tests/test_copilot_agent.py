@@ -13,6 +13,11 @@ import pytest
 from pydantic import BaseModel
 
 import godel.agents
+
+
+def _cmd_contains(cmd: list[str], substr: str) -> bool:
+    """Check if *substr* appears in any element of the argv list."""
+    return any(substr in arg for arg in cmd)
 from godel.agents._copilot import copilot, _CopilotAgent, _EXTRACTION_MODEL
 from godel.agents._common import SchemaValidationFailure
 from godel._run import CommandResult, CommandFailure
@@ -402,19 +407,14 @@ def test_copilot_schema_total_failure_raises():
 
 
 # ---------------------------------------------------------------------------
-# NIT-3: shlex.quote on complex tool names with special shell characters
+# NIT-3: tool names with special characters are passed safely via argv
 # ---------------------------------------------------------------------------
 
-def test_complex_tool_name_is_shell_quoted():
-    """Tool names with shell-special characters (parens, globs) are correctly
-    quoted so the CLI receives them verbatim.
-
-    shlex.quote wraps the value in single quotes, e.g.
-    ``shell(git:*)`` → ``'shell(git:*)'``.  Verify the raw token appears
-    in the command string in its shlex-quoted form.
+def test_complex_tool_name_passed_via_argv():
+    """Tool names with shell-special characters (parens, globs) are passed as
+    separate argv elements, so the CLI receives them verbatim without any
+    shell interpretation.
     """
-    import shlex
-
     cmds: list[str] = []
 
     async def capture_run(cmd, **kwargs):
@@ -431,14 +431,9 @@ def test_complex_tool_name_is_shell_quoted():
 
     asyncio.run(wf())
     assert len(cmds) == 1
-    quoted_tool = shlex.quote(complex_tool)  # → "'shell(git:*)'"
-    assert quoted_tool in cmds[0], (
-        f"Expected shell-quoted tool {quoted_tool!r} in command: {cmds[0]!r}"
-    )
-    # The unquoted form must NOT appear bare (would be unsafe).
-    assert complex_tool not in cmds[0].replace(quoted_tool, ""), (
-        f"Unquoted tool name found in command: {cmds[0]!r}"
-    )
+    # With argv list, the raw value appears as a standalone element
+    tool_idx = cmds[0].index("--allow-tool")
+    assert cmds[0][tool_idx + 1] == complex_tool
 
 
 # ---------------------------------------------------------------------------
@@ -558,8 +553,8 @@ def test_copilot_system_prompt_prepended_on_first_call():
 
     asyncio.run(wf())
     assert len(cmds) == 1
-    assert "SYSTEM: be precise." in cmds[0]
-    assert "run checks" in cmds[0]
+    assert _cmd_contains(cmds[0], "SYSTEM: be precise.")
+    assert _cmd_contains(cmds[0], "run checks")
 
 
 def test_copilot_system_prompt_not_repeated_on_second_call():
@@ -582,5 +577,5 @@ def test_copilot_system_prompt_not_repeated_on_second_call():
 
     asyncio.run(wf())
     assert len(cmds) == 2
-    assert "PREAMBLE" in cmds[0]
-    assert "PREAMBLE" not in cmds[1]
+    assert _cmd_contains(cmds[0], "PREAMBLE")
+    assert not _cmd_contains(cmds[1], "PREAMBLE")

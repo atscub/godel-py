@@ -208,27 +208,27 @@ class TestReadTextLive:
 # ---------------------------------------------------------------------------
 
 class TestReadTextReplay:
-    def test_returns_cached_content(self, tmp_path):
-        """On replay, read_text returns cached content without touching the FS."""
-        target_path = str(tmp_path / "cached.txt")
-        resolved = _normalize_path(target_path)
+    def test_reread_reads_from_disk_on_replay(self, tmp_path):
+        """cache='reread' (default) re-reads from disk even when cache exists."""
+        target = tmp_path / "cached.txt"
+        target.write_text("updated on disk")
+        resolved = _normalize_path(str(target))
 
         loaded = _make_log_with_events(tmp_path / "logs", [
             {
                 "op": "read_text",
                 "finish": True,
                 "request": {"path": resolved, "encoding": "utf-8"},
-                "response": {"content": "cached content"},
+                "response": {"content": "stale cached content"},
             },
         ])
         _install_replay_ctx(loaded)
 
-        # File does NOT exist on disk — must come from cache
-        result = asyncio.run(read_text(target_path))
-        assert result == "cached content"
+        result = asyncio.run(read_text(str(target)))
+        assert result == "updated on disk"
 
-    def test_no_disk_access_on_replay(self, tmp_path):
-        """read_text on replay skips filesystem entirely — even for non-existent paths."""
+    def test_file_cache_returns_inline_content(self, tmp_path):
+        """cache='file' returns inline content from the log on replay."""
         nonexistent = str(tmp_path / "does_not_exist.txt")
         resolved = _normalize_path(nonexistent)
 
@@ -242,12 +242,13 @@ class TestReadTextReplay:
         ])
         _install_replay_ctx(loaded)
 
-        result = asyncio.run(read_text(nonexistent))
+        result = asyncio.run(read_text(nonexistent, cache="file"))
         assert result == "replay only"
 
     def test_relative_path_matches_cache_despite_cwd_change(self, tmp_path, monkeypatch):
         """Relative paths resolve to absolute; replay matches regardless of cwd."""
         target = tmp_path / "rel.txt"
+        target.write_text("via absolute")
         resolved = _normalize_path(str(target))
 
         loaded = _make_log_with_events(tmp_path / "logs", [
@@ -260,9 +261,6 @@ class TestReadTextReplay:
         ])
         _install_replay_ctx(loaded)
 
-        # Original run used an absolute path. Replay from a DIFFERENT cwd, using
-        # an absolute path that resolves to the same location, still hits the
-        # cache because both are normalised identically.
         other_dir = tmp_path / "other_cwd"
         other_dir.mkdir()
         monkeypatch.chdir(other_dir)
@@ -287,7 +285,8 @@ class TestReadTextReplay:
         _install_replay_ctx(loaded)
         set_mismatch_policy(MismatchPolicy.CONTINUE)
 
-        result = asyncio.run(read_text(target_path, encoding="latin-1"))
+        # cache="file" uses inline content from the log on mismatch+continue
+        result = asyncio.run(read_text(target_path, encoding="latin-1", cache="file"))
         assert result == "old cached"
         captured = capsys.readouterr()
         assert "hash mismatch" in captured.err.lower() or "hash mismatch" in captured.out.lower()

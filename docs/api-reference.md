@@ -82,9 +82,9 @@ Stub — not yet implemented.
 Audited async subprocess. Returns `CommandResult(returncode, stdout, stderr)`. Raises
 `CommandFailure` on non-zero exit. All arguments and output are recorded.
 
-### `parallel(awaitables) -> list`
-Awaits a list of coroutines concurrently. Emits one `parallel.fork` and one
-`parallel.join` event bracketing the group.
+### `parallel(*awaitables) -> tuple`
+Awaits coroutines concurrently (variadic args). Emits one `FORK` and one
+`JOIN` event bracketing the group.
 
 ### `retry(n)(fn)` or `@retry(n)`
 Decorator that retries on `WorkflowFail` up to `n` times. Each attempt is recorded; only
@@ -98,16 +98,24 @@ Async shadow of `print`. Records a `print` event and writes to stdout.
 Async shadow of `input`. Blocks for human input, writes a `SUSPENDED` → `FINISHED`
 `input` event pair. Durable: on resume, returns the recorded answer without re-prompting.
 
-### `godel.read_text(path, *, encoding="utf-8") -> str`
+### `godel.read_text(path, *, encoding="utf-8", cache="reread") -> str`
 Async audited file read. Resolves `path` to an absolute form (so replay matches are
-cwd-independent), reads the file, and emits a `read_text` event. On replay, returns the
-cached content without touching the filesystem. The full content is hashed for replay
-matching; the stored snapshot is truncated at 64 KB for log efficiency (truncation never
-affects determinism). A partial `STARTED`-only event (crash between open and finish)
-causes a re-read on resume — reads are idempotent so this is safe.
+cwd-independent), reads the file, and emits a `read_text` event. A partial
+`STARTED`-only event (crash between open and finish) causes a re-read on resume —
+reads are idempotent so this is safe.
+
+The `cache` parameter controls what happens on replay:
+
+- `"reread"` (default) — re-reads the file from disk on resume. Always sees the
+  current file state. Safe for all file sizes.
+- `"file"` — stores a full snapshot of the content in the run's data directory
+  (`<runs_dir>/<run_id>/cache/<event_id>.content`). On resume, the snapshot is
+  returned without touching the original file — deterministic replay even if the
+  source changed. No size truncation.
 
 ```python
 content = await godel.read_text("data/input.json")
+content = await godel.read_text("data/big.jsonl", cache="file")
 ```
 
 ### `godel.write_text(path, content, *, encoding="utf-8") -> None`

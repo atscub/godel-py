@@ -27,7 +27,6 @@ fallback call.
 from __future__ import annotations
 
 import json
-import shlex
 
 from godel._run import run  # noqa: F401 — re-exported for backward-compat; canonical patch target is godel.agents._common.run
 from godel.agents._common import _BaseAgent
@@ -61,11 +60,7 @@ class _CopilotAgent(_BaseAgent):
         tools: list[str] | None,
         session_id: str | None,
         streaming: bool = False,
-    ) -> str:
-        # Copilot already emits JSONL (one object per line) regardless of the
-        # streaming flag; no extra CLI flag is required.  The streaming
-        # parameter is accepted for API compatibility with _BaseAgent but is
-        # otherwise unused here.
+    ) -> list[str]:
         cmd_parts = [
             "copilot",
             "--no-color",
@@ -75,12 +70,12 @@ class _CopilotAgent(_BaseAgent):
         if self._skip_permissions:
             cmd_parts.append("--allow-all-tools")
         if session_id:
-            cmd_parts.append(f"--resume={shlex.quote(session_id)}")
+            cmd_parts += ["--resume", session_id]
         if tools:
             for tool in tools:
-                cmd_parts += ["--allow-tool", shlex.quote(tool)]
-        cmd_parts += ["-p", shlex.quote(prompt)]
-        return " ".join(cmd_parts)
+                cmd_parts += ["--allow-tool", tool]
+        cmd_parts += ["-p", prompt]
+        return cmd_parts
 
     def _make_adapter(self):
         from godel.agents._adapters import CopilotAdapter

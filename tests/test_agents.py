@@ -11,6 +11,11 @@ from godel._run import CommandResult, CommandFailure
 from godel._decorators import workflow
 
 
+def _cmd_contains(cmd: list[str], substr: str) -> bool:
+    """Check if *substr* appears in any element of the argv list."""
+    return any(substr in arg for arg in cmd)
+
+
 class MyModel(BaseModel):
     value: int
 
@@ -84,7 +89,7 @@ def test_claude_code_model_alias():
             await agent("test")
 
     asyncio.run(wf())
-    assert "claude-opus-4-6" in cmds[0]
+    assert "claude-opus-4-6" in cmds[0]  # model id is a standalone arg
 
 
 def test_stub_factories_raise():
@@ -123,8 +128,10 @@ def test_claude_session_id_captured_and_resumed():
             await agent("two")
 
     asyncio.run(wf())
+    # cmd is now a list (argv), not a shell string
     assert "--resume" not in cmds[0]
-    assert "--resume sess-xyz" in cmds[1]
+    resume_idx = cmds[1].index("--resume")
+    assert cmds[1][resume_idx + 1] == "sess-xyz"
 
 
 def test_agent_serializes_concurrent_calls():
@@ -185,10 +192,8 @@ def test_claude_code_system_prompt_prepended_on_first_call():
 
     asyncio.run(wf())
     assert len(prompts_sent) == 1
-    # The raw command string contains the prompt passed to shlex.quote(), so
-    # we can check that the system_prompt and original prompt both appear.
-    assert "SYSTEM: be concise." in prompts_sent[0]
-    assert "do the task" in prompts_sent[0]
+    assert _cmd_contains(prompts_sent[0], "SYSTEM: be concise.")
+    assert _cmd_contains(prompts_sent[0], "do the task")
 
 
 def test_claude_code_system_prompt_not_repeated_on_second_call():
@@ -214,10 +219,8 @@ def test_claude_code_system_prompt_not_repeated_on_second_call():
 
     asyncio.run(wf())
     assert len(prompts_sent) == 2
-    # First call: preamble present
-    assert "PREAMBLE" in prompts_sent[0]
-    # Second call: preamble absent
-    assert "PREAMBLE" not in prompts_sent[1]
+    assert _cmd_contains(prompts_sent[0], "PREAMBLE")
+    assert not _cmd_contains(prompts_sent[1], "PREAMBLE")
 
 
 def test_claude_code_no_system_prompt_unaffected():
@@ -239,8 +242,7 @@ def test_claude_code_no_system_prompt_unaffected():
 
     asyncio.run(wf())
     assert len(prompts_sent) == 1
-    # Only the original prompt — no preamble inserted.
-    assert "plain prompt" in prompts_sent[0]
+    assert _cmd_contains(prompts_sent[0], "plain prompt")
 
 
 def test_claude_code_system_prompt_sent_flag_tracks_state():
@@ -349,9 +351,8 @@ def test_claude_code_system_prompt_preserved_across_first_call_failure():
 
     asyncio.run(wf())
     assert len(cmds) == 2
-    # Both the failed first call and the successful retry carry the briefing.
-    assert "RETRY-BRIEF" in cmds[0]
-    assert "RETRY-BRIEF" in cmds[1]
+    assert _cmd_contains(cmds[0], "RETRY-BRIEF")
+    assert _cmd_contains(cmds[1], "RETRY-BRIEF")
 
 
 # ---------------------------------------------------------------------------
@@ -377,14 +378,10 @@ def test_claude_code_whitespace_system_prompt_is_ignored():
 
     asyncio.run(wf())
     assert len(cmds) == 1
-    # The leading whitespace wrapper must NOT appear in the command; only the
-    # caller's real prompt text.
-    assert "real prompt" in cmds[0]
-    # Bare '\n\n' from the prepend formatter should not be present.
-    # (We can't easily check for "no whitespace" but we can check the
-    # shlex-quoted prompt does not start with whitespace.)
-    import shlex
-    assert shlex.quote("real prompt") in cmds[0]
+    assert _cmd_contains(cmds[0], "real prompt")
+    # The prompt arg should not start with whitespace
+    p_idx = cmds[0].index("-p")
+    assert not cmds[0][p_idx + 1].startswith("\n")
 
 
 def test_claude_code_empty_system_prompt_is_ignored():
@@ -428,12 +425,10 @@ def test_claude_code_system_prompt_with_schema_path():
 
     asyncio.run(wf())
     assert len(cmds) == 2
-    # First call: carries the briefing AND schema boilerplate.
-    assert "BRIEF-W3" in cmds[0]
-    assert "JSON" in cmds[0]  # schema boilerplate keyword
-    # Second call: briefing absent, schema boilerplate still there.
-    assert "BRIEF-W3" not in cmds[1]
-    assert "JSON" in cmds[1]
+    assert _cmd_contains(cmds[0], "BRIEF-W3")
+    assert _cmd_contains(cmds[0], "JSON")
+    assert not _cmd_contains(cmds[1], "BRIEF-W3")
+    assert _cmd_contains(cmds[1], "JSON")
 
 
 # ---------------------------------------------------------------------------
@@ -462,7 +457,7 @@ def test_claude_code_system_prompt_concurrent_calls_prepend_once():
 
     asyncio.run(wf())
     assert len(cmds) == 3
-    occurrences = sum("ONCE-ONLY-BRIEF" in c for c in cmds)
+    occurrences = sum(_cmd_contains(c, "ONCE-ONLY-BRIEF") for c in cmds)
     assert occurrences == 1, (
         f"System prompt must appear in exactly one of the three concurrent "
         f"commands; got {occurrences}. Commands: {cmds!r}"
@@ -505,11 +500,11 @@ def test_claude_code_system_prompt_not_prepended_when_session_already_set():
     asyncio.run(wf())
     assert len(cmds) == 1
     # The session already carries the briefing — must NOT be prepended again.
-    assert "RESUME-BRIEF" not in cmds[0], (
+    assert not _cmd_contains(cmds[0], "RESUME-BRIEF"), (
         f"system_prompt must not be re-prepended when session_id is already set; "
         f"got: {cmds[0]!r}"
     )
-    assert "post-resume call" in cmds[0]
+    assert _cmd_contains(cmds[0], "post-resume call")
 
 
 # ---------------------------------------------------------------------------
@@ -535,8 +530,8 @@ def test_claude_code_session_id_ctor_emits_resume_on_first_call():
 
     asyncio.run(wf())
     assert len(cmds) == 1
-    assert "--resume abc" in cmds[0], (
-        f"Expected '--resume abc' in command, got: {cmds[0]!r}"
+    assert "--resume" in cmds[0] and "abc" in cmds[0], (
+        f"Expected '--resume' and 'abc' in command, got: {cmds[0]!r}"
     )
 
 
@@ -586,11 +581,11 @@ def test_system_prompt_not_prepended_when_session_id_supplied_at_ctor():
 
     asyncio.run(wf())
     assert len(cmds) == 1
-    assert "SECRET-BRIEF" not in cmds[0], (
+    assert not _cmd_contains(cmds[0], "SECRET-BRIEF"), (
         f"system_prompt must not be prepended when session_id is supplied; "
         f"got: {cmds[0]!r}"
     )
-    assert "task prompt" in cmds[0]
+    assert _cmd_contains(cmds[0], "task prompt")
 
 
 def test_empty_string_session_id_normalised_to_none():
@@ -627,10 +622,9 @@ def test_copilot_session_id_ctor_emits_resume_on_first_call():
 
     asyncio.run(wf())
     assert len(cmds) == 1
-    assert "--resume=" in cmds[0], (
-        f"Expected '--resume=...' in copilot command, got: {cmds[0]!r}"
+    assert "--resume" in cmds[0] and "cp-sess" in cmds[0], (
+        f"Expected '--resume' and 'cp-sess' in copilot command, got: {cmds[0]!r}"
     )
-    assert "cp-sess" in cmds[0]
 
 
 def test_replay_overrides_ctor_session_id():
@@ -663,8 +657,7 @@ def test_replay_overrides_ctor_session_id():
 
 
 def test_session_id_shell_metachar_is_quoted():
-    """session_id with shell metacharacters must be shlex-quoted in the command."""
-    import shlex
+    """session_id with shell metacharacters is passed safely via argv list."""
     cmds: list[str] = []
 
     async def capture_run(cmd, **kwargs):
@@ -682,9 +675,9 @@ def test_session_id_shell_metachar_is_quoted():
 
     asyncio.run(wf())
     assert len(cmds) == 1
-    assert shlex.quote("abc; rm -rf /") in cmds[0], (
-        f"Expected quoted session_id in command, got: {cmds[0]!r}"
-    )
+    # With argv list, the raw value appears as a single element (no shell interpretation)
+    resume_idx = cmds[0].index("--resume")
+    assert cmds[0][resume_idx + 1] == "abc; rm -rf /"
 
 
 def test_session_id_excluded_from_request_hash():

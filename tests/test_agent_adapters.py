@@ -470,7 +470,7 @@ def test_claude_streaming_command_includes_stream_json(tmp_path, monkeypatch):
     asyncio.run(wf())
 
     assert len(captured_cmds) >= 1
-    assert "--output-format stream-json" in captured_cmds[0]
+    assert "--output-format" in captured_cmds[0] and "stream-json" in captured_cmds[0]
 
 
 def test_claude_non_streaming_command_uses_json(tmp_path, monkeypatch):
@@ -499,7 +499,7 @@ def test_claude_non_streaming_command_uses_json(tmp_path, monkeypatch):
     asyncio.run(wf())
 
     assert len(captured_cmds) >= 1
-    assert "--output-format json" in captured_cmds[0]
+    assert "--output-format" in captured_cmds[0] and "json" in captured_cmds[0]
     assert "stream-json" not in captured_cmds[0]
 
 

@@ -13,7 +13,6 @@ the first call.
 from __future__ import annotations
 
 import json
-import shlex
 
 from godel._run import run  # noqa: F401 — re-exported for backward-compat; canonical patch target is godel.agents._common.run
 from godel.agents._common import SchemaValidationFailure, _BaseAgent
@@ -41,29 +40,23 @@ class _ClaudeCodeAgent(_BaseAgent):
         tools: list[str] | None,
         session_id: str | None,
         streaming: bool = False,
-    ) -> str:
-        # Use stream-json when streaming is active so each event arrives as a
-        # separate JSONL line that the adapter can classify.  Fall back to the
-        # regular json format otherwise (preserves pre-change output shape).
+    ) -> list[str]:
         output_format = "stream-json" if streaming else "json"
         cmd_parts = ["claude", "--output-format", output_format]
         if streaming:
             cmd_parts.append("--verbose")
-            # Emit content_block_delta events so thinking + response tokens
-            # stream in real time instead of arriving as one batched
-            # `assistant` event at the end of the turn.
             cmd_parts.append("--include-partial-messages")
         if self._skip_permissions:
             cmd_parts.append("--dangerously-skip-permissions")
         if tools == []:
             cmd_parts += ["--tools", '""']
         if session_id:
-            cmd_parts += ["--resume", shlex.quote(session_id)]
-        cmd_parts += ["-p", shlex.quote(prompt), "--model", model_id]
+            cmd_parts += ["--resume", session_id]
+        cmd_parts += ["-p", prompt, "--model", model_id]
         if tools:
             for tool in tools:
-                cmd_parts += ["--allowedTools", shlex.quote(tool)]
-        return " ".join(cmd_parts)
+                cmd_parts += ["--allowedTools", tool]
+        return cmd_parts
 
     def _parse_output(self, stdout: str) -> tuple[str, str | None]:
         # Handle both regular json (single object) and stream-json (JSONL).

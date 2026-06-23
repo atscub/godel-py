@@ -56,7 +56,7 @@ per event. Events have the shape:
 ```
 
 Operations recorded include: `workflow.start`, `step.start`, `agent.call`, `run`
-(subprocess), `print`, `input`, `parallel.fork/join`, `retry.attempt`, `pause`,
+(subprocess), `print`, `input`, `FORK/JOIN`, `retry.attempt`, `pause`,
 `rewind`. Status is one of `STARTED`, `FINISHED`, `FAILED`, `INVALIDATED`, `SUSPENDED`.
 
 The audit log is the **source of truth** for replay, rewind, and repair. The in-memory
@@ -127,7 +127,7 @@ async def flaky():
 
 @step
 async def fan_out():
-    results = await parallel([task(i) for i in range(5)])
+    results = await parallel(*[task(i) for i in range(5)])
 ```
 
 Both are regular Python helpers that emit audit events and integrate with replay. Retries

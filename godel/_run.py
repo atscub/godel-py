@@ -176,7 +176,15 @@ class CommandFailure(WorkflowFail):
         return base
 
 
-async def run(cmd: str, *, cwd: str | None = None, timeout: float | None = None, idempotent: bool = False) -> CommandResult:
+def _cmd_display(cmd: str | list[str]) -> str:
+    """Human-readable display form of a command for error messages and logs."""
+    if isinstance(cmd, list):
+        import shlex
+        return " ".join(shlex.quote(a) for a in cmd)
+    return cmd
+
+
+async def run(cmd: str | list[str], *, cwd: str | None = None, timeout: float | None = None, idempotent: bool = False) -> CommandResult:
     from godel._context import _current_workflow
     from ulid import ULID
 
@@ -296,14 +304,24 @@ async def run(cmd: str, *, cwd: str | None = None, timeout: float | None = None,
             else:
                 _popen_kwargs["start_new_session"] = True
 
-            proc = await asyncio.create_subprocess_shell(
-                cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=cwd,
-                limit=_READUNTIL_LIMIT,
-                **_popen_kwargs,
-            )
+            if isinstance(cmd, list):
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=cwd,
+                    limit=_READUNTIL_LIMIT,
+                    **_popen_kwargs,
+                )
+            else:
+                proc = await asyncio.create_subprocess_shell(
+                    cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=cwd,
+                    limit=_READUNTIL_LIMIT,
+                    **_popen_kwargs,
+                )
             # Determine per-line callback for stdout.
             observer = _line_observer.get()
             streaming_ctx = ctx and ctx.stream_agents and ctx.transcript
@@ -360,7 +378,7 @@ async def run(cmd: str, *, cwd: str | None = None, timeout: float | None = None,
                 except Exception:
                     pass
                 step_path = tuple(ctx.step_stack) if ctx else ()
-                error_msg = f"command timed out after {timeout}s: {cmd}"
+                error_msg = f"command timed out after {timeout}s: {_cmd_display(cmd)}"
                 if event:
                     ctx.event_log.emit_failed(
                         event.event_id,
@@ -389,7 +407,8 @@ async def run(cmd: str, *, cwd: str | None = None, timeout: float | None = None,
             stderr = stderr_b.decode("utf-8", errors="replace")
             if proc.returncode != 0:
                 step_path = tuple(ctx.step_stack) if ctx else ()
-                error_msg = f"command failed (exit {proc.returncode}): {cmd}"
+                cmd_str = _cmd_display(cmd)
+                error_msg = f"command failed (exit {proc.returncode}): {cmd_str}"
                 if event:
                     ctx.event_log.emit_failed(
                         event.event_id,
@@ -398,7 +417,7 @@ async def run(cmd: str, *, cwd: str | None = None, timeout: float | None = None,
                         step_path=step_path,
                     )
                 raise CommandFailure(
-                    f"command failed (exit {proc.returncode}): {cmd}",
+                    f"command failed (exit {proc.returncode}): {cmd_str}",
                     stdout=stdout,
                     stderr=stderr,
                     returncode=proc.returncode,
