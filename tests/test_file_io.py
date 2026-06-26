@@ -218,7 +218,7 @@ class TestReadTextReplay:
             {
                 "op": "read_text",
                 "finish": True,
-                "request": {"path": resolved, "encoding": "utf-8"},
+                "request": {"path": resolved, "encoding": "utf-8", "replay": "reread"},
                 "response": {"content": "stale cached content"},
             },
         ])
@@ -236,7 +236,7 @@ class TestReadTextReplay:
             {
                 "op": "read_text",
                 "finish": True,
-                "request": {"path": resolved, "encoding": "utf-8"},
+                "request": {"path": resolved, "encoding": "utf-8", "replay": "file"},
                 "response": {"content": "replay only"},
             },
         ])
@@ -255,7 +255,7 @@ class TestReadTextReplay:
             {
                 "op": "read_text",
                 "finish": True,
-                "request": {"path": resolved, "encoding": "utf-8"},
+                "request": {"path": resolved, "encoding": "utf-8", "replay": "reread"},
                 "response": {"content": "via absolute"},
             },
         ])
@@ -278,7 +278,7 @@ class TestReadTextReplay:
             {
                 "op": "read_text",
                 "finish": True,
-                "request": {"path": resolved, "encoding": "utf-8"},
+                "request": {"path": resolved, "encoding": "utf-8", "replay": "file"},
                 "response": {"content": "old cached"},
             },
         ])
@@ -640,7 +640,7 @@ class TestReadTextReplayReread:
 
         loaded = _make_log_with_events(tmp_path / "logs", [{
             "op": "read_text", "finish": True,
-            "request": {"path": resolved, "encoding": "utf-8"},
+            "request": {"path": resolved, "encoding": "utf-8", "replay": "reread"},
             "response": {"content": content[:1000] + "\n... [truncated]", "bytes_read": len(content.encode())},
         }])
         _install_replay_ctx(loaded)
@@ -657,7 +657,7 @@ class TestReadTextReplayReread:
 
         loaded = _make_log_with_events(tmp_path / "logs", [{
             "op": "read_text", "finish": True,
-            "request": {"path": resolved, "encoding": "utf-8"},
+            "request": {"path": resolved, "encoding": "utf-8", "replay": "reread"},
             "response": {"content": "version 1", "bytes_read": 9},
         }])
         _install_replay_ctx(loaded)
@@ -705,7 +705,7 @@ class TestReadTextReplayFile:
 
         loaded = _make_log_with_events(tmp_path / "logs", [{
             "op": "read_text", "finish": True,
-            "request": {"path": resolved, "encoding": "utf-8"},
+            "request": {"path": resolved, "encoding": "utf-8", "replay": "file"},
             "response": {"content": "inline from old log", "bytes_read": 19},
         }])
         _install_replay_ctx(loaded)
@@ -759,7 +759,7 @@ class TestReadTextReplayEdgeCases:
 
         loaded = _make_log_with_events(tmp_path / "logs", [{
             "op": "read_text", "finish": True,
-            "request": {"path": resolved, "encoding": "utf-8"},
+            "request": {"path": resolved, "encoding": "utf-8", "replay": "reread"},
             "response": {"content": "old cached content", "bytes_read": 18},
         }])
         _install_replay_ctx(loaded)
@@ -776,7 +776,7 @@ class TestReadTextReplayEdgeCases:
         runs_dir = tmp_path / "runs"
         log = EventLog(run_id, runs_dir=str(runs_dir))
         started = log.emit_started(
-            op="read_text", step_path=(), request={"path": "/fake", "encoding": "utf-8"},
+            op="read_text", step_path=(), request={"path": "/fake", "encoding": "utf-8", "replay": "file"},
         )
         event_id = started.event_id
         log.emit_finished(event_id, response={

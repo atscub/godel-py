@@ -78,9 +78,14 @@ Stub — not yet implemented.
 
 ## Primitives
 
-### `run(cmd, *, cwd=None, env=None, timeout=None, stdin=None)`
+### `run(cmd, *, cwd=None, timeout=None, idempotent=False)`
 Audited async subprocess. Returns `CommandResult(returncode, stdout, stderr)`. Raises
 `CommandFailure` on non-zero exit. All arguments and output are recorded.
+
+- `cmd` — a shell string (passed to `create_subprocess_shell`) or an argv list
+  (passed to `create_subprocess_exec`). Agent factories use the list form to
+  avoid shell interpretation of prompts containing metacharacters.
+- `idempotent` — when `True`, a `STARTED`-only event on resume is safe to re-execute.
 
 ### `parallel(*awaitables) -> tuple`
 Awaits coroutines concurrently (variadic args). Emits one `FORK` and one

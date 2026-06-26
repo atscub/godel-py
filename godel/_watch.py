@@ -940,6 +940,9 @@ class _PlainLineLog:
             if len(stream_path) > 1:
                 return
             cmd = event.get("cmd", "")
+            if isinstance(cmd, list):
+                from godel._run import _cmd_display
+                cmd = _cmd_display(cmd)
             self._emit(
                 [pad + self._c("yellow", "$ ") + cmd.split("\n", 1)[0][:200]]
                 + ([cont + ln for ln in cmd.split("\n")[1:]] if "\n" in cmd else []),

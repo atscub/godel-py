@@ -471,7 +471,7 @@ async def read_text(path: str, *, encoding: str = "utf-8", replay: Literal["rere
         inv_seq, local_seq = ctx.next_op_position()
 
     resolved_path = _normalize_path(path)
-    req = {"path": resolved_path, "encoding": encoding}
+    req = {"path": resolved_path, "encoding": encoding, "replay": replay}
 
     # Replay guard
     if ctx and ctx.replay_walker:

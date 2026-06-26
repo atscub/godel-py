@@ -43,6 +43,9 @@ def _op_display(event: Event) -> str:
     """Format the op field for display."""
     if event.op == "run" and "cmd" in event.request:
         cmd = event.request["cmd"]
+        if isinstance(cmd, list):
+            from godel._run import _cmd_display
+            cmd = _cmd_display(cmd)
         if len(cmd) > 40:
             cmd = cmd[:37] + "..."
         return f'run "{cmd}"'
