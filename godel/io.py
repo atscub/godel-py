@@ -8,6 +8,7 @@ import tempfile
 import time as _time
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 from godel._context import _current_workflow, _privileged
 
@@ -432,7 +433,7 @@ def _cache_dir(event_log) -> Path:
     return d
 
 
-async def read_text(path: str, *, encoding: str = "utf-8", cache: str = "reread") -> str:
+async def read_text(path: str, *, encoding: str = "utf-8", cache: Literal["reread", "file"] = "reread") -> str:
     """Read a file and record the operation in the audit log.
 
     The resolved absolute path (``~`` expanded, ``..`` collapsed) is stored
@@ -482,12 +483,12 @@ async def read_text(path: str, *, encoding: str = "utf-8", cache: str = "reread"
             if match.hash_mismatch:
                 from godel._replay import handle_hash_mismatch, MismatchPolicy
                 policy = await handle_hash_mismatch(match, ctx.event_log)
-                if policy == MismatchPolicy.CONTINUE:
+                if policy == MismatchPolicy.CONTINUE and cache != "reread":
                     _warn(
                         f"read_text({resolved_path!r}) replay hash mismatch: "
                         f"returning cached content from original run "
                         f"(--on-mismatch=continue). Re-reading the file would "
-                        f"require --on-mismatch=invalidate."
+                        f"require --on-mismatch=invalidate or cache='reread'."
                     )
 
             if cache == "reread":
@@ -562,15 +563,19 @@ async def read_text(path: str, *, encoding: str = "utf-8", cache: str = "reread"
             "bytes_read": len(content.encode(encoding, errors="replace")),
         }
         if cache == "file":
-            # Write full content to a snapshot file; store only a reference in the log.
             content_ref = event.event_id
             cache_file = _cache_dir(ctx.event_log) / f"{content_ref}.content"
             priv_token = _privileged.set(True)
             try:
-                cache_file.write_text(content, encoding=encoding)
+                _write_text_atomic(str(cache_file), content, encoding)
+                response["content_ref"] = content_ref
+            except OSError:
+                # Snapshot write failed (disk full, permissions, etc.) —
+                # fall back to inline truncated content rather than losing
+                # the successful read result.
+                pass
             finally:
                 _privileged.reset(priv_token)
-            response["content_ref"] = content_ref
             response["content"] = _truncate_for_log(content)
         else:
             response["content"] = _truncate_for_log(content)
