@@ -5,7 +5,6 @@ point with no duplicate calls, cached values are stable, and print() is silent.
 """
 import asyncio
 import json
-from pathlib import Path
 from unittest.mock import patch
 
 from godel import workflow, step, parallel
@@ -64,7 +63,7 @@ def test_crash_and_resume(tmp_path, monkeypatch):
     assert log_path.exists()
 
     first_lines = log_path.read_text().strip().split("\n")
-    first_events = [json.loads(l) for l in first_lines]
+    first_events = [json.loads(ln) for ln in first_lines]
     ops = [e["op"] for e in first_events]
     assert "WORKFLOW_STARTED" in ops
     assert "step.enter" in ops
@@ -73,7 +72,6 @@ def test_crash_and_resume(tmp_path, monkeypatch):
     assert ("step_a", "executed") in execution_log
 
     # --- Resume: should skip step_a's run(), re-execute step_b ---
-    nonlocal_crash = {"crash": False}
     execution_log.clear()
 
     event_log = EventLog.load(run_id, runs_dir=str(runs_dir))
@@ -254,7 +252,7 @@ def test_resume_with_parallel_branches(tmp_path, monkeypatch):
             call_count += 1
             return det.now()
 
-        results = await parallel(branch_a(), branch_b())
+        await parallel(branch_a(), branch_b())
 
         @step
         async def final():
@@ -333,7 +331,7 @@ def test_resume_does_not_duplicate_events(tmp_path, monkeypatch):
 
     log_path = tmp_path / "runs" / f"{run_id}.jsonl"
     original_lines = log_path.read_text().strip().split("\n")
-    original_count = len(original_lines)
+    len(original_lines)
 
     event_log = EventLog.load(run_id, runs_dir=str(tmp_path / "runs"))
     walker = ReplayWalker(event_log)

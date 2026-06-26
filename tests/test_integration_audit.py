@@ -7,7 +7,6 @@ import asyncio
 import json
 import io
 import sys
-from pathlib import Path
 
 from godel import workflow, step, parallel, run
 from godel.io import print as godel_print

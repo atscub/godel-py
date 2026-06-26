@@ -1,7 +1,6 @@
 """Tests for apply_rewind() — graph-cut + cascade invalidation."""
 from __future__ import annotations
 
-import json
 import pytest
 
 from godel._event_log import EventLog
@@ -125,14 +124,14 @@ def test_rewind_is_append_only(tmp_path):
     log.close()
 
     jsonl_path = tmp_path / "test-append.jsonl"
-    lines_before = len([l for l in jsonl_path.read_text().splitlines() if l.strip()])
+    lines_before = len([ln for ln in jsonl_path.read_text().splitlines() if ln.strip()])
 
     # Reopen and apply rewind
     log2 = EventLog.load("test-append", runs_dir=str(tmp_path))
     apply_rewind(log2, [b.event_id], reason="append-only check")
     log2.close()
 
-    lines_after = len([l for l in jsonl_path.read_text().splitlines() if l.strip()])
+    lines_after = len([ln for ln in jsonl_path.read_text().splitlines() if ln.strip()])
     assert lines_after > lines_before, (
         f"Expected more lines after rewind, got {lines_after} vs {lines_before} before"
     )

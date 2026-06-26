@@ -44,7 +44,8 @@ def test_workflow_capture_stdout():
 
 
 def test_workflow_redact_stored():
-    redactor = lambda s: s.replace("secret", "***")
+    def redactor(s):
+        return s.replace("secret", "***")
 
     @workflow(redact=[redactor])
     async def wf():
@@ -54,8 +55,10 @@ def test_workflow_redact_stored():
 
 
 def test_workflow_redact_multiple():
-    r1 = lambda s: s
-    r2 = lambda s: s
+    def r1(s):
+        return s
+    def r2(s):
+        return s
 
     @workflow(redact=[r1, r2])
     async def wf():
@@ -73,7 +76,8 @@ def test_workflow_redact_empty_list():
 
 
 def test_workflow_all_options():
-    r = lambda s: s
+    def r(s):
+        return s
 
     @workflow(capture_stdout=True, redact=[r])
     async def wf():

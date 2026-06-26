@@ -1,7 +1,6 @@
 """Tests for the structured exception hierarchy (M5)."""
 from __future__ import annotations
 
-import pytest
 
 from godel._exceptions import (
     GodelError,

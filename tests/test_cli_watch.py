@@ -20,10 +20,8 @@ from __future__ import annotations
 
 import json
 import os
-import signal
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -188,11 +186,9 @@ def test_run_watch_run_completes_after_watcher_killed(tmp_path):
     # Find child processes of proc and kill any watcher subprocess
     parent = psutil.Process(proc.pid)
     children = parent.children(recursive=True)
-    killed_any = False
     for child in children:
         try:
             child.kill()
-            killed_any = True
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
 
@@ -677,8 +673,6 @@ def test_watch_cmd_prefix_resolution_ambiguous_mixed(tmp_path):
 
 def test_producer_error_surfaces_banner(tmp_path, monkeypatch):
     """A TranscriptTailError during follow surfaces an error banner on stderr."""
-    import queue as _queue
-    import threading as _threading
     from unittest.mock import patch
 
     from godel import _watch as watch_mod

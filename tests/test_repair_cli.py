@@ -4,11 +4,9 @@ from __future__ import annotations
 import json
 import os
 import sys
-import textwrap
 import types
 from pathlib import Path
 
-import pytest
 from click.testing import CliRunner
 
 PROJECT_ROOT = str(Path(__file__).parent.parent)

@@ -12,7 +12,6 @@ import asyncio
 import io
 import sys
 
-import pytest
 
 from godel import workflow, step
 from godel._context import _current_workflow

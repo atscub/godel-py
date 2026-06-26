@@ -1,12 +1,11 @@
 """Tests for godel resume CLI command and workflow decorator resume path."""
 import asyncio
-import json
 import os
 import subprocess
 import sys
 from pathlib import Path
 
-from godel._context import _pending_replay, _current_workflow
+from godel._context import _pending_replay
 from godel._decorators import workflow
 from godel._event_log import EventLog
 from godel._replay import ReplayWalker
@@ -108,7 +107,7 @@ def test_workflow_decorator_resume_path(tmp_path, monkeypatch):
     # Replay should NOT append duplicate events to the log
     # (deduplicate by event_id — parent re-persistence for children_ids
     # produces multiple snapshots of the same event_id, which is expected)
-    log_path = tmp_path / "runs" / f"{original_run_id}.jsonl"
+    tmp_path / "runs" / f"{original_run_id}.jsonl"
     reloaded = EventLog.load(original_run_id, runs_dir=str(tmp_path / "runs"))
     workflow_starts = [e for e in reloaded.all_events() if e.op == "WORKFLOW_STARTED"]
     assert len(workflow_starts) == 1  # no duplicates from replay

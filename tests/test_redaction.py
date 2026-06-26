@@ -20,7 +20,6 @@ wiring to confirm end-to-end behavior.
 from __future__ import annotations
 
 import json
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -59,7 +58,8 @@ def test_empty_registry_has_no_redactors():
 
 def test_registry_is_immutable_post_init():
     """Registered redactors cannot be mutated after construction (NIT-2)."""
-    r = lambda s: s
+    def r(s):
+        return s
     registry = RedactorRegistry([r])
     # Tuple has no append / mutating list methods.
     assert isinstance(registry._redactors, tuple)
@@ -69,8 +69,10 @@ def test_registry_is_immutable_post_init():
 
 def test_registry_isolated_from_input_list():
     """Mutating the caller's list after construction does not affect the registry."""
-    r1 = lambda s: s + "_1"
-    r2 = lambda s: s + "_2"
+    def r1(s):
+        return s + "_1"
+    def r2(s):
+        return s + "_2"
     caller_list = [r1]
     registry = RedactorRegistry(caller_list)
     caller_list.append(r2)  # mutate AFTER construction
@@ -492,7 +494,8 @@ def test_redactor_name_fallback_for_nameless_callable():
 
 def test_passthrough_redactors_write_all_events(tmp_path):
     """Passthrough redactors (return payload unchanged) write all events."""
-    identity = lambda p: p
+    def identity(p):
+        return p
 
     with TranscriptWriter(tmp_path / "run", run_id="test", redactors=[identity]) as tw:
         tw.write_event("e1")

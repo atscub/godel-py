@@ -112,9 +112,9 @@ def test_error_metadata_in_jsonl(tmp_path, monkeypatch):
 
     run_id = wf._last_run_id
     jsonl = (tmp_path / "runs" / f"{run_id}.jsonl").read_text()
-    lines = [json.loads(l) for l in jsonl.strip().split("\n")]
+    lines = [json.loads(ln) for ln in jsonl.strip().split("\n")]
 
-    failed_lines = [l for l in lines if l.get("status") == "FAILED" and l.get("op") == "step.enter"]
+    failed_lines = [ln for ln in lines if ln.get("status") == "FAILED" and ln.get("op") == "step.enter"]
     assert len(failed_lines) >= 1
 
     resp = failed_lines[-1]["response"]  # last snapshot wins
@@ -203,8 +203,8 @@ def test_failed_step_non_ascii_error(tmp_path, monkeypatch):
     run_id = wf._last_run_id
     # Read from JSONL to verify round-trip survives JSON encode/decode
     jsonl = (tmp_path / "runs" / f"{run_id}.jsonl").read_text(encoding="utf-8")
-    lines = [json.loads(l) for l in jsonl.strip().split("\n")]
-    failed_lines = [l for l in lines if l.get("status") == "FAILED" and l.get("op") == "step.enter"]
+    lines = [json.loads(ln) for ln in jsonl.strip().split("\n")]
+    failed_lines = [ln for ln in lines if ln.get("status") == "FAILED" and ln.get("op") == "step.enter"]
     assert len(failed_lines) >= 1
     resp = failed_lines[-1]["response"]
     assert "日本語エラー" in resp["error"]

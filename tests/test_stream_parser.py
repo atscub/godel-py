@@ -12,10 +12,8 @@ from __future__ import annotations
 
 import io
 import json
-import os
 import pathlib
 import random
-import string
 
 import pytest
 
@@ -57,7 +55,7 @@ def _results_equal(a: list, b: list) -> bool:
     if len(a) != len(b):
         return False
     for x, y in zip(a, b):
-        if type(x) != type(y):
+        if type(x) is not type(y):
             return False
         if isinstance(x, Parsed):
             if x.data != y.data:
@@ -87,7 +85,7 @@ def test_single_valid_object():
 
 def test_multiple_valid_objects():
     lines = [{"id": i, "v": "x" * 10} for i in range(5)]
-    data = "\n".join(json.dumps(l) for l in lines).encode() + b"\n"
+    data = "\n".join(json.dumps(ln) for ln in lines).encode() + b"\n"
     results = parse_bytes(data)
     assert len(results) == 5
     for r, line in zip(results, lines):
@@ -400,7 +398,7 @@ def test_oversized_chunk_boundary_consistency(chunk_size):
 def test_chunk_boundary_consistency(chunk_size):
     """Same event sequence regardless of chunk size."""
     lines = [{"id": i, "data": "hello world " * 5} for i in range(20)]
-    data = "\n".join(json.dumps(l) for l in lines).encode() + b"\n"
+    data = "\n".join(json.dumps(ln) for ln in lines).encode() + b"\n"
 
     full_results = parse_bytes(data)
     chunked_results = parse_bytes_chunked(data, chunk_size)

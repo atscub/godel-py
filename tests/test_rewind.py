@@ -29,7 +29,6 @@ from __future__ import annotations
 import asyncio
 import json
 
-import pytest
 
 from godel import workflow, step, det
 from godel._context import _current_workflow

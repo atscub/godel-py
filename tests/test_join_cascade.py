@@ -1,8 +1,7 @@
 """Tests for JOIN cascade to SUSPENDED on rewind."""
 from __future__ import annotations
 
-import pytest
-from godel._events import Event, EventStatus
+from godel._events import EventStatus
 from godel._event_log import EventLog
 from godel._rewind import apply_rewind
 

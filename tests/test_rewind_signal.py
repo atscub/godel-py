@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import pytest
 
-from godel import workflow, step, rewind
+from godel import workflow, rewind
 from godel._exceptions import RewindSignal, PauseSignal
 from godel._context import _current_workflow, WorkflowContext
 from godel._decorators import retry, WorkflowFail
@@ -114,7 +114,6 @@ def test_rewind_records_metadata_event(tmp_path, monkeypatch):
 
     # After the run, load the log and inspect REWIND events
     import json
-    from pathlib import Path
     from godel._events import EventStatus, Event
 
     run_log_dir = tmp_path / "runs"

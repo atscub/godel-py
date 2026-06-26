@@ -154,7 +154,7 @@ async def print(*values: object, sep: str = " ", end: str = "\n") -> None:
 
     # Replay guard
     if ctx and ctx.replay_walker:
-        from godel._events import Event, EventStatus
+        from godel._events import Event
         req = {"text": text}
         req_hash = Event.compute_request_hash(req)
         match = ctx.replay_walker.try_match(
@@ -675,7 +675,7 @@ async def write_text(path: str, content: str, *, encoding: str = "utf-8") -> Non
             # (reads are idempotent); writes are not.
             from godel._exceptions import UnsafeResumeError
             raise UnsafeResumeError(
-                f"write_text() has STARTED-only state (write may be partial)",
+                "write_text() has STARTED-only state (write may be partial)",
                 cmd=f"write_text({resolved_path!r})",
                 step_path=tuple(ctx.step_stack),
             )

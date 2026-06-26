@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 
 from godel._events import Event, EventStatus
@@ -304,7 +304,6 @@ async def check_source_edit(
         return
 
     if policy == SourceEditPolicy.WARN:
-        import sys
         try:
             import click
             msg = (

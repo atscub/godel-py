@@ -15,15 +15,14 @@ import asyncio
 import json
 import os
 from pathlib import Path
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import patch
 
-import pytest
 
 from godel._context import _line_observer
 from godel._run import CommandResult
 from godel._transcript import TranscriptWriter
 from godel.agents._adapters import ClaudeAdapter, CopilotAdapter
-from godel.agents._common import AdapterStreamSink, stream_into_transcript
+from godel.agents._common import AdapterStreamSink
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +142,7 @@ class TestAdapterStreamSink:
         sink.feed(partial)
 
         # No events yet (no newline → buffered).
-        tw_not_closed = _tw(tmp_path)  # we need the tw to stay open
+        _tw(tmp_path)  # we need the tw to stay open
         # Actually just close the sink and check that the partial was emitted.
         sink.close()
         events = _read_events(tw, tmp_path / "run")

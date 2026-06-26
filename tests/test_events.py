@@ -1,5 +1,4 @@
 """Tests for Event dataclass and EventStatus enum."""
-import json
 from godel._events import Event, EventStatus
 
 

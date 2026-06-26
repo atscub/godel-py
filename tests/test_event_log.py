@@ -1,5 +1,4 @@
 """Tests for EventLog class."""
-import json
 from godel._event_log import EventLog
 from godel._events import EventStatus
 
@@ -118,8 +117,8 @@ def test_get_event(tmp_path):
 
 def test_all_events_order(tmp_path):
     log = EventLog("test-run", runs_dir=str(tmp_path))
-    e1 = log.emit_started(op="first", step_path=(), request={})
-    e2 = log.emit_started(op="second", step_path=(), request={})
+    log.emit_started(op="first", step_path=(), request={})
+    log.emit_started(op="second", step_path=(), request={})
     events = log.all_events()
     assert events[0].op == "first"
     assert events[1].op == "second"

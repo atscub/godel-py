@@ -108,7 +108,6 @@ def test_write_pause_request_cleans_up_tmp_on_failure(tmp_path, monkeypatch):
     """write_pause_request cleans up the temp file if os.replace fails."""
     import os as _os
 
-    original_replace = _os.replace
 
     def broken_replace(src, dst):
         raise OSError("simulated replace failure")

@@ -1,10 +1,8 @@
 """Tests for workflow event emission."""
 import asyncio
-from pathlib import Path
 
-from godel._decorators import workflow, step
-from godel._context import get_event_log, _current_workflow
-from godel._events import EventStatus
+from godel._decorators import workflow
+from godel._context import get_event_log
 import pytest
 
 
@@ -42,7 +40,7 @@ def test_workflow_finished_on_success(tmp_path, monkeypatch):
     import json
     runs = list((tmp_path / "runs").glob("*.jsonl"))
     lines = runs[0].read_text().strip().split("\n")
-    events = [json.loads(l) for l in lines]
+    events = [json.loads(ln) for ln in lines]
     # Find the FINISHED snapshot of WORKFLOW_STARTED
     wf_events = [e for e in events if e["op"] == "WORKFLOW_STARTED"]
     assert any(e["status"] == "FINISHED" for e in wf_events)
@@ -55,7 +53,7 @@ def test_workflow_failed_on_exception(tmp_path, monkeypatch):
     import json
     runs = list((tmp_path / "runs").glob("*.jsonl"))
     lines = runs[0].read_text().strip().split("\n")
-    events = [json.loads(l) for l in lines]
+    events = [json.loads(ln) for ln in lines]
     wf_events = [e for e in events if e["op"] == "WORKFLOW_STARTED"]
     assert any(e["status"] == "FAILED" for e in wf_events)
 

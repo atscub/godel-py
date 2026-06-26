@@ -6,7 +6,6 @@ import pytest
 
 from godel._context import WorkflowContext, _current_workflow
 from godel._event_log import EventLog
-from godel._events import Event, EventStatus
 from godel._replay import ReplayWalker
 
 

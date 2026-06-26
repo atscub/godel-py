@@ -7,7 +7,6 @@ import pytest
 from godel import workflow, step
 from godel._context import _current_workflow
 from godel._rewind import rewind
-from godel._exceptions import RewindSignal
 
 
 def test_basic_rewind(tmp_path, monkeypatch):

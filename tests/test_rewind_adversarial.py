@@ -7,7 +7,6 @@ bodies — all contexts where the signal used to be mishandled.
 from __future__ import annotations
 
 import asyncio
-import pytest
 
 from godel import workflow, step, parallel
 from godel._context import _current_workflow
@@ -63,8 +62,6 @@ def test_rewind_inside_parallel_does_not_corrupt_audit_log(tmp_path, monkeypatch
 
     # Verify no FAILED FORK/JOIN events remain in the log
     import json
-    from pathlib import Path
-    from godel._events import EventStatus
 
     run_log_dir = tmp_path / "runs"
     jsonl_files = list(run_log_dir.glob("*.jsonl"))

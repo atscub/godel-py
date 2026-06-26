@@ -6,7 +6,6 @@ import json
 import pytest
 
 from godel._event_log import EventLog
-from godel._events import EventStatus
 from godel.intervention import InterventionContext, build_intervention_context
 
 

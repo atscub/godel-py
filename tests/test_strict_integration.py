@@ -125,7 +125,7 @@ def test_det_events_recorded_in_strict_mode(tmp_path):
     jsonl_files = list(runs_dir.glob("*.jsonl"))
     assert len(jsonl_files) == 1, f"Expected 1 JSONL file, got {len(jsonl_files)}"
     lines = jsonl_files[0].read_text().strip().split("\n")
-    events = [json.loads(l) for l in lines]
+    events = [json.loads(ln) for ln in lines]
     det_ops = [e["op"] for e in events if e["op"].startswith("det.")]
     assert "det.now" in det_ops
     assert "det.random" in det_ops

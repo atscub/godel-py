@@ -28,7 +28,7 @@ def test_det_now_records_event(tmp_path, monkeypatch):
     asyncio.run(wf())
     runs = list((tmp_path / "runs").glob("*.jsonl"))
     lines = runs[0].read_text().strip().split("\n")
-    events = [json.loads(l) for l in lines]
+    events = [json.loads(ln) for ln in lines]
     det_events = [e for e in events if e["op"] == "det.now"]
     assert len(det_events) == 2  # STARTED + FINISHED
     assert "value" in det_events[1]["response"]
@@ -56,7 +56,7 @@ def test_det_random_records_event(tmp_path, monkeypatch):
     asyncio.run(wf())
     runs = list((tmp_path / "runs").glob("*.jsonl"))
     lines = runs[0].read_text().strip().split("\n")
-    events = [json.loads(l) for l in lines]
+    events = [json.loads(ln) for ln in lines]
     det_events = [e for e in events if e["op"] == "det.random"]
     assert len(det_events) == 2
 
@@ -83,7 +83,7 @@ def test_det_uuid4_records_event(tmp_path, monkeypatch):
     asyncio.run(wf())
     runs = list((tmp_path / "runs").glob("*.jsonl"))
     lines = runs[0].read_text().strip().split("\n")
-    events = [json.loads(l) for l in lines]
+    events = [json.loads(ln) for ln in lines]
     det_events = [e for e in events if e["op"] == "det.uuid4"]
     assert len(det_events) == 2
 
@@ -115,7 +115,7 @@ def test_det_sleep_callable_from_workflow(tmp_path, monkeypatch):
     runs = list((tmp_path / "runs").glob("*.jsonl"))
     assert runs, "expected at least one run log"
     lines = runs[0].read_text().strip().split("\n")
-    events = [json.loads(l) for l in lines]
+    events = [json.loads(ln) for ln in lines]
     sleep_events = [e for e in events if e["op"] == "det.sleep"]
     statuses = [e["status"] for e in sleep_events]
     assert "FINISHED" in statuses, f"expected FINISHED det.sleep event, got: {statuses}"

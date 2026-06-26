@@ -86,8 +86,8 @@ class TestUnsafeResumeError:
         assert lines[0] == "UnsafeResumeError: non-idempotent run"
         assert "  Command: deploy prod" in lines
         assert "  Step: ci/deploy" in lines
-        assert any("idempotent=True" in l for l in lines)
-        assert any("godel rewind" in l for l in lines)
+        assert any("idempotent=True" in ln for ln in lines)
+        assert any("godel rewind" in ln for ln in lines)
 
     def test_catchable_as_resume_error(self):
         with pytest.raises(ResumeError):

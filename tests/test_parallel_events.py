@@ -24,7 +24,7 @@ def test_parallel_emits_fork_join(tmp_path, monkeypatch):
 
     runs = list((tmp_path / "runs").glob("*.jsonl"))
     lines = runs[0].read_text().strip().split("\n")
-    events = [json.loads(l) for l in lines]
+    events = [json.loads(ln) for ln in lines]
     ops = [e["op"] for e in events]
     assert "FORK" in ops
     assert "JOIN" in ops
@@ -43,7 +43,7 @@ def test_fork_has_branches_count(tmp_path, monkeypatch):
     asyncio.run(wf())
     runs = list((tmp_path / "runs").glob("*.jsonl"))
     lines = runs[0].read_text().strip().split("\n")
-    events = [json.loads(l) for l in lines]
+    events = [json.loads(ln) for ln in lines]
     fork_starts = [e for e in events if e["op"] == "FORK" and e["status"] == "STARTED"]
     assert fork_starts[0]["request"]["branches"] == 3
 
@@ -60,7 +60,7 @@ def test_join_references_fork(tmp_path, monkeypatch):
     asyncio.run(wf())
     runs = list((tmp_path / "runs").glob("*.jsonl"))
     lines = runs[0].read_text().strip().split("\n")
-    events = [json.loads(l) for l in lines]
+    events = [json.loads(ln) for ln in lines]
     fork_starts = [e for e in events if e["op"] == "FORK" and e["status"] == "STARTED"]
     join_starts = [e for e in events if e["op"] == "JOIN" and e["status"] == "STARTED"]
     assert join_starts[0]["request"]["fork_id"] == fork_starts[0]["event_id"]
@@ -82,7 +82,7 @@ def test_parallel_with_steps_emits_all(tmp_path, monkeypatch):
     asyncio.run(wf())
     runs = list((tmp_path / "runs").glob("*.jsonl"))
     lines = runs[0].read_text().strip().split("\n")
-    events = [json.loads(l) for l in lines]
+    events = [json.loads(ln) for ln in lines]
     ops = [e["op"] for e in events if e["status"] == "STARTED"]
     assert "FORK" in ops
     assert "JOIN" in ops
@@ -128,8 +128,8 @@ def test_parallel_mixed_pause_and_exception_preserves_failure(tmp_path, monkeypa
     # Audit log must contain a FAILED event for the ValueError branch
     runs = list((tmp_path / "runs").glob("*.jsonl"))
     assert runs, "expected at least one run log"
-    lines = [l for l in runs[0].read_text().strip().split("\n") if l]
-    events = [json.loads(l) for l in lines]
+    lines = [ln for ln in runs[0].read_text().strip().split("\n") if ln]
+    events = [json.loads(ln) for ln in lines]
     failed_events = [e for e in events if e.get("status") == "FAILED"]
     assert failed_events, (
         "audit log must contain at least one FAILED event when a real exception "
@@ -177,8 +177,8 @@ def test_pause_signal_in_nested_step_does_not_mark_outer_step_failed(tmp_path, m
 
     runs = list((tmp_path / "runs").glob("*.jsonl"))
     assert runs
-    lines = [l for l in runs[0].read_text().strip().split("\n") if l]
-    events = [json.loads(l) for l in lines]
+    lines = [ln for ln in runs[0].read_text().strip().split("\n") if ln]
+    events = [json.loads(ln) for ln in lines]
 
     # Find step.enter events for "outer"
     outer_events = [

@@ -1,6 +1,5 @@
 """Tests for WorkflowContext.last_step_event_id helper."""
 import asyncio
-import pytest
 from godel._decorators import workflow, step, parallel
 from godel._context import _current_workflow, _pending_replay
 from godel._event_log import EventLog

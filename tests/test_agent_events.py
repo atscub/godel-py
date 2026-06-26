@@ -22,11 +22,11 @@ def test_agent_call_emits_events(tmp_path, monkeypatch):
             mock_run.return_value = _mock_run_result()
             return await agent("Write hello world")
 
-    result = asyncio.run(wf())
+    asyncio.run(wf())
 
     runs = list((tmp_path / "runs").glob("*.jsonl"))
     lines = runs[0].read_text().strip().split("\n")
-    events = [json.loads(l) for l in lines]
+    events = [json.loads(ln) for ln in lines]
     agent_events = [e for e in events if e["op"] == "agent.call"]
     assert len(agent_events) >= 1
     started = [e for e in agent_events if e["status"] == "STARTED"]
@@ -49,7 +49,7 @@ def test_agent_call_emits_finished(tmp_path, monkeypatch):
 
     runs = list((tmp_path / "runs").glob("*.jsonl"))
     lines = runs[0].read_text().strip().split("\n")
-    events = [json.loads(l) for l in lines]
+    events = [json.loads(ln) for ln in lines]
     agent_events = [e for e in events if e["op"] == "agent.call"]
     finished = [e for e in agent_events if e["status"] == "FINISHED"]
     assert len(finished) == 1
@@ -71,7 +71,7 @@ def test_agent_call_emits_failed(tmp_path, monkeypatch):
 
     runs = list((tmp_path / "runs").glob("*.jsonl"))
     lines = runs[0].read_text().strip().split("\n")
-    events = [json.loads(l) for l in lines]
+    events = [json.loads(ln) for ln in lines]
     agent_events = [e for e in events if e["op"] == "agent.call"]
     failed = [e for e in agent_events if e["status"] == "FAILED"]
     assert len(failed) == 1
@@ -88,7 +88,7 @@ def test_agent_call_cancelled_emits_failed(tmp_path, monkeypatch):
         from godel.agents._claude import claude_code
 
         ready = asyncio.Event()
-        cancel_done = asyncio.Event()
+        asyncio.Event()
 
         @workflow
         async def wf():
@@ -116,7 +116,7 @@ def test_agent_call_cancelled_emits_failed(tmp_path, monkeypatch):
     runs = list((tmp_path / "runs").glob("*.jsonl"))
     assert runs, "expected at least one run log file"
     lines = runs[0].read_text().strip().split("\n")
-    events = [json.loads(l) for l in lines]
+    events = [json.loads(ln) for ln in lines]
     agent_events = [e for e in events if e["op"] == "agent.call"]
 
     # There must be a FAILED event for the cancelled call.
@@ -153,7 +153,6 @@ def test_agent_call_emit_failed_logging_error_does_not_mask_original(
 
     from godel._event_log import EventLog
 
-    original_emit_failed = EventLog.emit_failed
 
     def broken_emit_failed(self, *args, **kwargs):
         raise RuntimeError("disk full — simulated log write failure")
@@ -208,10 +207,9 @@ def test_agent_call_generatorexit_does_not_emit_failed(tmp_path, monkeypatch):
         # us a clean suspension point inside the __call__ try/except where we
         # can inject GeneratorExit via coro.close().
         async def _hanging_execute(prompt, *, schema=None):
-            fut = asyncio.get_event_loop().create_future() if False else None
+            asyncio.get_event_loop().create_future() if False else None
             # Use a bare await that yields forever without needing a loop.
             while True:
-                yield_value = None
                 # `await` on an object with __await__ that yields once lets
                 # us suspend the coroutine for manual driving.
                 await _suspend()
@@ -246,7 +244,7 @@ def test_agent_call_generatorexit_does_not_emit_failed(tmp_path, monkeypatch):
     runs = list((tmp_path / "runs").glob("*.jsonl"))
     assert runs, "expected at least one run log file"
     lines = runs[0].read_text().strip().split("\n")
-    events = [json.loads(l) for l in lines]
+    events = [json.loads(ln) for ln in lines]
     agent_events = [e for e in events if e["op"] == "agent.call"]
 
     # STARTED must have been emitted (the call did begin).

@@ -46,6 +46,19 @@ packages = ["godel"]
 pythonpath = ["."]
 testpaths = ["tests"]
 
+[tool.ruff.lint]
+select = ["E", "F"]
+ignore = [
+    "E501",  # line length managed by formatter, not linter
+    "F821",  # false positives on forward references in string annotations
+]
+
+[tool.ruff.lint.per-file-ignores]
+"godel/__init__.py" = ["E402"]  # imports after __version__ block
+"godel/_replay.py" = ["E402"]   # conditional imports for circular-dep avoidance
+"godel/_tail.py" = ["E402"]     # deferred import for optional dep
+"tests/test_run_signal.py" = ["E402"]  # import after signal setup
+
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
 version_variables = ["godel/__init__.py:__version__"]

@@ -12,7 +12,7 @@ def _load_events(tmp_path):
     """Load all events from the first JSONL in runs/."""
     runs = list((tmp_path / "runs").glob("*.jsonl"))
     lines = runs[0].read_text().strip().split("\n")
-    return [json.loads(l) for l in lines]
+    return [json.loads(ln) for ln in lines]
 
 
 def test_all_branches_cached_returns_cached(tmp_path, monkeypatch):
@@ -91,7 +91,7 @@ def test_one_branch_no_cache_reexecutes(tmp_path, monkeypatch):
 
     # Load events and remove branch_b's det.now from the log
     event_log = EventLog.load(first_run_id, runs_dir=str(tmp_path / "runs"))
-    events = event_log.all_events()
+    event_log.all_events()
 
     # Find the det.now event in branch_b and remove it from the index
     walker = ReplayWalker(event_log)

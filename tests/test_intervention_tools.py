@@ -17,13 +17,10 @@ from godel.intervention import (
     ResumeArgs,
     InputArgs,
     GiveUpArgs,
-    ReadFileArgs,
     EditFileArgs,
 )
 from godel.intervention._context import (
     InterventionContext,
-    FailureInfo,
-    build_intervention_context,
 )
 
 
@@ -224,7 +221,7 @@ def test_input_injects_value(tmp_path):
     """input() finds the dangling STARTED input event and injects value."""
     run_id = "test-input-inject-001"
     log = EventLog(run_id, runs_dir=str(tmp_path))
-    wf = log.emit_started(
+    log.emit_started(
         op="WORKFLOW_STARTED",
         step_path=(),
         request={"function": "wf", "args": "()", "kwargs": "{}", "source_file": ""},

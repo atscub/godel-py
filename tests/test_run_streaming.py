@@ -11,14 +11,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-import tempfile
 from pathlib import Path
 
-import pytest
 
-from godel._context import _current_workflow, _line_observer
-from godel._run import run, CommandResult
-from godel._transcript import TranscriptWriter
+from godel._context import _line_observer
+from godel._run import run
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +135,6 @@ def test_observer_suppresses_stdout_transcript_events(tmp_path):
     from godel._decorators import workflow
 
     captured_by_observer: list[bytes] = []
-    transcript_stdout_events: list[dict] = []
 
     @workflow
     async def wf():
@@ -226,7 +222,7 @@ def test_large_line_commandresult_byte_identical():
         # 110 KiB line; printf avoids Python's print() adding extra buffering.
         # We build the string in Python and compare.
         expected = "A" * 112640 + "\n"  # 110 KiB + newline
-        script = f"python3 -c \"import sys; sys.stdout.write('A' * 112640 + '\\\\n')\""
+        script = "python3 -c \"import sys; sys.stdout.write('A' * 112640 + '\\\\n')\""
         result = await run(script)
         return result, expected
 

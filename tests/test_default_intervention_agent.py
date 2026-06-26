@@ -12,10 +12,8 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 
 from godel._event_log import EventLog
-from godel._events import EventStatus
 from godel.intervention._context import InterventionContext, FailureInfo
 from godel.intervention._tools import InterventionToolset
 from godel.intervention.default_agent import _ToolCall, default_intervention_agent
@@ -256,7 +254,7 @@ def test_agent_produces_own_audit_log(tmp_path):
     ]
 
     # Override the default runs_dir so the intervention audit log lands in tmp_path
-    original_workflow = default_intervention_agent.__wrapped__ if hasattr(default_intervention_agent, "__wrapped__") else None
+    default_intervention_agent.__wrapped__ if hasattr(default_intervention_agent, "__wrapped__") else None
 
     with patch(
         "godel.intervention.default_agent.claude_code",
@@ -271,7 +269,7 @@ def test_agent_produces_own_audit_log(tmp_path):
             original_event_log(self_inner, run_id_inner, runs_dir=str(tmp_path))
 
         with patch.object(EventLog, "__init__", patched_event_log_init):
-            result = asyncio.run(default_intervention_agent(ctx, tools))
+            asyncio.run(default_intervention_agent(ctx, tools))
 
     # The @workflow decorator creates an EventLog for the intervention itself.
     # That run_id is different from the original run_id (ctx.run_id).

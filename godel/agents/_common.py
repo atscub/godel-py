@@ -128,14 +128,12 @@ class AdapterStreamSink:
 
     def feed(self, line: bytes) -> None:
         """Receive one raw line (bytes, including trailing newline) from run()."""
-        from godel.agents._stream_parser import Parsed, Raw
 
         for item in self._parser.feed(line):
             self._emit(item)
 
     def close(self) -> None:
         """Flush any remaining partial line from the internal buffer."""
-        from godel.agents._stream_parser import Parsed, Raw
 
         for item in self._parser.close():
             self._emit(item)

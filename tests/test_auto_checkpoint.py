@@ -56,7 +56,7 @@ def test_auto_checkpoint_annotates_event(tmp_path, monkeypatch):
 
     runs = list((tmp_path / "runs").glob("*.jsonl"))
     assert runs, "expected at least one run log"
-    events = [json.loads(l) for l in runs[0].read_text().strip().splitlines()]
+    events = [json.loads(ln) for ln in runs[0].read_text().strip().splitlines()]
     input_started = [e for e in events if e["op"] == "input" and e["status"] == "STARTED"]
     assert input_started, "expected an STARTED input event"
     assert input_started[0]["request"].get("auto_checkpoint") == "pipe"
@@ -78,7 +78,7 @@ def test_no_auto_checkpoint_annotation_when_env_unset(tmp_path, monkeypatch):
     asyncio.run(wf())
 
     runs = list((tmp_path / "runs").glob("*.jsonl"))
-    events = [json.loads(l) for l in runs[0].read_text().strip().splitlines()]
+    events = [json.loads(ln) for ln in runs[0].read_text().strip().splitlines()]
     input_started = [e for e in events if e["op"] == "input" and e["status"] == "STARTED"]
     assert input_started
     assert "auto_checkpoint" not in input_started[0]["request"]

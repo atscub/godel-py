@@ -18,14 +18,10 @@ Acceptance criteria verified:
 from __future__ import annotations
 
 import io
-import os
 import queue
 import signal
 import sys
-import threading
-import time
 import unittest.mock as mock
-from types import MappingProxyType
 
 import pytest
 
@@ -41,11 +37,8 @@ from godel._watch import (
     _plain_loop,
     _render_loop,
     _use_plain_fallback,
-    run_watch,
 )
 from godel._watch_model import (
-    StreamPanel,
-    StepNode,
     WatchModel,
     reduce,
     reduce_header,
@@ -229,7 +222,6 @@ class TestNonTTYFallback:
 
     def test_run_watch_non_tty_produces_plain_output(self, tmp_path, monkeypatch):
         """run_watch on a non-TTY writes prefixed plain-log lines, not Rich markup."""
-        import sys
         import importlib
 
         # Always use a fresh module reference to avoid cross-test import-order
@@ -265,7 +257,6 @@ class TestNonTTYFallback:
 
     def test_run_watch_non_tty_exit_code_unchanged(self, tmp_path, monkeypatch):
         """run_watch completes without raising even with no TTY."""
-        import sys
         import importlib
 
         watch_mod = sys.modules.get("godel._watch")
@@ -557,7 +548,6 @@ class TestKeyboardInterruptRestoresTerminal:
         that would risk deadlock if Rich holds its lock when the signal lands.
         The handler should only set a flag; the main loop acts on it.
         """
-        import sys
         import importlib
         watch_mod = sys.modules.get("godel._watch") or importlib.import_module("godel._watch")
 
@@ -597,7 +587,6 @@ class TestKeyboardInterruptRestoresTerminal:
         process teardown.  Uses the pending_signal mechanism to simulate a
         SIGTSTP mid-render.
         """
-        import sys
         import importlib
 
         watch_mod = sys.modules.get("godel._watch") or importlib.import_module("godel._watch")

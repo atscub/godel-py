@@ -19,7 +19,7 @@ def test_print_emits_event(tmp_path, monkeypatch):
     asyncio.run(wf())
     runs = list((tmp_path / "runs").glob("*.jsonl"))
     lines = runs[0].read_text().strip().split("\n")
-    events = [json.loads(l) for l in lines]
+    events = [json.loads(ln) for ln in lines]
     print_events = [e for e in events if e["op"] == "print"]
     assert len(print_events) == 2  # STARTED + FINISHED
     assert print_events[0]["status"] == "STARTED"
@@ -40,7 +40,7 @@ def test_input_emits_event(tmp_path, monkeypatch):
 
     runs = list((tmp_path / "runs").glob("*.jsonl"))
     lines = runs[0].read_text().strip().split("\n")
-    events = [json.loads(l) for l in lines]
+    events = [json.loads(ln) for ln in lines]
     input_events = [e for e in events if e["op"] == "input"]
     assert len(input_events) == 2  # STARTED + FINISHED
     assert input_events[0]["request"]["prompt"] == "Question? "
@@ -73,7 +73,7 @@ def test_sleep_emits_event(tmp_path, monkeypatch):
     asyncio.run(wf())
     runs = list((tmp_path / "runs").glob("*.jsonl"))
     lines = runs[0].read_text().strip().split("\n")
-    events = [json.loads(l) for l in lines]
+    events = [json.loads(ln) for ln in lines]
     sleep_events = [e for e in events if e["op"] == "sleep"]
     assert len(sleep_events) == 2  # STARTED + FINISHED
     assert sleep_events[0]["status"] == "STARTED"

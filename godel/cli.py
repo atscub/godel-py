@@ -532,7 +532,6 @@ def run_cmd(file, extra, no_strict, no_lint, watch, no_stream, plain, show_tools
 )
 def resume_cmd(run_id, file, on_mismatch, on_source_edit, no_strict, no_lint, no_stream, auto_checkpoint, assume_idempotent):
     """Resume a workflow run from its audit log."""
-    from pathlib import Path
     from godel._event_log import EventLog
     from godel._replay import (
         ReplayWalker, MismatchPolicy, set_mismatch_policy,
@@ -765,7 +764,6 @@ def resume_cmd(run_id, file, on_mismatch, on_source_edit, no_strict, no_lint, no
 )
 def show_cmd(run_id, graph, show_all, full_event_id):
     """Display the audit log for a workflow run."""
-    from pathlib import Path
     from godel._event_log import EventLog
 
     runs_dir = _resolve_runs_dir()
@@ -866,7 +864,7 @@ def _show_list(events, show_all):
             for fe in retries[key]:
                 line = _fmt_event(fe)
                 click.echo(click.style(f"  \u2502  {line}", fg="red", dim=True))
-            click.echo(click.style(f"  \u2514\u2500 succeeded:", fg="red", dim=True))
+            click.echo(click.style("  \u2514\u2500 succeeded:", fg="red", dim=True))
 
         color = _STATUS_COLOR.get(event.status.value, "white")
         click.echo(click.style(_fmt_event(event), fg=color))
@@ -948,7 +946,6 @@ def pause_cmd(run_id, reason):
 @click.option("--reason", default="CLI rewind", help="Reason for the rewind")
 def rewind_cmd(run_id, target_ids, reason):
     """Rewind a workflow run to a previous checkpoint."""
-    from pathlib import Path
     from godel._event_log import EventLog
     from godel._exceptions import RewindUnsafe
     from godel._rewind import apply_rewind
@@ -1032,7 +1029,6 @@ def rewind_cmd(run_id, target_ids, reason):
 def repair_cmd(run_id, agent_spec, model, max_iterations, dry_run):
     """Drop an intervention agent into a paused or crashed run."""
     import importlib
-    from pathlib import Path
     from godel.intervention import build_intervention_context, InterventionToolset
     from godel.intervention._tools import ResumeRequested, GaveUp
 
@@ -1183,7 +1179,6 @@ def repair_cmd(run_id, agent_spec, model, max_iterations, dry_run):
 def tail_cmd(run_id, output_format, no_follow, no_wait, show_tools, max_agent_lines, tail_verbose):
     """Follow a workflow's audit log in real time."""
     import json as json_mod
-    from pathlib import Path
     from godel._tail import tail as _tail
 
     runs_dir = _resolve_runs_dir()
@@ -1303,7 +1298,6 @@ def watch_cmd(run_id, runs_dir, plain, show_tools, max_agent_lines, watch_verbos
 
     Requires godel[watch] (pip install 'godel[watch]').
     """
-    from pathlib import Path
 
     # Guard: require rich
     try:
@@ -1429,7 +1423,8 @@ def config_path_cmd():
     project_settings = (project_dir / "settings.json") if project_dir else None
 
     click.echo("sources (low -> high precedence):")
-    mark = lambda p: "✓" if (p and p.is_file()) else "✗"
+    def mark(p):
+        return "✓" if (p and p.is_file()) else "✗"
     click.echo(f"  {mark(global_settings)} {global_settings}")
     if project_settings:
         click.echo(f"  {mark(project_settings)} {project_settings}")
@@ -1555,7 +1550,6 @@ def runs_list_cmd(status, limit, runs_dir_override):
     col_wf = 20
     col_st = 10
     col_ts = 20
-    col_du = 10
     header = (
         f"{'RUN ID':<{col_id}}  "
         f"{'WORKFLOW':<{col_wf}}  "

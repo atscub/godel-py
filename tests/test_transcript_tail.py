@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import threading
 import time
-from pathlib import Path
 
 import pytest
 
@@ -368,7 +367,6 @@ def test_ac3_error_carries_path(tmp_path):
 
 def test_ac4_inode_reuse_recovery(tmp_path, caplog):
     """AC-4: If inode changes without sentinel, reader reopens and continues."""
-    import logging
 
     run_dir = tmp_path / "run_ac4"
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -381,7 +379,7 @@ def test_ac4_inode_reuse_recovery(tmp_path, caplog):
 
     # Simulate inode change: delete + recreate (most filesystems reuse inodes
     # eventually, but for the test we just replace the file).
-    current_ino_before = current.stat().st_ino
+    current.stat().st_ino
 
     # Read first generation with the tail open, then swap file under it.
     results: list[dict] = []

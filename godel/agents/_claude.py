@@ -68,7 +68,7 @@ class _ClaudeCodeAgent(_BaseAgent):
         # Handle both regular json (single object) and stream-json (JSONL).
         # For stream-json, we extract "result" text from the final "result" event
         # and the session_id from that same event.
-        lines = [l.strip() for l in stdout.strip().splitlines() if l.strip()]
+        lines = [ln.strip() for ln in stdout.strip().splitlines() if ln.strip()]
         if not lines:
             return stdout.strip(), None
         # Try multi-line (stream-json): look for a terminating "result" event.

@@ -56,6 +56,6 @@ def test_idempotent_install():
     install_import_guard()
     install_import_guard()  # should not raise or add duplicate
     import sys
-    count = sum(1 for f in sys.meta_path if isinstance(f, type(None)) or f.__class__.__name__ == "_GodelImportBlocker")
+    sum(1 for f in sys.meta_path if isinstance(f, type(None)) or f.__class__.__name__ == "_GodelImportBlocker")
     # Just verify remove works after double install
     remove_import_guard()

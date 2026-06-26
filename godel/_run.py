@@ -253,7 +253,7 @@ async def run(cmd: str | list[str], *, cwd: str | None = None, timeout: float | 
                 if not _promoted_source:
                     from godel._exceptions import UnsafeResumeError
                     raise UnsafeResumeError(
-                        f"run() has STARTED-only state and is not marked idempotent",
+                        "run() has STARTED-only state and is not marked idempotent",
                         cmd=cmd,
                         step_path=tuple(ctx.step_stack),
                     )
@@ -389,7 +389,7 @@ async def run(cmd: str | list[str], *, cwd: str | None = None, timeout: float | 
                 raise CommandFailure(
                     error_msg,
                     step_path=step_path,
-                    remediation_hint=f"Increase the timeout parameter or optimize the command to complete faster.",
+                    remediation_hint="Increase the timeout parameter or optimize the command to complete faster.",
                 )
             except BaseException:
                 # Observer callback or transcript writer raised — don't leak the

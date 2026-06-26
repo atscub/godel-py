@@ -306,7 +306,7 @@ class TranscriptWriter:
         path = self._run_dir / _FILENAME
         token = _privileged.set(True)
         try:
-            self._file = open(path, "a", buffering=1, encoding="utf-8")  # noqa: WPS515
+            self._file = open(path, "a", buffering=1, encoding="utf-8")
         finally:
             _privileged.reset(token)
         self._file_size = path.stat().st_size

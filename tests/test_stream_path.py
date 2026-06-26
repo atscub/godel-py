@@ -26,8 +26,8 @@ from godel._run import run
 def _load_events(tmp_path):
     runs = list((tmp_path / "runs").glob("*.jsonl"))
     assert runs, "no run log found"
-    lines = [l for l in runs[0].read_text().strip().split("\n") if l]
-    return [json.loads(l) for l in lines]
+    lines = [ln for ln in runs[0].read_text().strip().split("\n") if ln]
+    return [json.loads(ln) for ln in lines]
 
 
 def _run_events(events):

@@ -1,7 +1,7 @@
 """Tests for ReplayWalker class."""
 from godel._events import Event, EventStatus
 from godel._event_log import EventLog
-from godel._replay import ReplayWalker, ReplayMatch
+from godel._replay import ReplayWalker
 
 
 def _build_log_with_events(tmp_path, events_data):

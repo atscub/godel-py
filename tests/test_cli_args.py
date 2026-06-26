@@ -331,7 +331,8 @@ def _make_fake_walker(request_dict: dict):
     from unittest.mock import MagicMock
     from godel._events import Event, EventStatus
     from godel._replay import ReplayWalker
-    import uuid, datetime
+    import uuid
+    import datetime
 
     event = Event(
         event_id=str(uuid.uuid4()),

@@ -48,7 +48,6 @@ def test_command_failure_has_step_path():
 
 def test_failed_event_has_structured_info():
     """After a @step failure, the step.enter event's response contains structured error info."""
-    last_run_id = []
 
     @step
     async def failing_step():

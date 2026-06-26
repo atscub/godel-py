@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
 from click.testing import CliRunner
 
 from godel.cli import main
@@ -83,7 +82,7 @@ def test_tail_json_output(tmp_path, monkeypatch):
     result = runner.invoke(main, ["tail", "tail-run-json", "--no-follow", "--format", "json"])
     assert result.exit_code == 0, result.output
 
-    lines = [l for l in result.output.strip().splitlines() if l]
+    lines = [ln for ln in result.output.strip().splitlines() if ln]
     assert len(lines) == 2
     for line in lines:
         d = json.loads(line)

@@ -3,7 +3,6 @@ import json
 import subprocess
 import sys
 
-import pytest
 
 
 def test_lint_clean_file(tmp_path):
@@ -206,7 +205,7 @@ def test_lint_crashing_rule_emits_pl000(tmp_path, monkeypatch):
     # into the subprocess is impractical without shared state.
     import sys
     sys.path.insert(0, str(tmp_path.parent.parent / "py-library"))
-    from godel._linter import lint_source, register_rule, _RULES
+    from godel._linter import lint_source, _RULES
 
     class BrokenRule:
         rule_id = "PL999"

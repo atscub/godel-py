@@ -3,7 +3,6 @@ import asyncio
 import io
 import sys
 import time
-import pytest
 from unittest.mock import patch
 from godel.io import print as aprint, input as ainput, sleep as asleep
 from godel._decorators import workflow

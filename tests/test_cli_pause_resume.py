@@ -20,11 +20,10 @@ import pytest
 
 from godel import workflow, step
 from godel._context import _pending_replay
-from godel._decorators import WorkflowFail
 from godel._event_log import EventLog
 from godel._events import EventStatus
 from godel._exceptions import PauseSignal
-from godel._pause import write_pause_request, clear_pause_request
+from godel._pause import write_pause_request
 from godel._replay import ReplayWalker
 
 PROJECT_ROOT = str(Path(__file__).parent.parent)

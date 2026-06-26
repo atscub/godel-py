@@ -3,7 +3,6 @@ import json
 from pathlib import Path
 from click.testing import CliRunner
 from godel.cli import main
-from godel._events import Event, EventStatus
 
 
 def _write_test_jsonl(runs_dir: Path, run_id: str, events: list[dict]):

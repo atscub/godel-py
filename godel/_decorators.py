@@ -179,7 +179,6 @@ def workflow(
             _wf_owns_transcript = False  # True only when WE created the TranscriptWriter
             _wf_owned_tmpdir: str | None = None
             if capture_stdout:
-                from godel._stdout_capture import capture as _wf_capture
                 # Reuse an already-injected transcript (e.g. from tests or a
                 # parent workflow); only create a new one if none is active.
                 _existing_transcript = _current_transcript.get()
@@ -554,13 +553,11 @@ def step(fn=None, *, name=None, idempotent=False, capture_stdout: bool = False, 
             # last_step_event_id() to look up cached results must receive the
             # original persisted event_id, not the ephemeral replay one.
             cached_step_event_id: str | None = None
-            suppress_at_entry: bool = False
             if (
                 ctx.replay_walker is not None
                 and ctx.event_log is not None
                 and ctx._local_replay_suppress
             ):
-                suppress_at_entry = True
                 step_key = (step_path, inv_count, 0, "step.enter")
                 cached_step = ctx.replay_walker._index.get(step_key)
                 from godel._events import EventStatus as _ES
@@ -568,7 +565,6 @@ def step(fn=None, *, name=None, idempotent=False, capture_stdout: bool = False, 
                     ctx.replay_walker._replaying = False
                     ctx.event_log._replay_suppress = False
                     ctx._local_replay_suppress = False
-                    suppress_at_entry = False
                 else:
                     # This step is fully cached — record the original event_id
                     # so we can append it to _step_event_history instead of the

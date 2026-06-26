@@ -11,7 +11,6 @@ import pytest
 
 from godel._context import WorkflowContext, _current_workflow, _step_idempotent
 from godel._event_log import EventLog
-from godel._events import Event, EventStatus
 from godel._replay import (
     ReplayWalker,
     set_assume_idempotent_all,
@@ -81,7 +80,7 @@ class TestDefaultBehaviorUnchanged:
 
     def test_finished_returns_cached_regardless(self, tmp_path):
         """FINISHED events always replay, idempotent flag doesn't matter."""
-        from godel._run import run, CommandResult
+        from godel._run import run
 
         run_id = "test-finished"
         log = EventLog(run_id, runs_dir=str(tmp_path))
@@ -194,7 +193,6 @@ class TestStepIdempotentPropagation:
     def test_step_idempotent_allows_run_on_started(self, tmp_path):
         """When @step(idempotent=True) wraps a run() with STARTED-only entry, no error."""
         from godel._run import run
-        from godel._decorators import step, workflow
         from godel._context import _current_workflow
 
         # Build a log with a step.enter STARTED and a run STARTED inside it
@@ -255,7 +253,7 @@ class TestStepIdempotentPropagation:
 class TestAgentAssumeIdempotent:
     def test_assume_idempotent_sets_step_idempotent_contextvar(self):
         """agent(assume_idempotent=True) should set _step_idempotent during execution."""
-        from unittest.mock import AsyncMock, patch
+        from unittest.mock import patch
         from godel.agents._claude import claude_code
         from godel._decorators import workflow
         from godel._run import CommandResult

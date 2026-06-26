@@ -105,9 +105,7 @@ def test_step_timeout_emits_failed_event(tmp_path, monkeypatch):
         asyncio.run(wf())
 
     # Inspect the event log
-    run_id = wf._last_run_id
     import json
-    from pathlib import Path
     runs_dir = tmp_path / "runs"
     log_files = list(runs_dir.glob("*.jsonl"))
     assert log_files, "Expected at least one .jsonl log file"

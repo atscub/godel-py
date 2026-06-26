@@ -11,7 +11,8 @@ def test_event_exports():
 
 def test_cli_prints_run_id(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    import subprocess, sys
+    import subprocess
+    import sys
     from pathlib import Path
 
     wf = tmp_path / "wf.py"

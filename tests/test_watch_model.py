@@ -464,8 +464,8 @@ class TestWithRotationFixture:
         panel = self._model.panels.get(("work",))
         assert panel is not None
         lines = panel.ring
-        assert any("before rotation" in l for l in lines)
-        assert any("after rotation" in l for l in lines)
+        assert any("before rotation" in ln for ln in lines)
+        assert any("after rotation" in ln for ln in lines)
 
     def test_rotate_is_noop_for_model_state(self):
         """Rotation sentinel must not add a panel or step."""

@@ -13,12 +13,10 @@ Covers acceptance criteria from godel-py-5pl.4:
 from __future__ import annotations
 
 import asyncio
-import io
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-import pytest
 
 from godel._decorators import workflow
 from godel._transcript import TranscriptWriter

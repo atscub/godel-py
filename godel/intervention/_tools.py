@@ -14,7 +14,6 @@ from pydantic import BaseModel, Field
 
 from godel._event_log import EventLog
 from godel._events import EventStatus
-from godel._exceptions import RewindUnsafe
 from godel._rewind import apply_rewind
 
 

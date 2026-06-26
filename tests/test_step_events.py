@@ -2,7 +2,6 @@
 import asyncio
 import json
 from godel._decorators import workflow, step
-from godel._events import EventStatus
 
 
 def test_step_emits_started_finished(tmp_path, monkeypatch):
@@ -18,7 +17,7 @@ def test_step_emits_started_finished(tmp_path, monkeypatch):
     asyncio.run(wf())
     runs = list((tmp_path / "runs").glob("*.jsonl"))
     lines = runs[0].read_text().strip().split("\n")
-    events = [json.loads(l) for l in lines]
+    events = [json.loads(ln) for ln in lines]
     step_events = [e for e in events if e["op"] == "step.enter"]
     assert len(step_events) == 2  # STARTED + FINISHED snapshots
     assert step_events[0]["status"] == "STARTED"
@@ -41,7 +40,7 @@ def test_step_emits_failed(tmp_path, monkeypatch):
 
     runs = list((tmp_path / "runs").glob("*.jsonl"))
     lines = runs[0].read_text().strip().split("\n")
-    events = [json.loads(l) for l in lines]
+    events = [json.loads(ln) for ln in lines]
     step_events = [e for e in events if e["op"] == "step.enter"]
     assert any(e["status"] == "FAILED" for e in step_events)
 
@@ -62,7 +61,7 @@ def test_nested_step_path(tmp_path, monkeypatch):
     asyncio.run(wf())
     runs = list((tmp_path / "runs").glob("*.jsonl"))
     lines = runs[0].read_text().strip().split("\n")
-    events = [json.loads(l) for l in lines]
+    events = [json.loads(ln) for ln in lines]
     step_events = [e for e in events if e["op"] == "step.enter" and e["status"] == "STARTED"]
     paths = [tuple(e["step_path"]) for e in step_events]
     assert ("outer",) in paths
@@ -84,7 +83,7 @@ def test_invocation_seq_increments(tmp_path, monkeypatch):
     asyncio.run(wf())
     runs = list((tmp_path / "runs").glob("*.jsonl"))
     lines = runs[0].read_text().strip().split("\n")
-    events = [json.loads(l) for l in lines]
+    events = [json.loads(ln) for ln in lines]
     step_starts = [e for e in events if e["op"] == "step.enter" and e["status"] == "STARTED"]
     inv_seqs = [e["invocation_seq"] for e in step_starts]
     assert inv_seqs == [0, 1]

@@ -6,7 +6,6 @@ import json
 from dataclasses import dataclass, field
 from enum import Enum
 
-from ulid import ULID
 
 
 class EventStatus(Enum):

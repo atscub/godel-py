@@ -1,8 +1,7 @@
 """Tests for claude_code agent factory."""
 import asyncio
 import json
-from unittest.mock import AsyncMock, patch
-from dataclasses import dataclass
+from unittest.mock import patch
 import pytest
 from pydantic import BaseModel
 

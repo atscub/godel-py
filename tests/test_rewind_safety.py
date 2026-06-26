@@ -376,7 +376,6 @@ def test_full_rewind_path_emits_intent_and_outcome_phases(tmp_path, monkeypatch)
     """
     import asyncio
     import json
-    from pathlib import Path
     from godel import workflow, step
     from godel._rewind import rewind
 

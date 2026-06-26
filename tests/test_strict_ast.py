@@ -1,5 +1,5 @@
 """Tests for AST pre-scan (Layer 1 strict mode)."""
-from godel._strict_ast import scan_source, scan_file, BANNED_MODULES, BANNED_ATTR_CALLS
+from godel._strict_ast import scan_source, scan_file
 
 
 def test_detects_import_requests():

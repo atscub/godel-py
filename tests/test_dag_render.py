@@ -1,5 +1,5 @@
 """Tests for ASCII DAG renderer."""
-from godel._dag_render import render_dag, render_dag_plain, _partition_events
+from godel._dag_render import render_dag_plain, _partition_events
 from godel._events import Event, EventStatus
 
 
@@ -74,8 +74,8 @@ def test_fork_branch_separation():
     lines = output.splitlines()
 
     # Should contain branch header lines
-    branch_a_headers = [l for l in lines if "branch: branch_a" in l]
-    branch_b_headers = [l for l in lines if "branch: branch_b" in l]
+    branch_a_headers = [ln for ln in lines if "branch: branch_a" in ln]
+    branch_b_headers = [ln for ln in lines if "branch: branch_b" in ln]
     assert len(branch_a_headers) == 1, f"Expected 1 branch_a header, got {branch_a_headers}"
     assert len(branch_b_headers) == 1, f"Expected 1 branch_b header, got {branch_b_headers}"
 

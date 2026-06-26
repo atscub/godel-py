@@ -3,12 +3,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from pathlib import Path
 
 import pytest
 
-from godel._events import Event, EventStatus
+from godel._events import Event
 from godel._tail import tail
 
 

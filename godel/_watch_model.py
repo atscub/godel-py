@@ -321,7 +321,7 @@ def _summarize_tool_result(tool: str, output) -> str:
     The result is capped at ``_MAX_LINE_LEN`` characters.
     """
     text = str(output)
-    lines = [l for l in text.splitlines() if l.strip()]
+    lines = [ln for ln in text.splitlines() if ln.strip()]
     first = _first_nonblank_line(text) if lines else text.strip()
     extra = len(lines) - 1 if lines else 0
 

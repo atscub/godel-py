@@ -57,14 +57,14 @@ except ImportError as _e:
         "godel --watch requires 'rich'. Install with: pip install 'godel[watch]'"
     ) from _e
 
-from godel._watch_model import WatchModel, StreamPanel, StepNode, reduce, reduce_header
+from godel._watch_model import WatchModel, StreamPanel, StepNode, reduce
 
 
 # ---------------------------------------------------------------------------
 # Verbosity configuration
 # ---------------------------------------------------------------------------
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass
@@ -688,7 +688,7 @@ class _PlainLineLog:
             # Emit the truncation indicator as a new line.
             self._file.write("\n")
             pad_prefix = self._branch_prefix(stream_path) if _branch_prefix is None else _branch_prefix
-            extra = hidden_count + (total_newlines - remaining_lines - len(hidden_parts))
+            hidden_count + (total_newlines - remaining_lines - len(hidden_parts))
             indicator = cont + self._c("dim", f"… +{hidden_count} lines truncated")
             self._file.write(pad_prefix + indicator)
             try:
@@ -862,7 +862,7 @@ class _PlainLineLog:
         if op == "agent.prompt":
             prompt = event.get("prompt", "")
             model = event.get("model", "")
-            header = pad + self._c("magenta", f"› prompt") + (f" {self._c('dim', '(' + model + ')')}" if model else "")
+            header = pad + self._c("magenta", "› prompt") + (f" {self._c('dim', '(' + model + ')')}" if model else "")
             self._emit([header] + [cont + ln for ln in _wrap_multiline(prompt, indent="", width=max(self._term_width() - len(cont) - self._BRANCH_SLOT_WIDTH, 20))], stream_path=stream_path)
             # Arm the spinner for the forthcoming response.
             self._pending_stream = stream_path

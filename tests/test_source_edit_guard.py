@@ -7,7 +7,6 @@ Validates the contract:
 """
 import asyncio
 import hashlib
-import inspect
 import pytest
 
 from godel import workflow, step
@@ -198,7 +197,8 @@ def test_edit_cached_step_warns(tmp_path, capsys):
     set_source_edit_policy(SourceEditPolicy.WARN)
 
     from godel._replay import check_source_edit
-    import io, sys
+    import io
+    import sys
 
     # Capture stderr
     old_stderr = sys.stderr
@@ -245,7 +245,6 @@ def test_edit_cached_step_warns_default(tmp_path, monkeypatch, capsys):
 
     # Tamper the stored source_hash in the log so it won't match
     import json
-    from pathlib import Path
     runs_dir = tmp_path / "runs"
     log_file = runs_dir / f"{run_id}.jsonl"
     lines = log_file.read_text().splitlines()
@@ -267,7 +266,8 @@ def test_edit_cached_step_warns_default(tmp_path, monkeypatch, capsys):
     event_log = EventLog.load(run_id, runs_dir=str(runs_dir))
     walker = ReplayWalker(event_log)
 
-    import sys, io
+    import sys
+    import io
     old_stderr = sys.stderr
     sys.stderr = io.StringIO()
     token = _pending_replay.set(walker)
@@ -305,7 +305,6 @@ def test_edit_cached_step_aborts(tmp_path, monkeypatch):
 
     # Tamper the stored source_hash
     import json
-    from pathlib import Path
     runs_dir = tmp_path / "runs"
     log_file = runs_dir / f"{run_id}.jsonl"
     lines = log_file.read_text().splitlines()
@@ -411,7 +410,8 @@ def test_ignore_policy_suppresses_warning(tmp_path):
     set_source_edit_policy(SourceEditPolicy.IGNORE)
 
     from godel._replay import check_source_edit
-    import sys, io
+    import sys
+    import io
 
     old_stderr = sys.stderr
     sys.stderr = io.StringIO()
@@ -483,7 +483,8 @@ def test_old_log_no_source_hash_is_silent(tmp_path):
     set_source_edit_policy(SourceEditPolicy.ABORT)
 
     from godel._replay import check_source_edit
-    import sys, io
+    import sys
+    import io
     old_stderr = sys.stderr
     sys.stderr = io.StringIO()
     try:

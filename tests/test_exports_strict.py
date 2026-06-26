@@ -2,7 +2,7 @@
 
 
 def test_strict_exports():
-    from godel import GodelStrictError, StrictViolation, det
+    from godel import GodelStrictError, det
     assert issubclass(GodelStrictError, Exception)
     assert callable(det.now)
     assert callable(det.random)

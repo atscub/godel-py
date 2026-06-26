@@ -18,7 +18,7 @@ def test_run_emits_started_finished(tmp_path, monkeypatch):
 
     runs = list((tmp_path / "runs").glob("*.jsonl"))
     lines = runs[0].read_text().strip().split("\n")
-    events = [json.loads(l) for l in lines]
+    events = [json.loads(ln) for ln in lines]
     run_events = [e for e in events if e["op"] == "run"]
     assert len(run_events) == 2  # STARTED + FINISHED
     assert run_events[0]["status"] == "STARTED"
@@ -38,7 +38,7 @@ def test_run_emits_failed_on_error(tmp_path, monkeypatch):
 
     runs = list((tmp_path / "runs").glob("*.jsonl"))
     lines = runs[0].read_text().strip().split("\n")
-    events = [json.loads(l) for l in lines]
+    events = [json.loads(ln) for ln in lines]
     run_events = [e for e in events if e["op"] == "run"]
     assert any(e["status"] == "FAILED" for e in run_events)
 
@@ -53,7 +53,7 @@ def test_run_request_contains_cmd(tmp_path, monkeypatch):
     asyncio.run(wf())
     runs = list((tmp_path / "runs").glob("*.jsonl"))
     lines = runs[0].read_text().strip().split("\n")
-    events = [json.loads(l) for l in lines]
+    events = [json.loads(ln) for ln in lines]
     run_start = [e for e in events if e["op"] == "run" and e["status"] == "STARTED"][0]
     assert run_start["request"]["cmd"] == "echo test"
     assert run_start["request"]["cwd"] == "/tmp"
@@ -72,6 +72,6 @@ def test_run_truncates_large_output(tmp_path, monkeypatch):
     asyncio.run(wf())
     runs = list((tmp_path / "runs").glob("*.jsonl"))
     lines = runs[0].read_text().strip().split("\n")
-    events = [json.loads(l) for l in lines]
+    events = [json.loads(ln) for ln in lines]
     run_fin = [e for e in events if e["op"] == "run" and e["status"] == "FINISHED"][0]
     assert len(run_fin["response"]["stdout"]) == 1000
