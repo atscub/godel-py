@@ -2,6 +2,39 @@
 
 <!-- version list -->
 
+## v3.16.3 (2026-06-26)
+
+### Bug Fixes
+
+- Address second review — crash paths, replay hash, stale docs
+  ([`dd95f10`](https://github.com/atscub/godel-py/commit/dd95f10399c87c44098efc93ac38d61337cf6f62))
+
+- Restore design-intent comments removed during refactor
+  ([`cc1196e`](https://github.com/atscub/godel-py/commit/cc1196ecf13494cdb22e40c98513eab17e6c90d8))
+
+- Shell-quoting bug, read_text truncation, parallel() docs (#2, #3, #4)
+  ([`df0d30f`](https://github.com/atscub/godel-py/commit/df0d30fc1fb09e05e89bbec20e77c5ce7d4baa04))
+
+- Third review — replay hash compat, copilot docstrings, style
+  ([`fc2bfea`](https://github.com/atscub/godel-py/commit/fc2bfea94d40ddd6c0124eceacbc51b6bd152a95))
+
+- **io**: Address review findings for read_text cache
+  ([`d3a6429`](https://github.com/atscub/godel-py/commit/d3a6429702062392b06e1d952d9cc249e2e4a4be))
+
+### Refactoring
+
+- **io**: Rename cache→replay, split _cache_dir, add edge-case tests
+  ([`87c5416`](https://github.com/atscub/godel-py/commit/87c5416c8bf1567b27fcdddbceff8cbf95c9b86c))
+
+### Testing
+
+- Add regression tests for issues #2, #3, #4
+  ([`dc4b60a`](https://github.com/atscub/godel-py/commit/dc4b60a8bd3808996795e78c3dbfd1949d402cc4))
+
+- Distribute regression tests into module test files
+  ([`49591ee`](https://github.com/atscub/godel-py/commit/49591ee82d84d376d718bdc5a8badd5f2ac8e20c))
+
+
 ## v3.16.2 (2026-06-17)
 
 ### Bug Fixes
