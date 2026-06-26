@@ -9,13 +9,13 @@ The ``copilot`` binary comes from the ``@github/copilot-cli`` npm package
 (GitHub Copilot CLI 1.0.25+).  It supports a genuine non-interactive path::
 
     copilot -p PROMPT --model MODEL --allow-all-tools --no-color \\
-            --output-format json [--resume=SESSION_ID]
+            --output-format json [--resume SESSION_ID]
 
 Session persistence
 -------------------
 When ``--output-format json`` is set, the CLI streams one JSON object per line
 and terminates with a ``{"type":"result","sessionId":...}`` event.  We capture
-``sessionId`` from that event and pass ``--resume=<id>`` on subsequent calls so
+``sessionId`` from that event and pass ``--resume <id>`` on subsequent calls so
 the conversation history is preserved.
 
 Extraction fallback model
@@ -27,7 +27,6 @@ fallback call.
 from __future__ import annotations
 
 import json
-import shlex
 
 from godel._run import run  # noqa: F401 — re-exported for backward-compat; canonical patch target is godel.agents._common.run
 from godel.agents._common import _BaseAgent
@@ -61,7 +60,7 @@ class _CopilotAgent(_BaseAgent):
         tools: list[str] | None,
         session_id: str | None,
         streaming: bool = False,
-    ) -> str:
+    ) -> list[str]:
         # Copilot already emits JSONL (one object per line) regardless of the
         # streaming flag; no extra CLI flag is required.  The streaming
         # parameter is accepted for API compatibility with _BaseAgent but is
@@ -75,12 +74,12 @@ class _CopilotAgent(_BaseAgent):
         if self._skip_permissions:
             cmd_parts.append("--allow-all-tools")
         if session_id:
-            cmd_parts.append(f"--resume={shlex.quote(session_id)}")
+            cmd_parts += ["--resume", session_id]
         if tools:
             for tool in tools:
-                cmd_parts += ["--allow-tool", shlex.quote(tool)]
-        cmd_parts += ["-p", shlex.quote(prompt)]
-        return " ".join(cmd_parts)
+                cmd_parts += ["--allow-tool", tool]
+        cmd_parts += ["-p", prompt]
+        return cmd_parts
 
     def _make_adapter(self):
         from godel.agents._adapters import CopilotAdapter
@@ -177,7 +176,7 @@ def copilot(
             briefing is delivered exactly once even across a pause/resume.
     session_id:
         Resume a prior CLI session across process boundaries.  When supplied,
-        the first call will pass ``--resume=<session_id>`` to the Copilot CLI
+        the first call will pass ``--resume <session_id>`` to the Copilot CLI
         so the conversation history is preserved without a full workflow
         replay.
 

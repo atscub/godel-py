@@ -241,7 +241,7 @@ class UnsafeResumeError(ResumeError):
         message: str,
         *,
         event_id: str = "",
-        cmd: str = "",
+        cmd: str | list[str] = "",
         step_path: tuple[str, ...] = (),
         source_location: str = "",
         remediation_hint: str = "",
@@ -253,7 +253,11 @@ class UnsafeResumeError(ResumeError):
             remediation_hint=remediation_hint,
         )
         self.event_id = event_id
-        self.cmd = cmd
+        if isinstance(cmd, list):
+            from godel._run import _cmd_display
+            self.cmd = _cmd_display(cmd)
+        else:
+            self.cmd = cmd
 
     def _context_marker(self) -> str:
         # UnsafeResumeError renders step/command context in its own __str__
@@ -424,13 +428,17 @@ class RewindUnsafe(GodelError):
         *,
         event_id: str = "",
         op: str = "",
-        cmd: str | None = None,
+        cmd: str | list[str] | None = None,
         **kwargs: Unpack[_GodelErrorKwargs],
     ):
         super().__init__(message, **kwargs)
         self.event_id = event_id
         self.op = op
-        self.cmd = cmd
+        if isinstance(cmd, list):
+            from godel._run import _cmd_display
+            self.cmd: str | None = _cmd_display(cmd)
+        else:
+            self.cmd = cmd
 
 
 # ---------------------------------------------------------------------------

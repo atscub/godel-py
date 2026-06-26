@@ -8,6 +8,7 @@ import tempfile
 import time as _time
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 from godel._context import _current_workflow, _privileged
 
@@ -425,25 +426,44 @@ def _write_text_atomic(path: str, content: str, encoding: str) -> None:
         raise
 
 
-async def read_text(path: str, *, encoding: str = "utf-8") -> str:
-    """Read a file and record content in the audit log.
+def _snapshot_dir(event_log) -> Path:
+    """Return ``<runs_dir>/<run_id>/snapshots/`` without creating it."""
+    return event_log._file_path.parent / event_log._run_id / "snapshots"
+
+
+def _ensure_snapshot_dir(event_log) -> Path:
+    """Return ``<runs_dir>/<run_id>/snapshots/``, creating it on first use."""
+    d = _snapshot_dir(event_log)
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+async def read_text(path: str, *, encoding: str = "utf-8", replay: Literal["reread", "file"] = "reread") -> str:
+    """Read a file and record the operation in the audit log.
 
     The resolved absolute path (``~`` expanded, ``..`` collapsed) is stored
-    in the log, so replay matches are independent of the caller's cwd. The
-    full content is hashed for replay matching, but the embedded snapshot
-    of the content is truncated at ``_CONTENT_LOG_LIMIT`` bytes for
-    storage efficiency — display-only truncation, never affects determinism.
-
-    On replay, returns cached content without touching the filesystem.
-    Mismatch policy (--on-mismatch) applies when the resolved path changes.
+    in the log, so replay matches are independent of the caller's cwd.
 
     Args:
         path: Source path. Relative paths are resolved against the current
             working directory at call time.
-        encoding: Text encoding (default ``utf-8``). Matches the default used
-            by ``Path.read_text`` when ``PYTHONUTF8`` is enabled, but passing
-            it explicitly removes platform-locale ambiguity.
+        encoding: Text encoding (default ``utf-8``).
+        replay: Strategy for returning content on workflow resume.
+
+            ``"reread"`` (default)
+                On resume, re-read the file from disk instead of returning
+                cached content. Safe for all file sizes; always sees current
+                file state.
+
+            ``"file"``
+                Store a full snapshot of the content in the run's data
+                directory (``<runs_dir>/<run_id>/snapshots/<event_id>.content``).
+                On resume, the snapshot is returned without touching the
+                original file — deterministic replay even if the source
+                changed. No 64 KB truncation.
     """
+    if replay not in ("reread", "file"):
+        raise ValueError(f"read_text replay must be 'reread' or 'file', got {replay!r}")
     ctx = _current_workflow.get()
 
     inv_seq, local_seq = (0, 0)
@@ -453,7 +473,7 @@ async def read_text(path: str, *, encoding: str = "utf-8") -> str:
     resolved_path = _normalize_path(path)
     # Hash participates in replay-match; encoding included so swapping
     # utf-8 → latin-1 is a detectable change.
-    req = {"path": resolved_path, "encoding": encoding}
+    req = {"path": resolved_path, "encoding": encoding, "replay": replay}
 
     # Replay guard
     if ctx and ctx.replay_walker:
@@ -470,20 +490,54 @@ async def read_text(path: str, *, encoding: str = "utf-8") -> str:
             if match.hash_mismatch:
                 from godel._replay import handle_hash_mismatch, MismatchPolicy
                 policy = await handle_hash_mismatch(match, ctx.event_log)
-                # If policy is CONTINUE, warn about the stale cache — we are
-                # about to return OLD content for a path whose args changed.
-                if policy == MismatchPolicy.CONTINUE:
+                if policy == MismatchPolicy.CONTINUE and replay != "reread":
                     _warn(
                         f"read_text({resolved_path!r}) replay hash mismatch: "
                         f"returning cached content from original run "
                         f"(--on-mismatch=continue). Re-reading the file would "
-                        f"require --on-mismatch=invalidate."
+                        f"require --on-mismatch=invalidate or replay='reread'."
                     )
-            return match.cached_response.get("content", "")
+
+            if replay == "reread":
+                # Re-read from disk — ignore cached content entirely.
+                token = _privileged.set(True)
+                try:
+                    cv_ctx = contextvars.copy_context()
+                    loop = asyncio.get_running_loop()
+                    return await loop.run_in_executor(
+                        None, lambda: cv_ctx.run(_read_text_sync, resolved_path, encoding)
+                    )
+                finally:
+                    _privileged.reset(token)
+            elif replay == "file":
+                content_ref = match.cached_response.get("content_ref")
+                if content_ref and ctx.event_log:
+                    snap = _snapshot_dir(ctx.event_log) / f"{content_ref}.content"
+                    if snap.exists():
+                        token = _privileged.set(True)
+                        try:
+                            return snap.read_text(encoding=encoding)
+                        except (OSError, UnicodeDecodeError):
+                            pass
+                        finally:
+                            _privileged.reset(token)
+                # Backward compat: old logs store inline content (possibly truncated)
+                inline = match.cached_response.get("content")
+                if inline is not None:
+                    return inline
+                # Last resort: re-read from disk
+                token = _privileged.set(True)
+                try:
+                    cv_ctx = contextvars.copy_context()
+                    loop = asyncio.get_running_loop()
+                    return await loop.run_in_executor(
+                        None, lambda: cv_ctx.run(_read_text_sync, resolved_path, encoding)
+                    )
+                finally:
+                    _privileged.reset(token)
         # STARTED-only for read_text: fall through and re-read. Reads are
         # idempotent so this is safe — unlike write_text, a partial STARTED
-        # read cannot have corrupted external state. The new attempt either
-        # succeeds (adding a FINISHED snapshot) or emits a FAILED event.
+        # read cannot have corrupted external state.
 
     event = None
     if ctx and ctx.event_log:
@@ -523,12 +577,26 @@ async def read_text(path: str, *, encoding: str = "utf-8") -> str:
     _privileged.reset(token)
 
     if event:
+        response: dict = {
+            "bytes_read": len(content.encode(encoding, errors="replace")),
+        }
+        if replay == "file":
+            content_ref = event.event_id
+            snap = _ensure_snapshot_dir(ctx.event_log) / f"{content_ref}.content"
+            priv_token = _privileged.set(True)
+            try:
+                _write_text_atomic(str(snap), content, encoding)
+                response["content_ref"] = content_ref
+            except OSError:
+                pass
+            finally:
+                _privileged.reset(priv_token)
+            response["content"] = _truncate_for_log(content)
+        else:
+            response["content"] = _truncate_for_log(content)
         ctx.event_log.emit_finished(
             event.event_id,
-            response={
-                "content": _truncate_for_log(content),
-                "bytes_read": len(content.encode(encoding, errors="replace")),
-            },
+            response=response,
         )
     return content
 

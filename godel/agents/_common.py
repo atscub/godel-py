@@ -586,8 +586,12 @@ class _BaseAgent:
         tools: list[str] | None,
         session_id: str | None,
         streaming: bool = False,
-    ) -> str:
-        """Build the shell command for one CLI invocation.
+    ) -> list[str]:
+        """Build the argv list for one CLI invocation.
+
+        Returns a list of arguments passed directly to
+        ``create_subprocess_exec`` — no shell interpretation, so prompts
+        with metacharacters are safe.
 
         ``tools`` is ``None`` to accept the CLI's default tool policy,
         an empty list to explicitly disable all tools (extraction calls),
