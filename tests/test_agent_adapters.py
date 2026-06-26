@@ -453,7 +453,7 @@ def test_claude_streaming_command_includes_stream_json(tmp_path, monkeypatch):
 
     from godel.agents._claude import claude_code
 
-    captured_cmds: list[str] = []
+    captured_cmds: list[list[str]] = []
 
     async def fake_run(cmd, *, cwd=None, **kwargs):
         captured_cmds.append(cmd)
@@ -480,7 +480,7 @@ def test_claude_non_streaming_command_uses_json(tmp_path, monkeypatch):
 
     from godel.agents._claude import claude_code
 
-    captured_cmds: list[str] = []
+    captured_cmds: list[list[str]] = []
 
     async def fake_run(cmd, *, cwd=None, **kwargs):
         captured_cmds.append(cmd)

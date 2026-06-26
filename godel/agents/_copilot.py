@@ -9,13 +9,13 @@ The ``copilot`` binary comes from the ``@github/copilot-cli`` npm package
 (GitHub Copilot CLI 1.0.25+).  It supports a genuine non-interactive path::
 
     copilot -p PROMPT --model MODEL --allow-all-tools --no-color \\
-            --output-format json [--resume=SESSION_ID]
+            --output-format json [--resume SESSION_ID]
 
 Session persistence
 -------------------
 When ``--output-format json`` is set, the CLI streams one JSON object per line
 and terminates with a ``{"type":"result","sessionId":...}`` event.  We capture
-``sessionId`` from that event and pass ``--resume=<id>`` on subsequent calls so
+``sessionId`` from that event and pass ``--resume <id>`` on subsequent calls so
 the conversation history is preserved.
 
 Extraction fallback model
@@ -172,7 +172,7 @@ def copilot(
             briefing is delivered exactly once even across a pause/resume.
     session_id:
         Resume a prior CLI session across process boundaries.  When supplied,
-        the first call will pass ``--resume=<session_id>`` to the Copilot CLI
+        the first call will pass ``--resume <session_id>`` to the Copilot CLI
         so the conversation history is preserved without a full workflow
         replay.
 

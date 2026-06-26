@@ -100,6 +100,7 @@ class Event:
     _HASH_EXCLUDE_KEYS: frozenset[str] = frozenset({
         "source_hash", "auto_checkpoint", "assumed_idempotent_source", "idempotent",
         "session_id",  # ctor-supplied session_id must not affect replay hash matching
+        "replay",  # read_text replay mode is a resume-behavior hint, not a semantic input
     })
 
     @staticmethod

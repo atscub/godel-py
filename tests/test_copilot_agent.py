@@ -13,15 +13,15 @@ import pytest
 from pydantic import BaseModel
 
 import godel.agents
+from godel.agents._copilot import copilot, _CopilotAgent, _EXTRACTION_MODEL
+from godel.agents._common import SchemaValidationFailure
+from godel._run import CommandResult, CommandFailure
+from godel._decorators import workflow
 
 
 def _cmd_contains(cmd: list[str], substr: str) -> bool:
     """Check if *substr* appears in any element of the argv list."""
     return any(substr in arg for arg in cmd)
-from godel.agents._copilot import copilot, _CopilotAgent, _EXTRACTION_MODEL
-from godel.agents._common import SchemaValidationFailure
-from godel._run import CommandResult, CommandFailure
-from godel._decorators import workflow
 
 
 # ---------------------------------------------------------------------------
