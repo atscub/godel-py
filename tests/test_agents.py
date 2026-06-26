@@ -698,3 +698,68 @@ def test_session_id_excluded_from_request_hash():
     assert h1 == h2 == h3, (
         f"Hash must be identical regardless of session_id value: {h1}, {h2}, {h3}"
     )
+
+
+# ---------------------------------------------------------------------------
+# build_command returns list — metacharacters safe without shell quoting
+# ---------------------------------------------------------------------------
+
+_METACHAR_PROMPTS = [
+    pytest.param("Classify: Uber’s Marketing Data Platform team", id="curly_apostrophe"),
+    pytest.param("Run `git log --oneline` and summarize", id="backticks"),
+    pytest.param("Set $HOME to /tmp and check $PATH", id="dollar_signs"),
+    pytest.param('She said "hello" and it\'s fine', id="mixed_quotes"),
+    pytest.param("price > $100 && stock < 50 | sort", id="pipes_and_ampersands"),
+    pytest.param("file.txt; rm -rf /; echo pwned", id="semicolons"),
+    pytest.param("$(whoami) or `id`", id="command_substitution"),
+]
+
+
+@pytest.mark.parametrize("prompt", _METACHAR_PROMPTS)
+def test_build_command_prompt_is_single_argv_element(prompt):
+    """_build_command returns a list where the prompt is one element, not split by shell."""
+    agent = claude_code()
+    cmd = agent._build_command(
+        prompt, "claude-sonnet-4-6",
+        tools=None, session_id=None, streaming=False,
+    )
+    assert isinstance(cmd, list)
+    p_idx = cmd.index("-p")
+    assert cmd[p_idx + 1] == prompt
+
+
+def test_agent_call_with_metachar_prompt_succeeds():
+    """End-to-end: agent call with shell metacharacters does not raise."""
+    captured = []
+
+    async def fake_run(cmd, **kwargs):
+        captured.append(cmd)
+        return CommandResult(
+            stdout=json.dumps({"result": "classified", "session_id": "s1"}),
+            stderr="", returncode=0,
+        )
+
+    @workflow
+    async def wf():
+        with patch("godel.agents._common.run", new=fake_run):
+            agent = claude_code(skip_permissions=True)
+            return await agent("Classify: Uber’s Marketing Data Platform team")
+
+    result = asyncio.run(wf())
+    assert result == "classified"
+    assert isinstance(captured[0], list)
+    p_idx = captured[0].index("-p")
+    assert "’" in captured[0][p_idx + 1]
+
+
+def test_copilot_build_command_returns_list():
+    """copilot _build_command also returns a list."""
+    from godel.agents._copilot import copilot as copilot_factory
+    agent = copilot_factory()
+    cmd = agent._build_command(
+        "test with $VAR", "gpt-5",
+        tools=None, session_id=None, streaming=False,
+    )
+    assert isinstance(cmd, list)
+    p_idx = cmd.index("-p")
+    assert cmd[p_idx + 1] == "test with $VAR"

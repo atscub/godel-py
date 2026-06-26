@@ -192,3 +192,36 @@ def test_pause_signal_in_nested_step_does_not_mark_outer_step_failed(tmp_path, m
             f"outer step must not be marked FAILED when PauseSignal propagates "
             f"through it; got status={e.get('status')!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# parallel() signature: variadic args, returns tuple
+# ---------------------------------------------------------------------------
+
+def test_parallel_returns_tuple():
+    """parallel() return type is tuple, not list."""
+    async def run():
+        async def a(): return 1
+        async def b(): return 2
+        return await parallel(a(), b())
+    result = asyncio.run(run())
+    assert isinstance(result, tuple)
+
+
+def test_parallel_variadic_args():
+    """parallel() accepts individual positional args."""
+    async def run():
+        async def task(n): return n * 10
+        return await parallel(task(1), task(2), task(3))
+    result = asyncio.run(run())
+    assert result == (10, 20, 30)
+
+
+def test_parallel_splat_from_comprehension():
+    """parallel(*[coro for ...]) works — the documented usage pattern."""
+    async def run():
+        async def task(n): return n ** 2
+        return await parallel(*[task(i) for i in range(5)])
+    result = asyncio.run(run())
+    assert result == (0, 1, 4, 9, 16)
+    assert isinstance(result, tuple)

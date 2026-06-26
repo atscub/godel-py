@@ -1,6 +1,7 @@
 """Tests for run() primitive."""
 import asyncio
 import time
+from unittest.mock import patch
 import pytest
 from godel._run import run, CommandResult, CommandFailure
 from godel._context import _privileged
@@ -73,5 +74,81 @@ def test_run_captures_stderr():
         result = await run("echo err >&2; echo out")
         assert "out" in result.stdout
         assert "err" in result.stderr
+
+    asyncio.run(wf())
+
+
+# ---------------------------------------------------------------------------
+# list cmd → create_subprocess_exec (no shell interpretation)
+# ---------------------------------------------------------------------------
+
+def test_run_list_cmd_uses_exec():
+    """run() calls create_subprocess_exec when cmd is a list."""
+    exec_calls = []
+    shell_calls = []
+
+    async def fake_exec(*args, **kwargs):
+        exec_calls.append(args)
+
+        class FakeProc:
+            returncode = 0
+            stdout = asyncio.StreamReader()
+            stderr = asyncio.StreamReader()
+            async def wait(self): pass
+        proc = FakeProc()
+        proc.stdout.feed_data(b"ok\n")
+        proc.stdout.feed_eof()
+        proc.stderr.feed_data(b"")
+        proc.stderr.feed_eof()
+        return proc
+
+    async def fake_shell(cmd, **kwargs):
+        shell_calls.append(cmd)
+        return await fake_exec(cmd, **kwargs)
+
+    async def go():
+        with patch("godel._run.asyncio.create_subprocess_exec", side_effect=fake_exec):
+            with patch("godel._run.asyncio.create_subprocess_shell", side_effect=fake_shell):
+                await run(["echo", "hello world"])
+
+    asyncio.run(go())
+    assert len(exec_calls) == 1
+    assert len(shell_calls) == 0
+
+
+def test_run_string_cmd_uses_shell():
+    """run() still calls create_subprocess_shell for string commands."""
+    shell_calls = []
+
+    async def fake_shell(cmd, **kwargs):
+        shell_calls.append(cmd)
+
+        class FakeProc:
+            returncode = 0
+            stdout = asyncio.StreamReader()
+            stderr = asyncio.StreamReader()
+            async def wait(self): pass
+        proc = FakeProc()
+        proc.stdout.feed_data(b"ok\n")
+        proc.stdout.feed_eof()
+        proc.stderr.feed_data(b"")
+        proc.stderr.feed_eof()
+        return proc
+
+    async def go():
+        with patch("godel._run.asyncio.create_subprocess_shell", side_effect=fake_shell):
+            await run("echo hello")
+
+    asyncio.run(go())
+    assert len(shell_calls) == 1
+
+
+def test_run_list_cmd_passes_args_intact():
+    """Arguments in a list cmd reach the subprocess without shell interpretation."""
+    @workflow
+    async def wf():
+        result = await run(["echo", "hello world"])
+        assert result.stdout.strip() == "hello world"
+        return result
 
     asyncio.run(wf())

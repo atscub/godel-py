@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from godel.io import read_text, write_text, _CONTENT_LOG_LIMIT, _normalize_path
+from godel.io import read_text, write_text, _CONTENT_LOG_LIMIT, _CONTENT_LOG_LIMIT_BYTES, _normalize_path
 from godel._context import WorkflowContext, _current_workflow
 from godel._event_log import EventLog
 from godel._events import EventStatus
@@ -618,3 +618,129 @@ print("ok")
         )
         assert result.returncode == 0, f"subprocess failed:\n{result.stderr}"
         assert "ok" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# read_text cache modes — reread and file
+# ---------------------------------------------------------------------------
+
+def _large_content(size_bytes: int = 100 * 1024) -> str:
+    """Generate JSONL content larger than the 64KB truncation limit."""
+    line = '{"id": 12345, "title": "Software Engineer", "company": "Acme Corp"}\n'
+    return line * ((size_bytes // len(line)) + 1)
+
+
+class TestReadTextCacheReread:
+    def test_returns_full_content_for_large_file(self, tmp_path):
+        """cache='reread' returns full untruncated content on resume."""
+        content = _large_content()
+        target = tmp_path / "large.jsonl"
+        target.write_text(content)
+        resolved = _normalize_path(str(target))
+
+        loaded = _make_log_with_events(tmp_path / "logs", [{
+            "op": "read_text", "finish": True,
+            "request": {"path": resolved, "encoding": "utf-8"},
+            "response": {"content": content[:1000] + "\n... [truncated]", "bytes_read": len(content.encode())},
+        }])
+        _install_replay_ctx(loaded)
+
+        result = asyncio.run(read_text(str(target), cache="reread"))
+        assert result == content
+        assert len(result.encode()) > _CONTENT_LOG_LIMIT_BYTES
+
+    def test_sees_updated_file_content(self, tmp_path):
+        """cache='reread' returns current disk content, not stale cache."""
+        target = tmp_path / "data.txt"
+        target.write_text("version 2")
+        resolved = _normalize_path(str(target))
+
+        loaded = _make_log_with_events(tmp_path / "logs", [{
+            "op": "read_text", "finish": True,
+            "request": {"path": resolved, "encoding": "utf-8"},
+            "response": {"content": "version 1", "bytes_read": 9},
+        }])
+        _install_replay_ctx(loaded)
+
+        assert asyncio.run(read_text(str(target))) == "version 2"
+
+
+class TestReadTextCacheFile:
+    def test_stores_and_retrieves_full_snapshot(self, tmp_path):
+        """cache='file' round-trips a large file through a snapshot."""
+        content = _large_content()
+        target = tmp_path / "big.jsonl"
+        target.write_text(content)
+
+        # First run
+        run_id = "test-file-cache"
+        log = EventLog(run_id, runs_dir=str(tmp_path / "runs"))
+        ctx = WorkflowContext(run_id=run_id, event_log=log)
+        _current_workflow.set(ctx)
+
+        result = asyncio.run(read_text(str(target), cache="file"))
+        assert result == content
+
+        cache_dir = tmp_path / "runs" / run_id / "cache"
+        snapshot_files = list(cache_dir.glob("*.content"))
+        assert len(snapshot_files) == 1
+        assert snapshot_files[0].read_text() == content
+
+        events = [e for e in log.all_events() if e.op == "read_text" and e.status == EventStatus.FINISHED]
+        assert "content_ref" in events[0].response
+        log.close()
+
+        # Resume — original file deleted
+        target.unlink()
+        loaded = EventLog.load(run_id, runs_dir=str(tmp_path / "runs"))
+        walker = ReplayWalker(loaded)
+        _current_workflow.set(WorkflowContext(run_id=run_id, event_log=loaded, replay_walker=walker))
+
+        replayed = asyncio.run(read_text(str(target), cache="file"))
+        assert replayed == content
+
+    def test_backward_compat_with_inline_content(self, tmp_path):
+        """cache='file' falls back to inline content for old logs without content_ref."""
+        resolved = _normalize_path(str(tmp_path / "old.txt"))
+
+        loaded = _make_log_with_events(tmp_path / "logs", [{
+            "op": "read_text", "finish": True,
+            "request": {"path": resolved, "encoding": "utf-8"},
+            "response": {"content": "inline from old log", "bytes_read": 19},
+        }])
+        _install_replay_ctx(loaded)
+
+        assert asyncio.run(read_text(str(tmp_path / "old.txt"), cache="file")) == "inline from old log"
+
+    def test_large_jsonl_not_corrupted_on_resume(self, tmp_path):
+        """A 100KB+ JSONL file must not have lines cut mid-string on resume."""
+        import json
+        lines = [json.dumps({"id": i, "desc": "x" * 200}) for i in range(500)]
+        content = "\n".join(lines) + "\n"
+        assert len(content.encode()) > _CONTENT_LOG_LIMIT_BYTES
+
+        target = tmp_path / "seen.jsonl"
+        target.write_text(content)
+
+        run_id = "test-jsonl-roundtrip"
+        log = EventLog(run_id, runs_dir=str(tmp_path / "runs"))
+        _current_workflow.set(WorkflowContext(run_id=run_id, event_log=log))
+        asyncio.run(read_text(str(target), cache="file"))
+        log.close()
+
+        target.unlink()
+        loaded = EventLog.load(run_id, runs_dir=str(tmp_path / "runs"))
+        _current_workflow.set(WorkflowContext(
+            run_id=run_id, event_log=loaded, replay_walker=ReplayWalker(loaded),
+        ))
+
+        replayed = asyncio.run(read_text(str(target), cache="file"))
+        for i, line in enumerate(replayed.strip().split("\n")):
+            obj = json.loads(line)
+            assert obj["id"] == i, f"Line {i} has wrong id after resume"
+
+
+def test_read_text_invalid_cache_mode_raises():
+    """Passing an invalid cache mode raises ValueError."""
+    with pytest.raises(ValueError, match="cache must be"):
+        asyncio.run(read_text("/dev/null", cache="invalid"))
