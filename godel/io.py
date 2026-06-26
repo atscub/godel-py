@@ -471,6 +471,8 @@ async def read_text(path: str, *, encoding: str = "utf-8", replay: Literal["rere
         inv_seq, local_seq = ctx.next_op_position()
 
     resolved_path = _normalize_path(path)
+    # Hash participates in replay-match; encoding included so swapping
+    # utf-8 → latin-1 is a detectable change.
     req = {"path": resolved_path, "encoding": encoding, "replay": replay}
 
     # Replay guard
@@ -533,6 +535,9 @@ async def read_text(path: str, *, encoding: str = "utf-8", replay: Literal["rere
                     )
                 finally:
                     _privileged.reset(token)
+        # STARTED-only for read_text: fall through and re-read. Reads are
+        # idempotent so this is safe — unlike write_text, a partial STARTED
+        # read cannot have corrupted external state.
 
     event = None
     if ctx and ctx.event_log:
@@ -545,6 +550,10 @@ async def read_text(path: str, *, encoding: str = "utf-8", replay: Literal["rere
             parent_event_id=ctx.current_parent_event_id,
         )
 
+    # Privileged I/O — run in the executor so the event loop doesn't block
+    # on multi-MB files. contextvars.copy_context().run() propagates the
+    # _privileged flag into the thread so the strict-mode audit hook allows
+    # the open call.
     token = _privileged.set(True)
     try:
         cv_ctx = contextvars.copy_context()
@@ -555,6 +564,9 @@ async def read_text(path: str, *, encoding: str = "utf-8", replay: Literal["rere
     except BaseException as exc:
         _privileged.reset(token)
         if event:
+            # _safe_emit_failed swallows any log-write failure so that the
+            # original exception (exc) is what ultimately propagates — never
+            # masked by an audit-log side effect.
             _safe_emit_failed(
                 ctx.event_log,
                 event.event_id,

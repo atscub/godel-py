@@ -61,6 +61,10 @@ class _CopilotAgent(_BaseAgent):
         session_id: str | None,
         streaming: bool = False,
     ) -> list[str]:
+        # Copilot already emits JSONL (one object per line) regardless of the
+        # streaming flag; no extra CLI flag is required.  The streaming
+        # parameter is accepted for API compatibility with _BaseAgent but is
+        # otherwise unused here.
         cmd_parts = [
             "copilot",
             "--no-color",

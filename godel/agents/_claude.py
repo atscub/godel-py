@@ -41,10 +41,16 @@ class _ClaudeCodeAgent(_BaseAgent):
         session_id: str | None,
         streaming: bool = False,
     ) -> list[str]:
+        # Use stream-json when streaming is active so each event arrives as a
+        # separate JSONL line that the adapter can classify.  Fall back to the
+        # regular json format otherwise (preserves pre-change output shape).
         output_format = "stream-json" if streaming else "json"
         cmd_parts = ["claude", "--output-format", output_format]
         if streaming:
             cmd_parts.append("--verbose")
+            # Emit content_block_delta events so thinking + response tokens
+            # stream in real time instead of arriving as one batched
+            # `assistant` event at the end of the turn.
             cmd_parts.append("--include-partial-messages")
         if self._skip_permissions:
             cmd_parts.append("--dangerously-skip-permissions")
