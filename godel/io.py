@@ -426,14 +426,19 @@ def _write_text_atomic(path: str, content: str, encoding: str) -> None:
         raise
 
 
-def _cache_dir(event_log) -> Path:
-    """Return ``<runs_dir>/<run_id>/cache/``, creating it on first use."""
-    d = event_log._file_path.parent / event_log._run_id / "cache"
+def _snapshot_dir(event_log) -> Path:
+    """Return ``<runs_dir>/<run_id>/snapshots/`` without creating it."""
+    return event_log._file_path.parent / event_log._run_id / "snapshots"
+
+
+def _ensure_snapshot_dir(event_log) -> Path:
+    """Return ``<runs_dir>/<run_id>/snapshots/``, creating it on first use."""
+    d = _snapshot_dir(event_log)
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
-async def read_text(path: str, *, encoding: str = "utf-8", cache: Literal["reread", "file"] = "reread") -> str:
+async def read_text(path: str, *, encoding: str = "utf-8", replay: Literal["reread", "file"] = "reread") -> str:
     """Read a file and record the operation in the audit log.
 
     The resolved absolute path (``~`` expanded, ``..`` collapsed) is stored
@@ -443,7 +448,7 @@ async def read_text(path: str, *, encoding: str = "utf-8", cache: Literal["rerea
         path: Source path. Relative paths are resolved against the current
             working directory at call time.
         encoding: Text encoding (default ``utf-8``).
-        cache: Replay strategy for the file content.
+        replay: Strategy for returning content on workflow resume.
 
             ``"reread"`` (default)
                 On resume, re-read the file from disk instead of returning
@@ -452,13 +457,13 @@ async def read_text(path: str, *, encoding: str = "utf-8", cache: Literal["rerea
 
             ``"file"``
                 Store a full snapshot of the content in the run's data
-                directory (``<runs_dir>/<run_id>/cache/<event_id>.content``).
+                directory (``<runs_dir>/<run_id>/snapshots/<event_id>.content``).
                 On resume, the snapshot is returned without touching the
                 original file — deterministic replay even if the source
                 changed. No 64 KB truncation.
     """
-    if cache not in ("reread", "file"):
-        raise ValueError(f"read_text cache must be 'reread' or 'file', got {cache!r}")
+    if replay not in ("reread", "file"):
+        raise ValueError(f"read_text replay must be 'reread' or 'file', got {replay!r}")
     ctx = _current_workflow.get()
 
     inv_seq, local_seq = (0, 0)
@@ -483,15 +488,15 @@ async def read_text(path: str, *, encoding: str = "utf-8", cache: Literal["rerea
             if match.hash_mismatch:
                 from godel._replay import handle_hash_mismatch, MismatchPolicy
                 policy = await handle_hash_mismatch(match, ctx.event_log)
-                if policy == MismatchPolicy.CONTINUE and cache != "reread":
+                if policy == MismatchPolicy.CONTINUE and replay != "reread":
                     _warn(
                         f"read_text({resolved_path!r}) replay hash mismatch: "
                         f"returning cached content from original run "
                         f"(--on-mismatch=continue). Re-reading the file would "
-                        f"require --on-mismatch=invalidate or cache='reread'."
+                        f"require --on-mismatch=invalidate or replay='reread'."
                     )
 
-            if cache == "reread":
+            if replay == "reread":
                 # Re-read from disk — ignore cached content entirely.
                 token = _privileged.set(True)
                 try:
@@ -502,15 +507,16 @@ async def read_text(path: str, *, encoding: str = "utf-8", cache: Literal["rerea
                     )
                 finally:
                     _privileged.reset(token)
-            elif cache == "file":
-                # Try snapshot file first, then inline content, then re-read.
+            elif replay == "file":
                 content_ref = match.cached_response.get("content_ref")
                 if content_ref and ctx.event_log:
-                    cache_file = _cache_dir(ctx.event_log) / f"{content_ref}.content"
-                    if cache_file.exists():
+                    snap = _snapshot_dir(ctx.event_log) / f"{content_ref}.content"
+                    if snap.exists():
                         token = _privileged.set(True)
                         try:
-                            return cache_file.read_text(encoding=encoding)
+                            return snap.read_text(encoding=encoding)
+                        except (OSError, UnicodeDecodeError):
+                            pass
                         finally:
                             _privileged.reset(token)
                 # Backward compat: old logs store inline content (possibly truncated)
@@ -562,17 +568,14 @@ async def read_text(path: str, *, encoding: str = "utf-8", cache: Literal["rerea
         response: dict = {
             "bytes_read": len(content.encode(encoding, errors="replace")),
         }
-        if cache == "file":
+        if replay == "file":
             content_ref = event.event_id
-            cache_file = _cache_dir(ctx.event_log) / f"{content_ref}.content"
+            snap = _ensure_snapshot_dir(ctx.event_log) / f"{content_ref}.content"
             priv_token = _privileged.set(True)
             try:
-                _write_text_atomic(str(cache_file), content, encoding)
+                _write_text_atomic(str(snap), content, encoding)
                 response["content_ref"] = content_ref
             except OSError:
-                # Snapshot write failed (disk full, permissions, etc.) —
-                # fall back to inline truncated content rather than losing
-                # the successful read result.
                 pass
             finally:
                 _privileged.reset(priv_token)

@@ -98,24 +98,24 @@ Async shadow of `print`. Records a `print` event and writes to stdout.
 Async shadow of `input`. Blocks for human input, writes a `SUSPENDED` → `FINISHED`
 `input` event pair. Durable: on resume, returns the recorded answer without re-prompting.
 
-### `godel.read_text(path, *, encoding="utf-8", cache="reread") -> str`
+### `godel.read_text(path, *, encoding="utf-8", replay="reread") -> str`
 Async audited file read. Resolves `path` to an absolute form (so replay matches are
 cwd-independent), reads the file, and emits a `read_text` event. A partial
 `STARTED`-only event (crash between open and finish) causes a re-read on resume —
 reads are idempotent so this is safe.
 
-The `cache` parameter controls what happens on replay:
+The `replay` parameter controls what happens on resume:
 
 - `"reread"` (default) — re-reads the file from disk on resume. Always sees the
   current file state. Safe for all file sizes.
 - `"file"` — stores a full snapshot of the content in the run's data directory
-  (`<runs_dir>/<run_id>/cache/<event_id>.content`). On resume, the snapshot is
+  (`<runs_dir>/<run_id>/snapshots/<event_id>.content`). On resume, the snapshot is
   returned without touching the original file — deterministic replay even if the
   source changed. No size truncation.
 
 ```python
 content = await godel.read_text("data/input.json")
-content = await godel.read_text("data/big.jsonl", cache="file")
+content = await godel.read_text("data/big.jsonl", replay="file")
 ```
 
 ### `godel.write_text(path, content, *, encoding="utf-8") -> None`

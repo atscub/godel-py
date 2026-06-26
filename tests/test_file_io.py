@@ -209,7 +209,7 @@ class TestReadTextLive:
 
 class TestReadTextReplay:
     def test_reread_reads_from_disk_on_replay(self, tmp_path):
-        """cache='reread' (default) re-reads from disk even when cache exists."""
+        """replay='reread' (default) re-reads from disk even when log has cached content."""
         target = tmp_path / "cached.txt"
         target.write_text("updated on disk")
         resolved = _normalize_path(str(target))
@@ -228,7 +228,7 @@ class TestReadTextReplay:
         assert result == "updated on disk"
 
     def test_file_cache_returns_inline_content(self, tmp_path):
-        """cache='file' returns inline content from the log on replay."""
+        """replay='file' returns inline content from the log on replay."""
         nonexistent = str(tmp_path / "does_not_exist.txt")
         resolved = _normalize_path(nonexistent)
 
@@ -242,7 +242,7 @@ class TestReadTextReplay:
         ])
         _install_replay_ctx(loaded)
 
-        result = asyncio.run(read_text(nonexistent, cache="file"))
+        result = asyncio.run(read_text(nonexistent, replay="file"))
         assert result == "replay only"
 
     def test_relative_path_matches_cache_despite_cwd_change(self, tmp_path, monkeypatch):
@@ -285,8 +285,8 @@ class TestReadTextReplay:
         _install_replay_ctx(loaded)
         set_mismatch_policy(MismatchPolicy.CONTINUE)
 
-        # cache="file" uses inline content from the log on mismatch+continue
-        result = asyncio.run(read_text(target_path, encoding="latin-1", cache="file"))
+        # replay="file" uses inline content from the log on mismatch+continue
+        result = asyncio.run(read_text(target_path, encoding="latin-1", replay="file"))
         assert result == "old cached"
         captured = capsys.readouterr()
         assert "hash mismatch" in captured.err.lower() or "hash mismatch" in captured.out.lower()
@@ -621,7 +621,7 @@ print("ok")
 
 
 # ---------------------------------------------------------------------------
-# read_text cache modes — reread and file
+# read_text replay modes — reread and file
 # ---------------------------------------------------------------------------
 
 def _large_content(size_bytes: int = 100 * 1024) -> str:
@@ -630,9 +630,9 @@ def _large_content(size_bytes: int = 100 * 1024) -> str:
     return line * ((size_bytes // len(line)) + 1)
 
 
-class TestReadTextCacheReread:
+class TestReadTextReplayReread:
     def test_returns_full_content_for_large_file(self, tmp_path):
-        """cache='reread' returns full untruncated content on resume."""
+        """replay='reread' returns full untruncated content on resume."""
         content = _large_content()
         target = tmp_path / "large.jsonl"
         target.write_text(content)
@@ -645,12 +645,12 @@ class TestReadTextCacheReread:
         }])
         _install_replay_ctx(loaded)
 
-        result = asyncio.run(read_text(str(target), cache="reread"))
+        result = asyncio.run(read_text(str(target), replay="reread"))
         assert result == content
         assert len(result.encode()) > _CONTENT_LOG_LIMIT_BYTES
 
     def test_sees_updated_file_content(self, tmp_path):
-        """cache='reread' returns current disk content, not stale cache."""
+        """replay='reread' returns current disk content, not stale cache."""
         target = tmp_path / "data.txt"
         target.write_text("version 2")
         resolved = _normalize_path(str(target))
@@ -665,9 +665,9 @@ class TestReadTextCacheReread:
         assert asyncio.run(read_text(str(target))) == "version 2"
 
 
-class TestReadTextCacheFile:
+class TestReadTextReplayFile:
     def test_stores_and_retrieves_full_snapshot(self, tmp_path):
-        """cache='file' round-trips a large file through a snapshot."""
+        """replay='file' round-trips a large file through a snapshot."""
         content = _large_content()
         target = tmp_path / "big.jsonl"
         target.write_text(content)
@@ -678,11 +678,11 @@ class TestReadTextCacheFile:
         ctx = WorkflowContext(run_id=run_id, event_log=log)
         _current_workflow.set(ctx)
 
-        result = asyncio.run(read_text(str(target), cache="file"))
+        result = asyncio.run(read_text(str(target), replay="file"))
         assert result == content
 
-        cache_dir = tmp_path / "runs" / run_id / "cache"
-        snapshot_files = list(cache_dir.glob("*.content"))
+        snap_dir = tmp_path / "runs" / run_id / "snapshots"
+        snapshot_files = list(snap_dir.glob("*.content"))
         assert len(snapshot_files) == 1
         assert snapshot_files[0].read_text() == content
 
@@ -696,11 +696,11 @@ class TestReadTextCacheFile:
         walker = ReplayWalker(loaded)
         _current_workflow.set(WorkflowContext(run_id=run_id, event_log=loaded, replay_walker=walker))
 
-        replayed = asyncio.run(read_text(str(target), cache="file"))
+        replayed = asyncio.run(read_text(str(target), replay="file"))
         assert replayed == content
 
     def test_backward_compat_with_inline_content(self, tmp_path):
-        """cache='file' falls back to inline content for old logs without content_ref."""
+        """replay='file' falls back to inline content for old logs without content_ref."""
         resolved = _normalize_path(str(tmp_path / "old.txt"))
 
         loaded = _make_log_with_events(tmp_path / "logs", [{
@@ -710,7 +710,7 @@ class TestReadTextCacheFile:
         }])
         _install_replay_ctx(loaded)
 
-        assert asyncio.run(read_text(str(tmp_path / "old.txt"), cache="file")) == "inline from old log"
+        assert asyncio.run(read_text(str(tmp_path / "old.txt"), replay="file")) == "inline from old log"
 
     def test_large_jsonl_not_corrupted_on_resume(self, tmp_path):
         """A 100KB+ JSONL file must not have lines cut mid-string on resume."""
@@ -725,7 +725,7 @@ class TestReadTextCacheFile:
         run_id = "test-jsonl-roundtrip"
         log = EventLog(run_id, runs_dir=str(tmp_path / "runs"))
         _current_workflow.set(WorkflowContext(run_id=run_id, event_log=log))
-        asyncio.run(read_text(str(target), cache="file"))
+        asyncio.run(read_text(str(target), replay="file"))
         log.close()
 
         target.unlink()
@@ -734,13 +734,116 @@ class TestReadTextCacheFile:
             run_id=run_id, event_log=loaded, replay_walker=ReplayWalker(loaded),
         ))
 
-        replayed = asyncio.run(read_text(str(target), cache="file"))
+        replayed = asyncio.run(read_text(str(target), replay="file"))
         for i, line in enumerate(replayed.strip().split("\n")):
             obj = json.loads(line)
             assert obj["id"] == i, f"Line {i} has wrong id after resume"
 
 
-def test_read_text_invalid_cache_mode_raises():
-    """Passing an invalid cache mode raises ValueError."""
-    with pytest.raises(ValueError, match="cache must be"):
-        asyncio.run(read_text("/dev/null", cache="invalid"))
+def test_read_text_invalid_replay_mode_raises():
+    """Passing an invalid replay mode raises ValueError."""
+    with pytest.raises(ValueError, match="replay must be"):
+        asyncio.run(read_text("/dev/null", replay="invalid"))
+
+
+# ---------------------------------------------------------------------------
+# Edge cases identified by adversarial review
+# ---------------------------------------------------------------------------
+
+class TestReadTextReplayEdgeCases:
+    def test_reread_with_hash_mismatch_still_reads_disk(self, tmp_path, capsys):
+        """replay='reread' + hash mismatch: re-reads from disk, no stale-cache warning."""
+        target = tmp_path / "mismatch.txt"
+        target.write_text("current content")
+        resolved = _normalize_path(str(target))
+
+        loaded = _make_log_with_events(tmp_path / "logs", [{
+            "op": "read_text", "finish": True,
+            "request": {"path": resolved, "encoding": "utf-8"},
+            "response": {"content": "old cached content", "bytes_read": 18},
+        }])
+        _install_replay_ctx(loaded)
+        set_mismatch_policy(MismatchPolicy.CONTINUE)
+
+        result = asyncio.run(read_text(str(target), encoding="latin-1", replay="reread"))
+        assert result == "current content"
+        captured = capsys.readouterr()
+        assert "returning cached content" not in captured.err
+
+    def test_file_replay_corrupted_snapshot_falls_back_to_inline(self, tmp_path):
+        """replay='file' with a corrupted snapshot file falls back to inline content."""
+        run_id = "test-corrupt-snap"
+        runs_dir = tmp_path / "runs"
+        log = EventLog(run_id, runs_dir=str(runs_dir))
+        started = log.emit_started(
+            op="read_text", step_path=(), request={"path": "/fake", "encoding": "utf-8"},
+        )
+        event_id = started.event_id
+        log.emit_finished(event_id, response={
+            "content_ref": event_id,
+            "content": "inline fallback",
+            "bytes_read": 15,
+        })
+        # Write a corrupted snapshot (invalid UTF-8 bytes)
+        snap_dir = runs_dir / run_id / "snapshots"
+        snap_dir.mkdir(parents=True)
+        (snap_dir / f"{event_id}.content").write_bytes(b"\x80\x81\x82\xff")
+        log.close()
+
+        loaded = EventLog.load(run_id, runs_dir=str(runs_dir))
+        walker = ReplayWalker(loaded)
+        _current_workflow.set(WorkflowContext(run_id=run_id, event_log=loaded, replay_walker=walker))
+
+        result = asyncio.run(read_text("/fake", replay="file"))
+        assert result == "inline fallback"
+
+    def test_file_replay_snapshot_write_failure_still_emits_finished(self, tmp_path):
+        """Snapshot write failure (permissions) must not prevent emit_finished."""
+        target = tmp_path / "data.txt"
+        target.write_text("important content")
+
+        run_id = "test-snap-write-fail"
+        runs_dir = tmp_path / "runs"
+        log = EventLog(run_id, runs_dir=str(runs_dir))
+        ctx = WorkflowContext(run_id=run_id, event_log=log)
+        _current_workflow.set(ctx)
+
+        # Make snapshot dir read-only so the write fails
+        snap_dir = runs_dir / run_id / "snapshots"
+        snap_dir.mkdir(parents=True)
+        snap_dir.chmod(0o444)
+
+        try:
+            result = asyncio.run(read_text(str(target), replay="file"))
+            assert result == "important content"
+
+            events = [e for e in log.all_events() if e.op == "read_text"]
+            assert len(events) == 1
+            assert events[0].status == EventStatus.FINISHED
+            # No content_ref since snapshot write failed
+            assert "content_ref" not in events[0].response
+            # Inline truncated content is still present
+            assert "content" in events[0].response
+        finally:
+            snap_dir.chmod(0o755)
+
+    def test_file_replay_outside_workflow_context(self, tmp_path):
+        """replay='file' outside a @workflow context reads normally, no snapshot."""
+        target = tmp_path / "plain.txt"
+        target.write_text("no workflow")
+
+        result = asyncio.run(read_text(str(target), replay="file"))
+        assert result == "no workflow"
+        # No snapshot dir created since there's no event log
+        assert not (tmp_path / "snapshots").exists()
+
+    def test_snapshot_dir_not_created_on_read_path(self, tmp_path):
+        """_snapshot_dir (read path) does not create the directory."""
+        run_id = "test-no-mkdir"
+        runs_dir = tmp_path / "runs"
+        log = EventLog(run_id, runs_dir=str(runs_dir))
+
+        from godel.io import _snapshot_dir
+        d = _snapshot_dir(log)
+        assert not d.exists()
+        log.close()
