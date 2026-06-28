@@ -235,6 +235,7 @@ def apply_rewind(
         event_log: The EventLog to operate on.
         target_ids: Event IDs to rewind to. Their children are invalidated.
         reason: Human-readable reason for the rewind.
+        assume_idempotent: If True, skip the non-idempotent run() safety check.
 
     Returns:
         dict with keys:
@@ -246,7 +247,8 @@ def apply_rewind(
             this field to distinguish a fully-no-op call from a partial one.
 
     Raises:
-        RewindUnsafe: If any non-idempotent run() would be invalidated.
+        RewindUnsafe: If any non-idempotent run() would be invalidated
+            (suppressed when ``assume_idempotent=True``).
         ValueError: If target_ids is empty, or a target event_id does not exist
             in the event log.
 

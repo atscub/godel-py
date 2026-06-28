@@ -999,7 +999,7 @@ def rewind_cmd(run_id, target_ids, reason, assume_idempotent):
             click.echo(
                 click.style(
                     "[godel] WARNING: --assume-idempotent is set. Non-idempotent "
-                    "run()/agent() events in the rewind subtree will be invalidated "
+                    "run() events in the rewind subtree will be invalidated "
                     "without the usual safety check. Only use this when you are certain "
                     "these operations had no irreversible side effects.",
                     fg="yellow",
@@ -1037,10 +1037,7 @@ def rewind_cmd(run_id, target_ids, reason, assume_idempotent):
                 click.echo(f"  - {short_id} ({op})", err=True)
             if len(result["invalidated_ids"]) > 10:
                 click.echo(f"  ... and {len(result['invalidated_ids']) - 10} more", err=True)
-        resume_hint = f"godel resume {full_run_id}"
-        if assume_idempotent:
-            resume_hint += " --assume-idempotent"
-        click.echo(f"[godel] resume with: {resume_hint}", err=True)
+        click.echo(f"[godel] resume with: godel resume {full_run_id}", err=True)
     finally:
         event_log.close()
 
