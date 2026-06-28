@@ -2,6 +2,28 @@
 
 <!-- version list -->
 
+## v3.16.6 (2026-06-28)
+
+### Bug Fixes
+
+- Address PR review feedback
+  ([`4e141e5`](https://github.com/atscub/godel-py/commit/4e141e5ddc25876171c1d8420035978daad1f857))
+
+- **tail**: Fix race in late-attach archive replay causing event loss
+  ([`b232943`](https://github.com/atscub/godel-py/commit/b23294341c38d031de631be29110cacd7644bc0f))
+
+### Continuous Integration
+
+- Switch to on-demand code review via @claude comments
+  ([#13](https://github.com/atscub/godel-py/pull/13),
+  [`5206431`](https://github.com/atscub/godel-py/commit/5206431ad337d20f308da81d0c7976ef02bdf719))
+
+### Documentation
+
+- Improve code review output format with inline comments and suggestions
+  ([`afb0980`](https://github.com/atscub/godel-py/commit/afb09800b187b7662ede5e8330ac51c96c6ab049))
+
+
 ## v3.16.5 (2026-06-28)
 
 ### Bug Fixes
