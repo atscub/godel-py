@@ -836,11 +836,21 @@ async def parallel(*aws: Awaitable[T], max_concurrency: int | None = None) -> tu
 
     if max_concurrency is not None:
         if isinstance(max_concurrency, bool) or not isinstance(max_concurrency, int):
+            for aw in aws:
+                try:
+                    aw.close()
+                except Exception:
+                    pass
             raise ConfigError(
                 f"parallel() max_concurrency must be a positive integer or None, "
                 f"got {type(max_concurrency).__name__}"
             )
         if max_concurrency < 1:
+            for aw in aws:
+                try:
+                    aw.close()
+                except Exception:
+                    pass
             raise ConfigError(
                 f"parallel() max_concurrency must be >= 1, got {max_concurrency}"
             )
