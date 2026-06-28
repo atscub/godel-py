@@ -34,4 +34,20 @@ When reviewing a PR in this project, follow these guidelines. Post findings as i
 
 ## Output format
 
-End with a top-level PR comment summarizing findings by severity count. If nothing worth flagging, comment "LGTM — no issues found."
+Post each finding as a **separate inline comment** on the relevant line using `mcp__github_inline_comment__create_inline_comment` (with `confirmed: true`). Each inline comment should:
+
+1. Start with the severity in bold: **Critical**, **High**, or **Medium**
+2. Explain the issue concisely (1-2 sentences)
+3. When possible, include a fix using GitHub's suggestion syntax:
+   ````
+   ```suggestion
+   corrected code here
+   ```
+   ````
+
+After all inline comments are posted, post **one top-level summary** via `gh pr comment` with:
+- Total finding count by severity
+- A one-line summary per finding (linking to the file and line)
+- Overall verdict: approve, request changes, or LGTM
+
+If nothing worth flagging, post only: "LGTM — no issues found."
