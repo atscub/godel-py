@@ -329,10 +329,6 @@ def test_resume_does_not_duplicate_events(tmp_path, monkeypatch):
     asyncio.run(wf())
     run_id = wf._last_run_id
 
-    log_path = tmp_path / "runs" / f"{run_id}.jsonl"
-    original_lines = log_path.read_text().strip().split("\n")
-    len(original_lines)
-
     event_log = EventLog.load(run_id, runs_dir=str(tmp_path / "runs"))
     walker = ReplayWalker(event_log)
 

@@ -50,7 +50,6 @@ testpaths = ["tests"]
 select = ["E", "F"]
 ignore = [
     "E501",  # line length managed by formatter, not linter
-    "F821",  # false positives on forward references in string annotations
 ]
 
 [tool.ruff.lint.per-file-ignores]

@@ -138,7 +138,7 @@ class AdapterStreamSink:
         for item in self._parser.close():
             self._emit(item)
 
-    def _emit(self, item: "Parsed | Raw") -> None:
+    def _emit(self, item: "Parsed | Raw") -> None:  # noqa: F821
         from godel.agents._stream_parser import Parsed, Raw
 
         if isinstance(item, Parsed):

@@ -688,8 +688,8 @@ class _PlainLineLog:
             # Emit the truncation indicator as a new line.
             self._file.write("\n")
             pad_prefix = self._branch_prefix(stream_path) if _branch_prefix is None else _branch_prefix
-            hidden_count + (total_newlines - remaining_lines - len(hidden_parts))
-            indicator = cont + self._c("dim", f"… +{hidden_count} lines truncated")
+            skipped = hidden_count + (total_newlines - remaining_lines - len(hidden_parts))
+            indicator = cont + self._c("dim", f"… +{skipped} lines truncated")
             self._file.write(pad_prefix + indicator)
             try:
                 self._file.flush()

@@ -1,4 +1,6 @@
 """CLI entrypoint for godel."""
+from __future__ import annotations
+
 import asyncio
 import importlib.util
 import inspect
@@ -14,7 +16,7 @@ from godel._decorators import WorkflowFail
 from godel._exceptions import PauseSignal
 
 
-def _resolve_runs_dir(override: str | None = None) -> "Path":
+def _resolve_runs_dir(override: str | None = None) -> "Path":  # noqa: F821
     """Resolve the runs directory for CLI commands.
 
     Precedence: ``--runs-dir`` flag (override) > config-resolved path.
