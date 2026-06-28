@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v3.16.7 (2026-06-28)
+
+### Bug Fixes
+
+- Drop Python 3.10/3.11 support, fix test issues from review
+  ([#14](https://github.com/atscub/godel-py/pull/14),
+  [`6b58a25`](https://github.com/atscub/godel-py/commit/6b58a25f29a4fe013ff2d0aaf97bfa1e85144882))
+
+- Import guard broken on Python 3.12 ([#14](https://github.com/atscub/godel-py/pull/14),
+  [`6b58a25`](https://github.com/atscub/godel-py/commit/6b58a25f29a4fe013ff2d0aaf97bfa1e85144882))
+
+- Import guard broken on Python 3.12, simplify CI matrix
+  ([#14](https://github.com/atscub/godel-py/pull/14),
+  [`6b58a25`](https://github.com/atscub/godel-py/commit/6b58a25f29a4fe013ff2d0aaf97bfa1e85144882))
+
+### Continuous Integration
+
+- Update publish workflow to Python 3.12
+  ([`74f12ba`](https://github.com/atscub/godel-py/commit/74f12bab0c07f5bcef2b903cda9a04c17b89061f))
+
+
 ## v3.16.6 (2026-06-28)
 
 ### Bug Fixes
