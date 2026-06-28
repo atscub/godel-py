@@ -10,7 +10,7 @@ cd godel-py
 pip install -e .
 ```
 
-Requires Python **3.10+**. For the live TUI renderer used by `godel watch` /
+Requires Python **3.12+**. For the live TUI renderer used by `godel watch` /
 `godel run --watch`, install the extra: `pip install -e '.[watch]'`.
 
 For the bundled `claude_code` agent you also need the [`claude` CLI](https://docs.claude.com/en/docs/claude-code)
