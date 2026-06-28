@@ -8,9 +8,10 @@ This repo contains the Python library and its CLI.
 ```
 godel-py/
 ├── godel/              # Package source (CLI, decorators, event log, agents, intervention)
-├── tests/              # pytest suite
+├── tests/              # pytest suite (unit + integration)
+├── e2e_tests/          # End-to-end tests — real CLI + agent calls
 ├── docs/               # User guides, API reference, concepts, examples
-├── examples/           # End-to-end example workflows
+├── examples/           # Showcase example workflows
 ├── .agents/CLI.md      # godel CLI command reference
 ├── .agents/HANDOFF.md  # Technical handoff / milestone context
 ├── .agents/CODE_REVIEW.md # PR review guidelines and severity levels
