@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v3.16.4 (2026-06-26)
+
+### Bug Fixes
+
+- **ci**: Grant write permission so code review can post PR comments
+  ([#10](https://github.com/atscub/godel-py/pull/10),
+  [`c8356e8`](https://github.com/atscub/godel-py/commit/c8356e879fed57ce30a152c43c08f55caacd46b7))
+
+
 ## v3.16.3 (2026-06-26)
 
 ### Bug Fixes
