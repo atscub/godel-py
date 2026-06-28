@@ -58,6 +58,7 @@ __all__ = [
     "run",
     "CommandResult",
     "CommandFailure",
+    "ContextOverflowError",
     "print",
     "input",
     "sleep",

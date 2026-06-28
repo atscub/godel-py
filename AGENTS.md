@@ -40,7 +40,7 @@ Follow the triage process at `.agents/TRIAGE.md` when handling incoming GitHub i
 ## How to work on this project
 
 - Python 3.12+; `pip install -e ".[dev]"` for dev setup.
-- `pytest` for tests; keep the suite green before pushing.
+- **Always run lint and tests before pushing to remote.** Run `ruff check godel/ tests/` and `pytest` and fix any failures before `git push`.
 - Conventional commits are required — version bumps and releases are automated.
 - **Never use `feat!:` or `BREAKING CHANGE` in commits or PRs.** The library is pre-stable and major version bumps are blocked in CI. Breaking changes should use `feat:` (minor bump) instead.
 - **Never commit directly to `main`.** Always create a feature branch and open a PR. The only exception is if the user explicitly asks to commit to main.
