@@ -30,6 +30,12 @@ godel-py/
 - `godel/agents/` — Claude, Copilot agent wrappers
 - `godel/intervention/` — repair / human-in-the-loop tooling
 
+## Testing new features
+
+When planning or implementing a new feature, always create a test plan alongside it. Tests should be **minimal and unequivocal** — the smallest test that can definitively confirm the feature works. Prefer a single focused assertion over a broad test suite. The goal is high signal at low cost: spend the fewest tokens possible while leaving no ambiguity about whether the feature behaves correctly.
+
+Prefer automated e2e tests under `e2e_tests/`. Fall back to a manual test plan only when e2e automation isn't practical.
+
 ## Code review
 
 Read the code review guidelines at `.agents/CODE_REVIEW.md`.
