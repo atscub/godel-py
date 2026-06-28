@@ -60,6 +60,7 @@ ignore = [
 version_toml = ["pyproject.toml:project.version"]
 version_variables = ["godel/__init__.py:__version__"]
 branch = "main"
+major_on_zero = false
 build_command = "python -m build"
 upload_to_vcs_release = true
 upload_to_pypi = false  # handled by GitHub Actions trusted publisher
