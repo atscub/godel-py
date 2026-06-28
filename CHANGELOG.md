@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v3.18.0 (2026-06-28)
+
+### Bug Fixes
+
+- Close coroutines on max_concurrency validation failure
+  ([#20](https://github.com/atscub/godel-py/pull/20),
+  [`6b39c62`](https://github.com/atscub/godel-py/commit/6b39c62a1f91f003b9f8effcb3621d39cdffb119))
+
+### Documentation
+
+- Add testing guidelines for new features
+  ([`c601c6c`](https://github.com/atscub/godel-py/commit/c601c6c683dae02ff36f4e9134d562f8cecce5c4))
+
+### Features
+
+- Add max_concurrency parameter to parallel() ([#20](https://github.com/atscub/godel-py/pull/20),
+  [`6b39c62`](https://github.com/atscub/godel-py/commit/6b39c62a1f91f003b9f8effcb3621d39cdffb119))
+
+
 ## v3.17.1 (2026-06-28)
 
 ### Bug Fixes
