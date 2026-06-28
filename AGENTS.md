@@ -15,6 +15,7 @@ godel-py/
 ├── .agents/HANDOFF.md  # Technical handoff / milestone context
 ├── .agents/CODE_REVIEW.md # PR review guidelines and severity levels
 ├── .agents/MONITORING.md # How to monitor a live workflow run efficiently
+├── .agents/TRIAGE.md   # GitHub issue triage process and labels
 ├── pyproject.toml      # Package metadata + semantic-release config
 └── .github/workflows/  # CI: tests + release on merge to main
 ```
@@ -31,6 +32,10 @@ godel-py/
 ## Code review
 
 Read the code review guidelines at `.agents/CODE_REVIEW.md`.
+
+## Issue triage
+
+Follow the triage process at `.agents/TRIAGE.md` when handling incoming GitHub issues.
 
 ## How to work on this project
 
