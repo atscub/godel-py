@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "godel-py"
-version = "0.316.6"
+version = "1.0.0"
 description = "Deterministic orchestrator for AI agent workflows"
 readme = "README.md"
 requires-python = ">=3.12"
