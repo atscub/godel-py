@@ -269,6 +269,9 @@ class TranscriptTail:
     _start_files:
         Internal: list of archive paths to replay *before* attaching to the
         live file.  Used by ``from_run()``.  Do not pass directly.
+    _start_fhs:
+        Internal: list of eagerly-opened file handles for archive replay.
+        Opened at ``from_run()`` time so rename cascades cannot affect reads.
 
     Raises
     ------
@@ -284,11 +287,13 @@ class TranscriptTail:
         poll_interval: float = 0.1,
         follow: bool = True,
         _start_files: list[Path] | None = None,
+        _start_fhs: list | None = None,
     ) -> None:
         self._run_dir = Path(run_dir)
         self._poll_interval = poll_interval
         self._follow = follow
         self._start_files: list[Path] = _start_files or []
+        self._start_fhs: list = _start_fhs or []
 
     # ------------------------------------------------------------------
     # Class-method constructors
@@ -335,11 +340,21 @@ class TranscriptTail:
         # Sort from oldest (highest N) to newest (.1); replay in write order.
         archives.sort(key=lambda t: t[0], reverse=True)
         start_files = [p for _, p in archives]
+        # Eagerly open all archive files so rename cascades during Phase 1
+        # iteration cannot cause event loss. Once the fd is open, the
+        # content is pinned to the inode regardless of subsequent renames.
+        start_fhs = []
+        for p in start_files:
+            try:
+                start_fhs.append(open(p, encoding="utf-8"))
+            except FileNotFoundError:
+                pass
         return cls(
             run_dir,
             poll_interval=poll_interval,
             follow=follow,
             _start_files=start_files,
+            _start_fhs=start_fhs,
         )
 
     # ------------------------------------------------------------------
@@ -398,25 +413,28 @@ class TranscriptTail:
         a concurrent rotation cascade), this method returns without yielding
         any events.  The caller's gap-fill loop should rescan.
         """
-        buf = ""
         try:
             fh = open(path, encoding="utf-8")
         except FileNotFoundError:
             return
         try:
-            for raw_line in fh:
-                evts, buf = self._parse_lines(buf, raw_line)
-                yield from evts
-            # Flush any remaining buffer (should be empty for well-formed files)
-            if buf.strip():
-                try:
-                    obj = json.loads(buf.strip())
-                    if "event" in obj:
-                        yield obj["event"]
-                except json.JSONDecodeError:
-                    pass
+            yield from self._read_fh(fh)
         finally:
             fh.close()
+
+    def _read_fh(self, fh) -> Generator[dict, None, None]:
+        """Yield all events from an already-open file handle."""
+        buf = ""
+        for raw_line in fh:
+            evts, buf = self._parse_lines(buf, raw_line)
+            yield from evts
+        if buf.strip():
+            try:
+                obj = json.loads(buf.strip())
+                if "event" in obj:
+                    yield obj["event"]
+            except json.JSONDecodeError:
+                pass
 
     def _initial_wait_for_current(self) -> Path:
         """Wait for ``transcript.jsonl`` to appear at startup.
@@ -731,15 +749,28 @@ class TranscriptTail:
         last_emitted_seq: int = -1
 
         # Phase 1: replay pre-existing archive files in write order.
-        # _start_files is populated by from_run(); for direct construction
-        # it is empty, but we still scan for archives below (Phase 1b).
-        for archive_path in self._start_files:
-            for evt in self._read_archive(archive_path):
-                yield evt
-                if evt.get("op") != "rotate":
-                    seq = evt.get("seq")
-                    if isinstance(seq, int):
-                        last_emitted_seq = seq
+        # Prefer eagerly-opened file handles (_start_fhs) over lazy path
+        # opens — handles are immune to writer rename cascades.
+        if self._start_fhs:
+            for fh in self._start_fhs:
+                try:
+                    for evt in self._read_fh(fh):
+                        yield evt
+                        if evt.get("op") != "rotate":
+                            seq = evt.get("seq")
+                            if isinstance(seq, int):
+                                last_emitted_seq = seq
+                finally:
+                    fh.close()
+            self._start_fhs = []
+        else:
+            for archive_path in self._start_files:
+                for evt in self._read_archive(archive_path):
+                    yield evt
+                    if evt.get("op") != "rotate":
+                        seq = evt.get("seq")
+                        if isinstance(seq, int):
+                            last_emitted_seq = seq
 
         # Phase 2: tail the live transcript.jsonl by inode.
         # _initial_wait_for_current confirms the file exists, but there is a
