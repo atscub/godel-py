@@ -763,7 +763,7 @@ def step(fn=None, *, name=None, idempotent=False, capture_stdout: bool = False, 
     return decorator(fn) if fn is not None else decorator
 
 
-async def parallel(*aws: Awaitable[T]) -> tuple:
+async def parallel(*aws: Awaitable[T], max_concurrency: int | None = None) -> tuple:
     """Run awaitables concurrently inside a workflow, emitting FORK/JOIN events.
 
     Each awaitable runs in an isolated WorkflowContext copy so that concurrent
@@ -771,6 +771,15 @@ async def parallel(*aws: Awaitable[T]) -> tuple:
     await-point interleaving.  Results are gathered via ``asyncio.gather`` with
     ``return_exceptions=True`` so every branch runs to completion regardless of
     whether siblings raise.
+
+    Args:
+        *aws: Awaitables (coroutines / ``_StepCoroutine`` objects) to run
+            concurrently.
+        max_concurrency: Optional upper bound on the number of branches that
+            execute simultaneously.  When set, an ``asyncio.Semaphore`` gates
+            branch starts so that at most *max_concurrency* branches are active
+            at any time.  ``None`` (the default) means unlimited — all branches
+            run at once, preserving the original behaviour.
 
     Re-raise behaviour
     ------------------
@@ -797,6 +806,8 @@ async def parallel(*aws: Awaitable[T]) -> tuple:
             underlying ``@step`` function was decorated with
             ``capture_stdout=True``.  Parallel-safe per-step stdout capture is
             not supported; each branch would require its own pipe.
+        ConfigError: If *max_concurrency* is not ``None`` or a positive
+            integer.
     """
     from godel._exceptions import ConfigError
 
@@ -823,10 +834,40 @@ async def parallel(*aws: Awaitable[T]) -> tuple:
             "Use capture_stdout on the enclosing @workflow instead."
         )
 
+    if max_concurrency is not None:
+        if isinstance(max_concurrency, bool) or not isinstance(max_concurrency, int):
+            for aw in aws:
+                try:
+                    aw.close()
+                except Exception:
+                    pass
+            raise ConfigError(
+                f"parallel() max_concurrency must be a positive integer or None, "
+                f"got {type(max_concurrency).__name__}"
+            )
+        if max_concurrency < 1:
+            for aw in aws:
+                try:
+                    aw.close()
+                except Exception:
+                    pass
+            raise ConfigError(
+                f"parallel() max_concurrency must be >= 1, got {max_concurrency}"
+            )
+
     ctx = _current_workflow.get()
 
     if not ctx or not ctx.event_log:
-        results = await asyncio.gather(*aws)
+        if max_concurrency is not None:
+            sem = asyncio.Semaphore(max_concurrency)
+
+            async def _throttled(aw):
+                async with sem:
+                    return await aw
+
+            results = await asyncio.gather(*[_throttled(aw) for aw in aws])
+        else:
+            results = await asyncio.gather(*aws)
         return tuple(results)
 
     # Track FORK invocation count for replay positioning
@@ -843,10 +884,13 @@ async def parallel(*aws: Awaitable[T]) -> tuple:
     parent_eid = ctx.current_parent_event_id
 
     # Emit FORK
+    fork_request = {"branches": len(aws)}
+    if max_concurrency is not None:
+        fork_request["max_concurrency"] = max_concurrency
     fork_event = ctx.event_log.emit_started(
         op="FORK",
         step_path=step_path,
-        request={"branches": len(aws)},
+        request=fork_request,
         invocation_seq=fork_inv,
         parent_event_id=parent_eid,
     )
@@ -886,9 +930,20 @@ async def parallel(*aws: Awaitable[T]) -> tuple:
     # automatically inherited from the fork point without explicit copy_context.
     # If future changes move branch execution to a thread pool, use
     # `ctx = contextvars.copy_context(); pool.submit(ctx.run, fn, ...)` instead.
-    results = await asyncio.gather(
-        *[_run_branch(aw) for aw in aws], return_exceptions=True
-    )
+    if max_concurrency is not None:
+        sem = asyncio.Semaphore(max_concurrency)
+
+        async def _throttled_branch(coro):
+            async with sem:
+                return await _run_branch(coro)
+
+        results = await asyncio.gather(
+            *[_throttled_branch(aw) for aw in aws], return_exceptions=True
+        )
+    else:
+        results = await asyncio.gather(
+            *[_run_branch(aw) for aw in aws], return_exceptions=True
+        )
 
     # Pop FORK scope before emitting JOIN
     ctx.pop_event_scope()

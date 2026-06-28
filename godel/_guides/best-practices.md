@@ -267,6 +267,10 @@ async def repo_ctx() -> RepoCtx:
 - **`parallel()` for independent branches.** Two agent calls that don't depend
   on each other should run concurrently. See `parallel()` usage in
   [`examples/feature_factory.py`](../examples/feature_factory.py).
+- **`max_concurrency` for high-fan-out.** When fanning out to many branches
+  (e.g. classifying hundreds of items), use
+  `parallel(*tasks, max_concurrency=10)` to avoid overwhelming system resources
+  or hitting API rate limits.
 - **Idempotent marking.** Three levels of opt-in idempotency let resume
   re-execute a STARTED-only operation instead of raising `UnsafeResumeError`:
 

@@ -87,9 +87,13 @@ Audited async subprocess. Returns `CommandResult(returncode, stdout, stderr)`. R
   avoid shell interpretation of prompts containing metacharacters.
 - `idempotent` — when `True`, a `STARTED`-only event on resume is safe to re-execute.
 
-### `parallel(*awaitables) -> tuple`
+### `parallel(*awaitables, max_concurrency=None) -> tuple`
 Awaits coroutines concurrently (variadic args). Emits one `FORK` and one
 `JOIN` event bracketing the group.
+
+- `max_concurrency` — optional `int`. When set, at most this many branches
+  execute simultaneously (internally uses an `asyncio.Semaphore`). `None`
+  (default) means unlimited — all branches run at once.
 
 ### `retry(n)(fn)` or `@retry(n)`
 Decorator that retries on `WorkflowFail` up to `n` times. Each attempt is recorded; only
