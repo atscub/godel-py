@@ -189,20 +189,22 @@ class ContextOverflowError(CommandFailure):
 
     Inherits from :class:`CommandFailure` so that ``except CommandFailure``
     catches it generically, while ``except ContextOverflowError`` allows
-    targeted handling::
+    targeted handling.
 
-        try:
-            result = await agent("classify this item")
-        except ContextOverflowError:
-            await agent.compact()        # reduce context, retry
-            result = await agent("classify this item")
-
-    Or create a fresh agent::
+    Create a fresh agent to recover::
 
         try:
             result = await agent("classify this item")
         except ContextOverflowError:
             agent = claude_code(model="sonnet")
+            result = await agent("classify this item")
+
+    When ``compact()`` is implemented, it will offer in-place recovery::
+
+        try:
+            result = await agent("classify this item")
+        except ContextOverflowError:
+            await agent.compact()
             result = await agent("classify this item")
 
     Attributes:

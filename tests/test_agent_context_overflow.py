@@ -109,7 +109,7 @@ def test_overflow_raises_context_overflow_error():
             agent._session_id = "old-session"
             with pytest.raises(ContextOverflowError) as exc_info:
                 await agent("test prompt")
-            assert exc_info.value.model == "sonnet"
+            assert exc_info.value.model == "claude-sonnet-4-6"
             assert exc_info.value.session_id == "old-session"
             assert exc_info.value.__cause__ is not None
 

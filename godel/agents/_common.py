@@ -561,7 +561,7 @@ class _BaseAgent:
             if self._is_context_overflow(exc):
                 raise ContextOverflowError(
                     str(exc),
-                    model=self._model,
+                    model=model_id,
                     session_id=self._session_id,
                     stdout=exc.stdout,
                     stderr=exc.stderr,

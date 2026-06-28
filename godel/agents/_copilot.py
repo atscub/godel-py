@@ -56,7 +56,7 @@ class _CopilotAgent(_BaseAgent):
         "context window",
         "context length",
         "token limit",
-        "max_tokens",
+        "max_tokens exceeded",
         "maximum context",
         "conversation is too long",
         "prompt is too long",
