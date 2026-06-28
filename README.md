@@ -7,6 +7,8 @@
 [![Python 3.12+](https://img.shields.io/pypi/pyversions/godel-py)](https://pypi.org/project/godel-py/)
 [![Tests](https://img.shields.io/badge/tests-1276_passing-brightgreen)](#)
 
+> **Pre-stable software.** The API may change between minor versions without deprecation warnings. Pin your dependency to a specific version if you use Godel in production.
+
 ## The problem
 
 Most agent frameworks bury orchestration inside the LLM. The agent decides what step comes next by re-reading a plan, occasionally getting it wrong. State survives by luck. When something crashes three agents deep, you start over.

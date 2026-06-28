@@ -37,6 +37,7 @@ Read the code review guidelines at `.agents/CODE_REVIEW.md`.
 - Python 3.12+; `pip install -e ".[dev]"` for dev setup.
 - `pytest` for tests; keep the suite green before pushing.
 - Conventional commits are required — version bumps and releases are automated.
+- **Never use `feat!:` or `BREAKING CHANGE` in commits or PRs.** The library is pre-stable and major version bumps are blocked in CI. Breaking changes should use `feat:` (minor bump) instead.
 - Use `bd` (beads) for task tracking. See `AGENTS.md`.
 
 ## Updating docs

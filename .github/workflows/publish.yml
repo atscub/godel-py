@@ -46,14 +46,26 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          OUTPUT=$(semantic-release version 2>&1) || true
+          CURRENT=$(python -c "import godel; print(godel.__version__)")
+          CURRENT_MAJOR=${CURRENT%%.*}
+
+          OUTPUT=$(semantic-release version --print 2>&1) || true
           echo "$OUTPUT"
+
           if echo "$OUTPUT" | grep -q "No release will be made"; then
             echo "released=false" >> "$GITHUB_OUTPUT"
-          else
-            semantic-release publish
-            echo "released=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+
+          NEXT_MAJOR=${OUTPUT%%.*}
+          if [ "$NEXT_MAJOR" != "$CURRENT_MAJOR" ]; then
+            echo "::error::Major version bump blocked ($CURRENT -> $OUTPUT). This library is pre-stable."
+            exit 1
+          fi
+
+          semantic-release version
+          semantic-release publish
+          echo "released=true" >> "$GITHUB_OUTPUT"
 
   pypi:
     needs: release

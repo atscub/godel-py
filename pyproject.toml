@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "godel-py"
-version = "1.0.0"
+version = "3.16.7"
 description = "Deterministic orchestrator for AI agent workflows"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -60,7 +60,6 @@ ignore = [
 version_toml = ["pyproject.toml:project.version"]
 version_variables = ["godel/__init__.py:__version__"]
 branch = "main"
-major_on_zero = false
 build_command = "python -m build"
 upload_to_vcs_release = true
 upload_to_pypi = false  # handled by GitHub Actions trusted publisher
