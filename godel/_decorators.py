@@ -17,7 +17,7 @@ from godel._context import (
     _current_transcript,
     _step_idempotent,
 )
-from godel._exceptions import PauseSignal, RewindSignal
+from godel._exceptions import PauseSignal, RewindSignal, WorkflowFail
 
 T = TypeVar("T")
 
@@ -85,8 +85,7 @@ def _user_source_location(tb_frames: traceback.StackSummary) -> str:
     return f"{last.filename}:{last.lineno}"
 
 
-class WorkflowFail(Exception):
-    pass
+__all__ = ["workflow", "step", "WorkflowFail", "parallel", "retry"]
 
 
 def workflow(

@@ -34,6 +34,15 @@ class StrictViolation:
 
 
 # ---------------------------------------------------------------------------
+# WorkflowFail — base for workflow-level failures.
+# Canonical home; re-exported from _decorators for backward compatibility.
+# ---------------------------------------------------------------------------
+
+class WorkflowFail(Exception):
+    pass
+
+
+# ---------------------------------------------------------------------------
 # Internal control-flow signals — NOT user-facing errors.
 # These are raised and caught by godel internals to drive workflow state
 # transitions (rewind, pause).  They remain plain Exception subclasses so
@@ -123,6 +132,115 @@ def _render_context_marker(
         return ""
     return "[godel:" + ", ".join(parts) + "]"
 
+
+# ---------------------------------------------------------------------------
+# CommandFailure hierarchy — WorkflowFail subclasses for CLI failures.
+# Canonical home; re-exported from _run for backward compatibility.
+# ---------------------------------------------------------------------------
+
+class CommandFailure(WorkflowFail):
+    """Raised when a ``run()`` call exits with a non-zero return code or times out.
+
+    Inherits from :class:`WorkflowFail` so that the ``@workflow`` decorator
+    catches it as a recognised workflow-level failure.  Also carries the same
+    structured context fields as :class:`GodelError`
+    (``step_path``, ``source_location``, ``remediation_hint``) and reuses its
+    ``_context_marker`` / ``__str__`` logic via a shared helper.
+
+    .. note::
+        ``CommandFailure`` is intentionally **not** a subclass of
+        :class:`GodelError` — it lives in the ``WorkflowFail`` hierarchy so
+        that callers catching either branch work correctly.  The structured
+        context is provided by delegating to :func:`_render_context_marker`.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        stdout: str = "",
+        stderr: str = "",
+        returncode: int | None = None,
+        step_path: tuple[str, ...] = (),
+        source_location: str = "",
+        remediation_hint: str = "",
+    ):
+        super().__init__(message)
+        self.stdout = stdout
+        self.stderr = stderr
+        self.returncode = returncode
+        self.step_path = step_path
+        self.source_location = source_location
+        self.remediation_hint = remediation_hint
+
+    def _context_marker(self) -> str:
+        return _render_context_marker(self.step_path, self.source_location, self.remediation_hint)
+
+    def __str__(self) -> str:
+        base = super().__str__()
+        marker = self._context_marker()
+        if marker:
+            return f"{base} {marker}" if base else marker
+        return base
+
+
+class ContextOverflowError(CommandFailure):
+    """Raised when an agent's CLI session exceeds the model's context window.
+
+    Inherits from :class:`CommandFailure` so that ``except CommandFailure``
+    catches it generically, while ``except ContextOverflowError`` allows
+    targeted handling.
+
+    Create a fresh agent to recover::
+
+        try:
+            result = await agent("classify this item")
+        except ContextOverflowError:
+            agent = claude_code(model="sonnet")
+            result = await agent("classify this item")
+
+    When ``compact()`` is implemented, it will offer in-place recovery::
+
+        try:
+            result = await agent("classify this item")
+        except ContextOverflowError:
+            await agent.compact()
+            result = await agent("classify this item")
+
+    Attributes:
+        model: The model that hit the limit.
+        session_id: The session that overflowed (if available).
+    """
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        model: str = "",
+        session_id: str | None = None,
+        stdout: str = "",
+        stderr: str = "",
+        returncode: int | None = None,
+        step_path: tuple[str, ...] = (),
+        source_location: str = "",
+        remediation_hint: str = "",
+    ):
+        super().__init__(
+            message,
+            stdout=stdout,
+            stderr=stderr,
+            returncode=returncode,
+            step_path=step_path,
+            source_location=source_location,
+            remediation_hint=remediation_hint,
+        )
+        self.model = model
+        self.session_id = session_id
+
+
+# ---------------------------------------------------------------------------
+# GodelError — base for ALL structured godel errors.
+# ---------------------------------------------------------------------------
 
 class _GodelErrorKwargs(TypedDict, total=False):
     """Keyword arguments shared by all :class:`GodelError` subclasses.

@@ -20,7 +20,7 @@ def version() -> str:
 
 
 from godel._decorators import workflow, step, WorkflowFail, parallel, retry
-from godel._run import run, CommandResult, CommandFailure
+from godel._run import run, CommandResult, CommandFailure, ContextOverflowError
 from godel.io import print, input, sleep, read_text, write_text
 from godel._events import Event, EventStatus
 from godel._event_log import EventLog
@@ -58,6 +58,7 @@ __all__ = [
     "run",
     "CommandResult",
     "CommandFailure",
+    "ContextOverflowError",
     "print",
     "input",
     "sleep",

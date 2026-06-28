@@ -7,7 +7,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 echo "=== Step 1: Run the workflow ==="
-RUN_OUTPUT=$(python -m godel run examples/rewind_idempotent_demo.py 2>&1)
+RUN_OUTPUT=$(python -m godel run e2e_tests/rewind_idempotent_demo.py 2>&1)
 RUN_ID=$(echo "$RUN_OUTPUT" | grep -oP '(?<=run )[0-9a-f-]+')
 echo "Run ID: $RUN_ID"
 echo "$RUN_OUTPUT"

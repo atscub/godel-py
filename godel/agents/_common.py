@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Type, TypeVar, overload
 from pydantic import BaseModel, ValidationError
 
 from godel._decorators import WorkflowFail
+from godel._exceptions import CommandFailure, ContextOverflowError
 from godel._run import run
 
 if TYPE_CHECKING:
@@ -556,6 +557,22 @@ class _BaseAgent:
 
         try:
             result = await run(cmd, cwd=self._cwd)
+        except CommandFailure as exc:
+            if self._is_context_overflow(exc):
+                raise ContextOverflowError(
+                    str(exc),
+                    model=model_id,
+                    session_id=self._session_id,
+                    stdout=exc.stdout,
+                    stderr=exc.stderr,
+                    returncode=exc.returncode,
+                    step_path=exc.step_path,
+                    remediation_hint=(
+                        "Catch ContextOverflowError and call agent.compact() "
+                        "to reduce context, or create a fresh agent instance."
+                    ),
+                ) from exc
+            raise
         finally:
             if sink is not None and observer_token is not None:
                 _line_observer.reset(observer_token)
@@ -611,6 +628,34 @@ class _BaseAgent:
         corresponding adapter (e.g. ``ClaudeAdapter`` or ``CopilotAdapter``).
         """
         raise NotImplementedError
+
+    def _is_context_overflow(self, error: "CommandFailure") -> bool:
+        """Return True if the CLI error indicates a context window overflow.
+
+        Subclasses override to inspect CLI-specific error signals (stderr,
+        stdout, returncode).  The base returns False — unknown CLIs get no
+        overflow detection.
+        """
+        return False
+
+    async def compact(self) -> None:
+        """Reduce the agent's conversation context to fit within limits.
+
+        Subclasses override with CLI-specific compaction (e.g. starting a
+        fresh session with a summary of prior context).  The base raises
+        NotImplementedError.
+
+        Typical usage after catching :class:`ContextOverflowError`::
+
+            try:
+                result = await agent(prompt)
+            except ContextOverflowError:
+                await agent.compact()
+                result = await agent(prompt)
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement compact()"
+        )
 
     def _parse_output(self, stdout: str) -> tuple[str, str | None]:
         """Extract assistant text and session id from CLI stdout.
