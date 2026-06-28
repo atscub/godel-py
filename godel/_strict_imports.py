@@ -2,27 +2,42 @@
 from __future__ import annotations
 
 import importlib.abc
+import importlib.machinery
 import sys
 
 from godel._strict_ast import BANNED_MODULES
 
 
 class _GodelImportBlocker(importlib.abc.MetaPathFinder):
-    """Blocks import of banned modules at runtime."""
+    """Blocks import of banned modules at runtime.
 
-    def find_module(self, fullname: str, path=None):
+    Uses find_spec (PEP 451) instead of the deprecated find_module/load_module
+    pair, which Python 3.12+ silently ignores.
+    """
+
+    def find_spec(self, fullname: str, path=None, target=None):
         top_level = fullname.split(".")[0]
         if fullname in BANNED_MODULES or top_level in BANNED_MODULES:
-            return self
+            return importlib.machinery.ModuleSpec(fullname, _BlockingLoader(fullname))
         return None
 
-    def load_module(self, fullname: str):
+
+class _BlockingLoader(importlib.abc.Loader):
+    """Loader that raises GodelStrictError instead of loading the module."""
+
+    def __init__(self, fullname: str):
+        self._fullname = fullname
+
+    def create_module(self, spec):
+        return None
+
+    def exec_module(self, module):
         from godel._exceptions import GodelStrictError, StrictViolation
         raise GodelStrictError(violations=[
             StrictViolation(
                 file="<runtime>",
                 line=0, col=0,
-                message=f"banned module import at runtime: {fullname}",
+                message=f"banned module import at runtime: {self._fullname}",
                 layer="import",
             )
         ])
