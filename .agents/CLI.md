@@ -154,7 +154,7 @@ See [resume](#godel-resume-run_id-file) above.
 Rewind a workflow run to a previous checkpoint.
 
 ```
-godel rewind RUN_ID --to EVENT_ID[,EVENT_ID,...] [--reason TEXT]
+godel rewind RUN_ID --to EVENT_ID[,EVENT_ID,...] [--reason TEXT] [--assume-idempotent]
 ```
 
 ---

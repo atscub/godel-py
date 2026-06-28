@@ -223,7 +223,8 @@ def _build_fork_branch_members(event_log: EventLog) -> dict[str, set[str]]:
 
 
 def apply_rewind(
-    event_log: EventLog, target_ids: list[str], reason: str = ""
+    event_log: EventLog, target_ids: list[str], reason: str = "",
+    *, assume_idempotent: bool = False,
 ) -> dict:
     """Apply a graph-cut: clear children_ids on targets and cascade-invalidate descendants.
 
@@ -234,6 +235,7 @@ def apply_rewind(
         event_log: The EventLog to operate on.
         target_ids: Event IDs to rewind to. Their children are invalidated.
         reason: Human-readable reason for the rewind.
+        assume_idempotent: If True, skip the non-idempotent run() safety check.
 
     Returns:
         dict with keys:
@@ -245,7 +247,8 @@ def apply_rewind(
             this field to distinguish a fully-no-op call from a partial one.
 
     Raises:
-        RewindUnsafe: If any non-idempotent run() would be invalidated.
+        RewindUnsafe: If any non-idempotent run() would be invalidated
+            (suppressed when ``assume_idempotent=True``).
         ValueError: If target_ids is empty, or a target event_id does not exist
             in the event log.
 
@@ -269,7 +272,8 @@ def apply_rewind(
             "Provide at least one target event_id."
         )
 
-    _check_rewind_safety(event_log, target_ids)
+    if not assume_idempotent:
+        _check_rewind_safety(event_log, target_ids)
 
     # Snapshot FORK branch memberships before any graph mutation (see docstring).
     fork_branch_members = _build_fork_branch_members(event_log)

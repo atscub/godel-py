@@ -421,3 +421,64 @@ def test_full_rewind_path_emits_intent_and_outcome_phases(tmp_path, monkeypatch)
         f"Expected a phase='outcome' REWIND event from apply_rewind(); "
         f"got phases: {phases}"
     )
+
+
+# ---------------------------------------------------------------------------
+# assume_idempotent=True bypasses safety check
+# ---------------------------------------------------------------------------
+
+def test_assume_idempotent_bypasses_safety_check(tmp_path):
+    """apply_rewind(..., assume_idempotent=True) skips the non-idempotent guard."""
+    log = EventLog("test-assume-idempotent", runs_dir=str(tmp_path))
+
+    a = log.emit_started(op="step.enter", step_path=("s",), request={})
+    log.emit_finished(a.event_id, response={})
+
+    b = log.emit_started(
+        op="run",
+        step_path=("s",),
+        request={"cmd": "rm -rf /tmp/x", "idempotent": False},
+        parent_event_id=a.event_id,
+    )
+    log.emit_finished(b.event_id, response={"stdout": ""})
+
+    # Without assume_idempotent: raises RewindUnsafe
+    with pytest.raises(RewindUnsafe):
+        apply_rewind(log, [a.event_id], "should fail")
+
+    # Graph must be untouched after the refused rewind
+    a_after = log.get_event(a.event_id)
+    assert b.event_id in a_after.children_ids
+
+    # With assume_idempotent=True: succeeds
+    result = apply_rewind(log, [a.event_id], "forced", assume_idempotent=True)
+    assert result["invalidated_count"] >= 1
+    assert b.event_id in result["invalidated_ids"]
+
+    log.close()
+
+
+def test_assume_idempotent_with_missing_idempotent_key(tmp_path):
+    """run() with no idempotent key is bypassed by assume_idempotent=True."""
+    log = EventLog("test-assume-no-key", runs_dir=str(tmp_path))
+
+    a = log.emit_started(op="step.enter", step_path=("s",), request={})
+    log.emit_finished(a.event_id, response={})
+
+    b = log.emit_started(
+        op="run",
+        step_path=("s",),
+        request={"cmd": "make deploy"},  # no idempotent key
+        parent_event_id=a.event_id,
+    )
+    log.emit_finished(b.event_id, response={})
+
+    # Without flag: refused
+    with pytest.raises(RewindUnsafe):
+        apply_rewind(log, [a.event_id], "should fail")
+
+    # With flag: succeeds
+    result = apply_rewind(log, [a.event_id], "forced", assume_idempotent=True)
+    assert result["invalidated_count"] >= 1
+
+    log.close()
