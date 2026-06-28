@@ -1,13 +1,12 @@
 """Tests for agent context overflow detection, ContextOverflowError, and compact()."""
 import asyncio
-import json
 from unittest.mock import patch
 
 import pytest
 
 from godel.agents._claude import claude_code, _ClaudeCodeAgent
 from godel.agents._copilot import copilot, _CopilotAgent
-from godel._run import CommandResult, CommandFailure, ContextOverflowError
+from godel._run import CommandFailure, ContextOverflowError
 from godel._decorators import workflow
 
 
@@ -165,84 +164,21 @@ def test_overflow_without_session_still_raises():
 # compact()
 # ---------------------------------------------------------------------------
 
-def test_compact_clears_session():
-    """compact() resets session state so the next call starts fresh."""
+def test_compact_not_implemented_on_claude():
+    """compact() is not yet implemented — raises NotImplementedError."""
     @workflow
     async def wf():
         agent = claude_code()
-        agent._session_id = "old-session"
-        agent._system_prompt_sent = True
-        await agent.compact()
-        assert agent._session_id is None
-        assert agent._system_prompt_sent is False
+        with pytest.raises(NotImplementedError, match="does not implement compact"):
+            await agent.compact()
 
     asyncio.run(wf())
 
 
-def test_compact_then_retry_succeeds():
-    """Full pattern: catch overflow, compact, retry with fresh session."""
-    call_count = 0
-
-    async def fake_run(cmd, *, cwd=None, timeout=None, idempotent=False):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            raise CommandFailure(
-                "overflow",
-                stderr="prompt is too long",
-                stdout="",
-                returncode=1,
-            )
-        assert "--resume" not in cmd
-        return CommandResult(
-            stdout=json.dumps({"result": "recovered", "session_id": "new-session"}),
-            stderr="",
-            returncode=0,
-        )
-
-    @workflow
-    async def wf():
-        with patch("godel.agents._common.run", new=fake_run):
-            agent = claude_code()
-            agent._session_id = "old-session"
-            try:
-                await agent("test prompt")
-            except ContextOverflowError:
-                await agent.compact()
-                result = await agent("test prompt")
-            assert result == "recovered"
-            assert agent._session_id == "new-session"
-            assert call_count == 2
-
-    asyncio.run(wf())
-
-
-def test_copilot_compact_clears_session():
+def test_compact_not_implemented_on_copilot():
     @workflow
     async def wf():
         agent = copilot()
-        agent._session_id = "old-session"
-        agent._system_prompt_sent = True
-        await agent.compact()
-        assert agent._session_id is None
-        assert agent._system_prompt_sent is False
-
-    asyncio.run(wf())
-
-
-def test_base_agent_compact_raises():
-    """Base _BaseAgent.compact() raises NotImplementedError."""
-    from godel.agents._common import _BaseAgent
-
-    class _BareAgent(_BaseAgent):
-        _model_aliases = {}
-        _extraction_model = ""
-        def _build_command(self, *a, **kw): raise NotImplementedError
-        def _make_adapter(self): raise NotImplementedError
-
-    @workflow
-    async def wf():
-        agent = _BareAgent(model="x", cwd=None, tools=None, skip_permissions=False)
         with pytest.raises(NotImplementedError, match="does not implement compact"):
             await agent.compact()
 

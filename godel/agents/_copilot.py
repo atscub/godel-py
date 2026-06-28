@@ -67,10 +67,6 @@ class _CopilotAgent(_BaseAgent):
         combined = f"{error.stderr} {error.stdout}".lower()
         return any(p in combined for p in self._CONTEXT_OVERFLOW_PATTERNS)
 
-    async def compact(self) -> None:
-        self._session_id = None
-        self._system_prompt_sent = False
-
     def _build_command(
         self,
         prompt: str,
