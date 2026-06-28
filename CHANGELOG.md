@@ -2,6 +2,41 @@
 
 <!-- version list -->
 
+## v3.17.1 (2026-06-28)
+
+### Bug Fixes
+
+- Address review findings — docstring, max_tokens pattern, model attribution
+  ([#17](https://github.com/atscub/godel-py/pull/17),
+  [`f802ac3`](https://github.com/atscub/godel-py/commit/f802ac3e6d9a3af18bba0471b0b971748595abaf))
+
+- Auto-recover from agent context overflow ([#17](https://github.com/atscub/godel-py/pull/17),
+  [`f802ac3`](https://github.com/atscub/godel-py/commit/f802ac3e6d9a3af18bba0471b0b971748595abaf))
+
+- Auto-recover from agent context overflow with fresh session retry
+  ([#17](https://github.com/atscub/godel-py/pull/17),
+  [`f802ac3`](https://github.com/atscub/godel-py/commit/f802ac3e6d9a3af18bba0471b0b971748595abaf))
+
+- Leave compact() unimplemented until proper compaction is designed
+  ([#17](https://github.com/atscub/godel-py/pull/17),
+  [`f802ac3`](https://github.com/atscub/godel-py/commit/f802ac3e6d9a3af18bba0471b0b971748595abaf))
+
+- Raise ContextOverflowError on agent context overflow, add compact()
+  ([#17](https://github.com/atscub/godel-py/pull/17),
+  [`f802ac3`](https://github.com/atscub/godel-py/commit/f802ac3e6d9a3af18bba0471b0b971748595abaf))
+
+### Chores
+
+- Add lint+test-before-push rule, export ContextOverflowError
+  ([#17](https://github.com/atscub/godel-py/pull/17),
+  [`f802ac3`](https://github.com/atscub/godel-py/commit/f802ac3e6d9a3af18bba0471b0b971748595abaf))
+
+### Refactoring
+
+- Move e2e tests from examples/ to e2e_tests/ ([#17](https://github.com/atscub/godel-py/pull/17),
+  [`f802ac3`](https://github.com/atscub/godel-py/commit/f802ac3e6d9a3af18bba0471b0b971748595abaf))
+
+
 ## v3.17.0 (2026-06-28)
 
 ### Bug Fixes
