@@ -266,3 +266,41 @@ def test_rewind_shows_run_id_in_output(tmp_path):
     assert result.returncode == 0
     # The full run_id should appear somewhere in stdout or stderr
     assert run_id in result.stdout or run_id in result.stderr
+
+
+def test_rewind_assume_idempotent_bypasses_safety(tmp_path):
+    """--assume-idempotent allows rewinding past non-idempotent run() events."""
+    run_id = _create_non_idempotent_run(tmp_path)
+
+    # Without flag: refused
+    result = _run_godel(
+        ["rewind", run_id, "--to", "evt-start"],
+        cwd=str(tmp_path),
+    )
+    assert result.returncode != 0
+
+    # Re-create the run (previous rewind failed so log is untouched, but
+    # re-create to be safe with a fresh file)
+    run_id = _create_non_idempotent_run(tmp_path)
+
+    # With flag: succeeds
+    result = _run_godel(
+        ["rewind", run_id, "--to", "evt-start", "--assume-idempotent"],
+        cwd=str(tmp_path),
+    )
+    assert result.returncode == 0, (
+        f"Expected exit 0 with --assume-idempotent\nstderr: {result.stderr}"
+    )
+    assert "warning" in result.stderr.lower()
+    assert "invalidated" in result.stderr.lower()
+
+
+def test_rewind_assume_idempotent_suggests_resume_with_flag(tmp_path):
+    """When --assume-idempotent is used, the resume hint includes the flag."""
+    run_id = _create_non_idempotent_run(tmp_path)
+    result = _run_godel(
+        ["rewind", run_id, "--to", "evt-start", "--assume-idempotent"],
+        cwd=str(tmp_path),
+    )
+    assert result.returncode == 0
+    assert "--assume-idempotent" in result.stderr

@@ -223,7 +223,8 @@ def _build_fork_branch_members(event_log: EventLog) -> dict[str, set[str]]:
 
 
 def apply_rewind(
-    event_log: EventLog, target_ids: list[str], reason: str = ""
+    event_log: EventLog, target_ids: list[str], reason: str = "",
+    *, assume_idempotent: bool = False,
 ) -> dict:
     """Apply a graph-cut: clear children_ids on targets and cascade-invalidate descendants.
 
@@ -269,7 +270,8 @@ def apply_rewind(
             "Provide at least one target event_id."
         )
 
-    _check_rewind_safety(event_log, target_ids)
+    if not assume_idempotent:
+        _check_rewind_safety(event_log, target_ids)
 
     # Snapshot FORK branch memberships before any graph mutation (see docstring).
     fork_branch_members = _build_fork_branch_members(event_log)

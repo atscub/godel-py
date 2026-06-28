@@ -121,12 +121,14 @@ and exits cleanly.
 Invalidate one or more events and all their descendants so a subsequent `resume` will
 re-execute from those points.
 
-| Flag              | Purpose                                     |
-|-------------------|---------------------------------------------|
-| `--reason TEXT`   | Annotation recorded on the rewind event.    |
+| Flag                    | Purpose                                                       |
+|-------------------------|---------------------------------------------------------------|
+| `--reason TEXT`         | Annotation recorded on the rewind event.                      |
+| `--assume-idempotent`   | Bypass the non-idempotent `run()` safety check.               |
 
 Exit `2` if the rewind would be unsafe (e.g. invalidating a subprocess that has no
-recorded inverse).
+recorded inverse). Use `--assume-idempotent` to bypass this check when you are certain
+the operations had no irreversible side effects.
 
 ### `godel repair RUN_ID`
 Launch an **intervention agent** against a `PAUSED` or `FAILED` run. The agent can

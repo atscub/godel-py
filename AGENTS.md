@@ -43,6 +43,7 @@ Follow the triage process at `.agents/TRIAGE.md` when handling incoming GitHub i
 - `pytest` for tests; keep the suite green before pushing.
 - Conventional commits are required — version bumps and releases are automated.
 - **Never use `feat!:` or `BREAKING CHANGE` in commits or PRs.** The library is pre-stable and major version bumps are blocked in CI. Breaking changes should use `feat:` (minor bump) instead.
+- **Never commit directly to `main`.** Always create a feature branch and open a PR. The only exception is if the user explicitly asks to commit to main.
 - Use `bd` (beads) for task tracking. See `AGENTS.md`.
 
 ## Updating docs

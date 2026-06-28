@@ -946,7 +946,16 @@ def pause_cmd(run_id, reason):
 @click.option("--to", "target_ids", required=True,
               help="Comma-separated event ID(s) to rewind to")
 @click.option("--reason", default="CLI rewind", help="Reason for the rewind")
-def rewind_cmd(run_id, target_ids, reason):
+@click.option(
+    "--assume-idempotent",
+    is_flag=True,
+    default=False,
+    help=(
+        "Bypass the non-idempotent run() safety check. "
+        "Use when you are certain the operations being rewound had no irreversible side effects."
+    ),
+)
+def rewind_cmd(run_id, target_ids, reason, assume_idempotent):
     """Rewind a workflow run to a previous checkpoint."""
     from godel._event_log import EventLog
     from godel._exceptions import RewindUnsafe
@@ -985,14 +994,27 @@ def rewind_cmd(run_id, target_ids, reason):
                 click.echo(f"Event ID not found: {eid}", err=True)
                 sys.exit(1)
 
-        # 5. Capture op names BEFORE apply_rewind() mutates the graph
+        # 5. Emit warning if --assume-idempotent
+        if assume_idempotent:
+            click.echo(
+                click.style(
+                    "[godel] WARNING: --assume-idempotent is set. Non-idempotent "
+                    "run()/agent() events in the rewind subtree will be invalidated "
+                    "without the usual safety check. Only use this when you are certain "
+                    "these operations had no irreversible side effects.",
+                    fg="yellow",
+                ),
+                err=True,
+            )
+
+        # 6. Capture op names BEFORE apply_rewind() mutates the graph
         op_map: dict[str, str] = {}
         for ev in event_log.all_events():
             op_map[ev.event_id] = ev.op
 
-        # 6. Apply rewind
+        # 7. Apply rewind
         try:
-            result = apply_rewind(event_log, ids, reason)
+            result = apply_rewind(event_log, ids, reason, assume_idempotent=assume_idempotent)
         except RewindUnsafe as exc:
             detail_parts = [f"Rewind failed: {exc}"]
             if exc.event_id:
@@ -1005,7 +1027,7 @@ def rewind_cmd(run_id, target_ids, reason):
             click.echo(f"Rewind failed: {exc}", err=True)
             sys.exit(1)
 
-        # 7. Print summary — all primary output goes to stderr (matches run_cmd convention)
+        # 8. Print summary — all primary output goes to stderr (matches run_cmd convention)
         click.echo(f"[godel] rewound run {full_run_id}", err=True)
         click.echo(f"[godel] invalidated {result['invalidated_count']} event(s)", err=True)
         if result.get("invalidated_ids"):
@@ -1015,7 +1037,10 @@ def rewind_cmd(run_id, target_ids, reason):
                 click.echo(f"  - {short_id} ({op})", err=True)
             if len(result["invalidated_ids"]) > 10:
                 click.echo(f"  ... and {len(result['invalidated_ids']) - 10} more", err=True)
-        click.echo(f"[godel] resume with: godel resume {full_run_id}", err=True)
+        resume_hint = f"godel resume {full_run_id}"
+        if assume_idempotent:
+            resume_hint += " --assume-idempotent"
+        click.echo(f"[godel] resume with: {resume_hint}", err=True)
     finally:
         event_log.close()
 
