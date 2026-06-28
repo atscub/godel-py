@@ -8,8 +8,7 @@ import sys
 from dataclasses import dataclass
 
 from godel._context import _privileged, _current_stream_path, _line_observer, _step_idempotent
-from godel._decorators import WorkflowFail
-from godel._exceptions import _render_context_marker
+from godel._exceptions import CommandFailure, ContextOverflowError, _render_context_marker  # noqa: F401 — CommandFailure, ContextOverflowError re-exported for public API
 
 # Read limit for asyncio.StreamReader.readuntil() — 4 MB so lines up to that
 # size are handled natively.  LimitOverrunError is caught and handled below
@@ -125,55 +124,6 @@ class CommandResult:
     stdout: str
     stderr: str
     returncode: int
-
-
-class CommandFailure(WorkflowFail):
-    """Raised when a ``run()`` call exits with a non-zero return code or times out.
-
-    Inherits from :class:`WorkflowFail` so that the ``@workflow`` decorator
-    catches it as a recognised workflow-level failure.  Also carries the same
-    structured context fields as :class:`~godel._exceptions.GodelError`
-    (``step_path``, ``source_location``, ``remediation_hint``) and reuses its
-    ``_context_marker`` / ``__str__`` logic via a shared helper imported from
-    ``_exceptions``.
-
-    .. note::
-        ``CommandFailure`` is intentionally **not** a subclass of
-        :class:`~godel._exceptions.GodelError` — it lives in the
-        ``WorkflowFail`` hierarchy so that callers catching either branch work
-        correctly.  The structured context is provided by delegating to
-        :func:`~godel._exceptions._render_context_marker`.
-    """
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        stdout: str = "",
-        stderr: str = "",
-        returncode: int | None = None,
-        step_path: tuple[str, ...] = (),
-        source_location: str = "",
-        remediation_hint: str = "",
-    ):
-        super().__init__(message)
-        self.stdout = stdout
-        self.stderr = stderr
-        self.returncode = returncode
-        self.step_path = step_path
-        self.source_location = source_location
-        self.remediation_hint = remediation_hint
-
-    def _context_marker(self) -> str:
-        # Delegate to the shared helper — keeps behaviour in sync with GodelError.
-        return _render_context_marker(self.step_path, self.source_location, self.remediation_hint)
-
-    def __str__(self) -> str:
-        base = super().__str__()
-        marker = self._context_marker()
-        if marker:
-            return f"{base} {marker}" if base else marker
-        return base
 
 
 def _cmd_display(cmd: str | list[str]) -> str:

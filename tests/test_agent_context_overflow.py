@@ -1,4 +1,4 @@
-"""Tests for agent context overflow detection and auto-recovery."""
+"""Tests for agent context overflow detection, ContextOverflowError, and compact()."""
 import asyncio
 import json
 from unittest.mock import patch
@@ -7,8 +7,41 @@ import pytest
 
 from godel.agents._claude import claude_code, _ClaudeCodeAgent
 from godel.agents._copilot import copilot, _CopilotAgent
-from godel._run import CommandResult, CommandFailure
+from godel._run import CommandResult, CommandFailure, ContextOverflowError
 from godel._decorators import workflow
+
+
+# ---------------------------------------------------------------------------
+# ContextOverflowError inheritance
+# ---------------------------------------------------------------------------
+
+def test_context_overflow_is_command_failure():
+    """ContextOverflowError is catchable as CommandFailure."""
+    err = ContextOverflowError("overflow", model="sonnet")
+    assert isinstance(err, CommandFailure)
+    assert isinstance(err, Exception)
+
+
+def test_context_overflow_caught_by_command_failure_handler():
+    """except CommandFailure catches ContextOverflowError."""
+    with pytest.raises(CommandFailure):
+        raise ContextOverflowError("overflow", model="sonnet")
+
+
+def test_context_overflow_carries_fields():
+    err = ContextOverflowError(
+        "overflow",
+        model="sonnet",
+        session_id="sess-123",
+        stdout="out",
+        stderr="err",
+        returncode=1,
+    )
+    assert err.model == "sonnet"
+    assert err.session_id == "sess-123"
+    assert err.stdout == "out"
+    assert err.stderr == "err"
+    assert err.returncode == 1
 
 
 # ---------------------------------------------------------------------------
@@ -57,27 +90,17 @@ def test_overflow_detected_in_stdout():
 
 
 # ---------------------------------------------------------------------------
-# Auto-recovery in _invoke()
+# ContextOverflowError raised by _invoke()
 # ---------------------------------------------------------------------------
 
-def test_context_overflow_triggers_fresh_session_retry():
-    """On context overflow, agent clears session and retries with a fresh one."""
-    call_count = 0
-
+def test_overflow_raises_context_overflow_error():
+    """Context overflow raises ContextOverflowError, not bare CommandFailure."""
     async def fake_run(cmd, *, cwd=None, timeout=None, idempotent=False):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            raise CommandFailure(
-                "context overflow",
-                stderr="prompt is too long",
-                stdout="",
-                returncode=1,
-            )
-        return CommandResult(
-            stdout=json.dumps({"result": "recovered", "session_id": "new-session"}),
-            stderr="",
-            returncode=0,
+        raise CommandFailure(
+            "context overflow",
+            stderr="prompt is too long",
+            stdout="",
+            returncode=1,
         )
 
     @workflow
@@ -85,16 +108,17 @@ def test_context_overflow_triggers_fresh_session_retry():
         with patch("godel.agents._common.run", new=fake_run):
             agent = claude_code()
             agent._session_id = "old-session"
-            result = await agent("test prompt")
-            assert result == "recovered"
-            assert agent._session_id == "new-session"
-            assert call_count == 2
+            with pytest.raises(ContextOverflowError) as exc_info:
+                await agent("test prompt")
+            assert exc_info.value.model == "sonnet"
+            assert exc_info.value.session_id == "old-session"
+            assert exc_info.value.__cause__ is not None
 
     asyncio.run(wf())
 
 
-def test_non_overflow_error_propagates():
-    """Non-overflow CommandFailure is not retried."""
+def test_non_overflow_error_propagates_as_command_failure():
+    """Non-overflow CommandFailure is not wrapped."""
     async def fake_run(cmd, *, cwd=None, timeout=None, idempotent=False):
         raise CommandFailure(
             "network error",
@@ -108,14 +132,15 @@ def test_non_overflow_error_propagates():
         with patch("godel.agents._common.run", new=fake_run):
             agent = claude_code()
             agent._session_id = "some-session"
-            with pytest.raises(CommandFailure, match="network error"):
+            with pytest.raises(CommandFailure) as exc_info:
                 await agent("test prompt")
+            assert not isinstance(exc_info.value, ContextOverflowError)
 
     asyncio.run(wf())
 
 
-def test_overflow_without_session_propagates():
-    """Context overflow with no active session is not retried (no session to clear)."""
+def test_overflow_without_session_still_raises():
+    """Context overflow with no active session still raises ContextOverflowError."""
     async def fake_run(cmd, *, cwd=None, timeout=None, idempotent=False):
         raise CommandFailure(
             "overflow",
@@ -129,59 +154,48 @@ def test_overflow_without_session_propagates():
         with patch("godel.agents._common.run", new=fake_run):
             agent = claude_code()
             assert agent._session_id is None
-            with pytest.raises(CommandFailure):
+            with pytest.raises(ContextOverflowError) as exc_info:
                 await agent("test prompt")
+            assert exc_info.value.session_id is None
 
     asyncio.run(wf())
 
 
-def test_system_prompt_redelivered_after_overflow_recovery():
-    """After session reset, system prompt is re-sent on the retry call."""
-    prompts_seen = []
+# ---------------------------------------------------------------------------
+# compact()
+# ---------------------------------------------------------------------------
+
+def test_compact_clears_session():
+    """compact() resets session state so the next call starts fresh."""
+    @workflow
+    async def wf():
+        agent = claude_code()
+        agent._session_id = "old-session"
+        agent._system_prompt_sent = True
+        await agent.compact()
+        assert agent._session_id is None
+        assert agent._system_prompt_sent is False
+
+    asyncio.run(wf())
+
+
+def test_compact_then_retry_succeeds():
+    """Full pattern: catch overflow, compact, retry with fresh session."""
+    call_count = 0
 
     async def fake_run(cmd, *, cwd=None, timeout=None, idempotent=False):
-        prompt_idx = cmd.index("-p") + 1
-        prompts_seen.append(cmd[prompt_idx])
-        if len(prompts_seen) == 1:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
             raise CommandFailure(
                 "overflow",
                 stderr="prompt is too long",
                 stdout="",
                 returncode=1,
             )
+        assert "--resume" not in cmd
         return CommandResult(
-            stdout=json.dumps({"result": "ok", "session_id": "new"}),
-            stderr="",
-            returncode=0,
-        )
-
-    @workflow
-    async def wf():
-        with patch("godel.agents._common.run", new=fake_run):
-            agent = claude_code(system_prompt="You are a test agent.")
-            agent._session_id = "old-session"
-            agent._system_prompt_sent = True
-            await agent("do something")
-            assert not agent._system_prompt_sent or len(prompts_seen) == 2
-
-    asyncio.run(wf())
-
-
-def test_retry_does_not_pass_old_session_id():
-    """The retry call must not include --resume with the old session."""
-    cmds_seen = []
-
-    async def fake_run(cmd, *, cwd=None, timeout=None, idempotent=False):
-        cmds_seen.append(list(cmd))
-        if len(cmds_seen) == 1:
-            raise CommandFailure(
-                "overflow",
-                stderr="context window exceeded",
-                stdout="",
-                returncode=1,
-            )
-        return CommandResult(
-            stdout=json.dumps({"result": "ok"}),
+            stdout=json.dumps({"result": "recovered", "session_id": "new-session"}),
             stderr="",
             returncode=0,
         )
@@ -190,11 +204,46 @@ def test_retry_does_not_pass_old_session_id():
     async def wf():
         with patch("godel.agents._common.run", new=fake_run):
             agent = claude_code()
-            agent._session_id = "old-session-123"
-            await agent("test")
-            # First call should have --resume
-            assert "--resume" in cmds_seen[0]
-            # Retry call should NOT have --resume
-            assert "--resume" not in cmds_seen[1]
+            agent._session_id = "old-session"
+            try:
+                await agent("test prompt")
+            except ContextOverflowError:
+                await agent.compact()
+                result = await agent("test prompt")
+            assert result == "recovered"
+            assert agent._session_id == "new-session"
+            assert call_count == 2
+
+    asyncio.run(wf())
+
+
+def test_copilot_compact_clears_session():
+    @workflow
+    async def wf():
+        agent = copilot()
+        agent._session_id = "old-session"
+        agent._system_prompt_sent = True
+        await agent.compact()
+        assert agent._session_id is None
+        assert agent._system_prompt_sent is False
+
+    asyncio.run(wf())
+
+
+def test_base_agent_compact_raises():
+    """Base _BaseAgent.compact() raises NotImplementedError."""
+    from godel.agents._common import _BaseAgent
+
+    class _BareAgent(_BaseAgent):
+        _model_aliases = {}
+        _extraction_model = ""
+        def _build_command(self, *a, **kw): raise NotImplementedError
+        def _make_adapter(self): raise NotImplementedError
+
+    @workflow
+    async def wf():
+        agent = _BareAgent(model="x", cwd=None, tools=None, skip_permissions=False)
+        with pytest.raises(NotImplementedError, match="does not implement compact"):
+            await agent.compact()
 
     asyncio.run(wf())
