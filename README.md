@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/atscub/godel-py/actions/workflows/publish.yml/badge.svg)](https://github.com/atscub/godel-py/actions/workflows/publish.yml)
 [![PyPI](https://img.shields.io/pypi/v/godel-py)](https://pypi.org/project/godel-py/)
-[![Python 3.10+](https://img.shields.io/pypi/pyversions/godel-py)](https://pypi.org/project/godel-py/)
+[![Python 3.12+](https://img.shields.io/pypi/pyversions/godel-py)](https://pypi.org/project/godel-py/)
 [![Tests](https://img.shields.io/badge/tests-1276_passing-brightgreen)](#)
 
 ## The problem
@@ -93,7 +93,7 @@ pip install -e ".[dev]"
 pytest                      # 1276 tests across 98 files
 ```
 
-Python 3.10+. Conventional commits. CI runs on every push to `main`.
+Python 3.12+. Conventional commits. CI runs on every push to `main`.
 
 ## License
 

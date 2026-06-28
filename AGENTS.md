@@ -13,6 +13,7 @@ godel-py/
 ├── examples/           # End-to-end example workflows
 ├── .agents/CLI.md      # godel CLI command reference
 ├── .agents/HANDOFF.md  # Technical handoff / milestone context
+├── .agents/CODE_REVIEW.md # PR review guidelines and severity levels
 ├── .agents/MONITORING.md # How to monitor a live workflow run efficiently
 ├── pyproject.toml      # Package metadata + semantic-release config
 └── .github/workflows/  # CI: tests + release on merge to main
@@ -27,9 +28,13 @@ godel-py/
 - `godel/agents/` — Claude, Copilot agent wrappers
 - `godel/intervention/` — repair / human-in-the-loop tooling
 
+## Code review
+
+Read the code review guidelines at `.agents/CODE_REVIEW.md`.
+
 ## How to work on this project
 
-- Python 3.10+; `pip install -e ".[dev]"` for dev setup.
+- Python 3.12+; `pip install -e ".[dev]"` for dev setup.
 - `pytest` for tests; keep the suite green before pushing.
 - Conventional commits are required — version bumps and releases are automated.
 - Use `bd` (beads) for task tracking. See `AGENTS.md`.
