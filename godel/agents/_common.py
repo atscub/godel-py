@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Type, TypeVar, overload
 from pydantic import BaseModel, ValidationError
 
 from godel._decorators import WorkflowFail
-from godel._run import run
+from godel._run import CommandFailure, run
 
 if TYPE_CHECKING:
     from godel._transcript import TranscriptWriter
@@ -556,6 +556,34 @@ class _BaseAgent:
 
         try:
             result = await run(cmd, cwd=self._cwd)
+        except CommandFailure as exc:
+            if sink is not None and observer_token is not None:
+                _line_observer.reset(observer_token)
+                sink.close()
+                sink = None
+                observer_token = None
+            if not (persist_session and self._session_id and self._is_context_overflow(exc)):
+                raise
+            import sys
+            print(
+                f"[godel] agent context overflow detected — retrying with fresh session",
+                file=sys.stderr,
+            )
+            self._session_id = None
+            self._system_prompt_sent = False
+            cmd = self._build_command(
+                prompt, model_id, tools=tools, session_id=None,
+                streaming=streaming,
+            )
+            if streaming:
+                sink = AdapterStreamSink(
+                    self._make_adapter(),
+                    ctx.transcript,
+                    step_path=step_path,
+                    stream_path=stream_path,
+                )
+                observer_token = _line_observer.set(sink.feed)
+            result = await run(cmd, cwd=self._cwd)
         finally:
             if sink is not None and observer_token is not None:
                 _line_observer.reset(observer_token)
@@ -611,6 +639,15 @@ class _BaseAgent:
         corresponding adapter (e.g. ``ClaudeAdapter`` or ``CopilotAdapter``).
         """
         raise NotImplementedError
+
+    def _is_context_overflow(self, error: "CommandFailure") -> bool:
+        """Return True if the CLI error indicates a context window overflow.
+
+        Subclasses override to inspect CLI-specific error signals (stderr,
+        stdout, returncode).  The base returns False — unknown CLIs get no
+        auto-recovery.
+        """
+        return False
 
     def _parse_output(self, stdout: str) -> tuple[str, str | None]:
         """Extract assistant text and session id from CLI stdout.

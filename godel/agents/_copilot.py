@@ -52,6 +52,21 @@ class _CopilotAgent(_BaseAgent):
     _model_aliases = _MODEL_ALIASES
     _extraction_model = _EXTRACTION_MODEL
 
+    _CONTEXT_OVERFLOW_PATTERNS = (
+        "context window",
+        "context length",
+        "token limit",
+        "max_tokens",
+        "maximum context",
+        "conversation is too long",
+        "prompt is too long",
+        "input is too long",
+    )
+
+    def _is_context_overflow(self, error):
+        combined = f"{error.stderr} {error.stdout}".lower()
+        return any(p in combined for p in self._CONTEXT_OVERFLOW_PATTERNS)
+
     def _build_command(
         self,
         prompt: str,
