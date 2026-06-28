@@ -2,6 +2,29 @@
 
 <!-- version list -->
 
+## v3.17.0 (2026-06-28)
+
+### Bug Fixes
+
+- Address review findings on rewind --assume-idempotent
+  ([#16](https://github.com/atscub/godel-py/pull/16),
+  [`e126188`](https://github.com/atscub/godel-py/commit/e1261881379c1e240b34f8ec22a506f1f5272b3c))
+
+### Documentation
+
+- Add GitHub issue triage guide
+  ([`a5fd0c8`](https://github.com/atscub/godel-py/commit/a5fd0c8c57e0597fa02acf9abc326846ad5eeba8))
+
+- Add rewind --assume-idempotent demo workflow and test script
+  ([#16](https://github.com/atscub/godel-py/pull/16),
+  [`e126188`](https://github.com/atscub/godel-py/commit/e1261881379c1e240b34f8ec22a506f1f5272b3c))
+
+### Features
+
+- Add --assume-idempotent flag to rewind command ([#16](https://github.com/atscub/godel-py/pull/16),
+  [`e126188`](https://github.com/atscub/godel-py/commit/e1261881379c1e240b34f8ec22a506f1f5272b3c))
+
+
 ## v1.0.0 (2026-06-28)
 
 - Initial Release
